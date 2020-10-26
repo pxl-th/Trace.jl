@@ -1,5 +1,3 @@
-abstract type AbstractShape end
-
 struct ShapeCore
     object_to_world::Transformation
     world_to_object::Transformation
@@ -63,7 +61,7 @@ end
 
 function solve_quadratic(a::Float32, b::Float32, c::Float32)
     # Find disriminant.
-    d = b * b - 4 * a * c
+    d = b ^ 2 - 4 * a * c
     if d < 0
         return false, NaN32, NaN32
     end
@@ -93,7 +91,7 @@ function test_clipping(s::Sphere, p::Point3f0, ϕ::Float32)::Bool
     ϕ > s.ϕ_max
 end
 
-function compute_ϕ(p::Point3f0)
+function compute_ϕ(p::Point3f0)::Float32
     ϕ = atan(p[2], p[1])
     ϕ < 0f0 && (ϕ += 2f0 * π)
     ϕ
@@ -120,8 +118,8 @@ end
 
 function ∂n(
     s::Sphere, p::Point3f0, θ::Float32,
-    ∂p∂u::Vec3f0, ∂p∂v::Vec3f0,
     sin_ϕ::Float32, cos_ϕ::Float32,
+    ∂p∂u::Vec3f0, ∂p∂v::Vec3f0,
 )
     ∂2p∂u2 = -s.ϕ_max * s.ϕ_max * Vec3f0(p[1], p[2], 0f0)
     ∂2p∂u∂v = (s.θ_max - s.θ_min) * p[3] * s.ϕ_max * Vec3f0(-sin_ϕ, cos_ϕ, 0f0)
@@ -149,23 +147,25 @@ end
 
 function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool)
     # Transform ray to object space.
-    or::Ray = ray |> s.core.world_to_object
+    or = ray |> s.core.world_to_object
     # Substitute ray into sphere equation.
-    a = or.d |> norm
+    a = norm(or.d) ^ 2
     b = 2 * or.o ⋅ or.d
-    c = or.o |> norm - or.r * or.r
+    c = norm(or.o) ^ 2 - s.radius ^ 2
     # Solve quadratic equation for t.
     exists, t0, t1 = solve_quadratic(a, b, c)
-    !exists && return false
-    (t0 > or.t_max || t1 < 0f0) && return false
+    !exists && return false, nothing, nothing
+    (t0 > or.t_max || t1 < 0f0) && return false, nothing, nothing
 
-    hit_point = t0 |> or |> refine_intersection
+    shape_hit = t0
+    hit_point = refine_intersection(t0 |> or, s)
     ϕ = hit_point |> compute_ϕ
     # Test sphere intersection against clipping parameters.
     if test_clipping(s, hit_point, ϕ)
-        hit_point = t1 |> or |> refine_intersection
+        shape_hit = t1
+        hit_point = refine_intersection(t1 |> or, s)
         ϕ = hit_point |> compute_ϕ
-        test_clipping(s, hit_point, ϕ) && return false
+        test_clipping(s, hit_point, ϕ) && return false, nothing, nothing
     end
     # Find parametric representation of hit point.
     u = ϕ / s.ϕ_max
@@ -174,7 +174,38 @@ function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool)
 
     sin_ϕ, cos_ϕ = hit_point |> precompute_ϕ
     ∂p∂u, ∂p∂v = ∂p(s, hit_point, θ, sin_ϕ, cos_ϕ)
-    ∂n∂u, ∂n∂v = ∂n(s, hit_point, θ, ∂p∂u, ∂p∂v, sin_ϕ, cos_ϕ)
+    ∂n∂u, ∂n∂v = ∂n(s, hit_point, θ, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
 
+    interaction = SurfaceInteraction(
+        hit_point, ray.time, -ray.d, Point2f0(u, v),
+        ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, s,
+    )
+    true, shape_hit, interaction
+end
+
+function intersect_p(s::Sphere, ray::Ray, test_alpha_texture::Bool)::Bool
+    # Transform ray to object space.
+    or::Ray = ray |> s.core.world_to_object
+    # Substitute ray into sphere equation.
+    a = or.d |> norm
+    b = 2f0 * or.o ⋅ or.d
+    c = norm(or.o) - s.radius ^ 2
+    # Solve quadratic equation for t.
+    exists, t0, t1 = solve_quadratic(a, b, c)
+    !exists && return false
+    (t0 > or.t_max || t1 < 0f0) && return false
+
+    hit_point = refine_intersection(t0 |> or, s)
+    ϕ = hit_point |> compute_ϕ
+    # Test sphere intersection against clipping parameters.
+    if test_clipping(s, hit_point, ϕ)
+        shape_hit = t1
+        hit_point = refine_intersection(t1 |> or, s)
+        ϕ = hit_point |> compute_ϕ
+        test_clipping(s, hit_point, ϕ) && return false
+    end
     true
 end
+# TODO fix for rays originating inside a sphere.
+
+area(s::Sphere) = s.ϕ_max * s.radius * (s.z_max - s.z_min)

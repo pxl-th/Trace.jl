@@ -23,7 +23,7 @@ using Trace
     @test !Trace.intersect_p(b_neg, r1, inv_dir, dir_is_negative)
 end
 
-@testset "Sphere bounds" begin
+@testset "Sphere bound" begin
     core = Trace.ShapeCore(
         Trace.translate(Vec3f0(0)), Trace.translate(Vec3f0(0)), false,
     )
@@ -32,4 +32,37 @@ end
     sb = s |> Trace.object_bound
     @test sb[1] == Point3f0(-1f0)
     @test sb[2] == Point3f0(1f0)
+end
+
+@testset "Ray-Sphere insersection" begin
+    # Sphere at the origin.
+    core = Trace.ShapeCore(
+        Trace.translate(Vec3f0(0)), Trace.translate(Vec3f0(0)), false,
+    )
+    s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
+    r = Trace.Ray(o=Point3f0(0, -2, 0), d=Vec3f0(0, 1, 0))
+
+    i, t, interaction = Trace.intersect(s, r, false)
+    ip = Trace.intersect_p(s, r, false)
+
+    @test i == ip
+    @test t ≈ 1f0
+    @test r(t) ≈ Point3f0(0, -1, 0) # World intersection.
+    @test interaction.core.p ≈ Point3f0(0, -1, 0) # Object intersection.
+
+    # Translated sphere.
+    core = Trace.ShapeCore(
+        Trace.translate(Vec3f0(0, 2, 0)), Trace.translate(Vec3f0(0, -2, 0)),
+        false,
+    )
+    s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
+    r = Trace.Ray(o=Point3f0(0, 0, 0), d=Vec3f0(0, 1, 0))
+
+    i, t, interaction = Trace.intersect(s, r, false)
+    ip = Trace.intersect_p(s, r, false)
+
+    @test i == ip
+    @test t ≈ 1f0
+    @test r(t) ≈ Point3f0(0, 1, 0) # World intersection.
+    @test interaction.core.p ≈ Point3f0(0, -1, 0) # Object intesection.
 end
