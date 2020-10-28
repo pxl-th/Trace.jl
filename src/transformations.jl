@@ -124,7 +124,7 @@ function (t::Transformation)(p::Point3f0)
 end
 (t::Transformation)(v::Vec3f0) = t.m[1:3, 1:3] * v
 (t::Transformation)(n::Normal3f0) = transpose(t.inv_m)[1:3, 1:3] * n
-(t::Transformation)(b::Bounds3) = mapreduce(i -> corner(b, i) |> t |> Bounds3, union, 1:8)
+(t::Transformation)(b::Bounds3) = mapreduce(i -> corner(b, i) |> t |> Bounds3, ∪, 1:8)
 (t::Transformation)(r::Ray) = Ray(r.o |> t, r.d |> t, r.t_max, r.time)
 function (t::Transformation)(rd::RayDifferentials)
     RayDifferentials(

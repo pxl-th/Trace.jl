@@ -1,30 +1,3 @@
-struct ShapeCore
-    object_to_world::Transformation
-    world_to_object::Transformation
-    reverse_orientation::Bool
-    transform_swaps_handedness::Bool
-
-    function ShapeCore(
-        object_to_world::Transformation, world_to_object::Transformation,
-        reverse_orientation::Bool,
-    )
-        new(
-            object_to_world, world_to_object, reverse_orientation,
-            object_to_world |> swaps_handedness,
-        )
-    end
-end
-
-# Interface.
-function area(::AbstractShape)::Float32 end
-function object_bound(::AbstractShape)::Bounds3 end
-function world_bound(s::AbstractShape)::Bounds3
-    s |> object_bound |> s.core.object_to_world
-end
-# function intersect(
-#     ::AbstractShape, ::Ray, test_alpha_texture::Bool = true,
-# )::Tuple{Float32, SurfaceInteraction} end
-
 struct Sphere <: AbstractShape
     core::ShapeCore
 
@@ -117,7 +90,7 @@ function ∂p(s::Sphere, p::Point3f0, θ::Float32, sin_ϕ::Float32, cos_ϕ::Floa
 end
 
 function ∂n(
-    s::Sphere, p::Point3f0, θ::Float32,
+    s::Sphere, p::Point3f0,
     sin_ϕ::Float32, cos_ϕ::Float32,
     ∂p∂u::Vec3f0, ∂p∂v::Vec3f0,
 )
@@ -145,7 +118,7 @@ function ∂n(
     ∂n∂u, ∂n∂v
 end
 
-function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool)
+function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool = false)
     # Transform ray to object space.
     or = ray |> s.core.world_to_object
     # Substitute ray into sphere equation.
@@ -174,7 +147,7 @@ function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool)
 
     sin_ϕ, cos_ϕ = hit_point |> precompute_ϕ
     ∂p∂u, ∂p∂v = ∂p(s, hit_point, θ, sin_ϕ, cos_ϕ)
-    ∂n∂u, ∂n∂v = ∂n(s, hit_point, θ, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
+    ∂n∂u, ∂n∂v = ∂n(s, hit_point, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
 
     interaction = SurfaceInteraction(
         hit_point, ray.time, -ray.d, Point2f0(u, v),
@@ -183,7 +156,7 @@ function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool)
     true, shape_hit, interaction
 end
 
-function intersect_p(s::Sphere, ray::Ray, test_alpha_texture::Bool)::Bool
+function intersect_p(s::Sphere, ray::Ray, test_alpha_texture::Bool = false)::Bool
     # Transform ray to object space.
     or::Ray = ray |> s.core.world_to_object
     # Substitute ray into sphere equation.

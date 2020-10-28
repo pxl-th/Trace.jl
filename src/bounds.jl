@@ -34,14 +34,14 @@ function corner(b::Bounds3, c::Integer)
     )
 end
 
-function union(b1::Bounds3, b2::Bounds3)
+function Base.union(b1::Bounds3, b2::Bounds3)
     Bounds3(
         Point3f0(min.(b1.p_min, b2.p_min)),
         Point3f0(max.(b1.p_max, b2.p_max)),
     )
 end
 
-function intersection(b1::Bounds3, b2::Bounds3)
+function Base.intersect(b1::Bounds3, b2::Bounds3)
     Bounds3(
         Point3f0(max.(b1.p_min, b2.p_min)),
         Point3f0(min.(b1.p_max, b2.p_max)),
@@ -97,8 +97,8 @@ lerp(b::Bounds3, p::Point3f0) = lerp.(p, b.p_min, b.p_max)
 
 distance(p1::Point3f0, p2::Point3f0) = norm(p1 - p2)
 function distance_squared(p1::Point3f0, p2::Point3f0)
-    d = norm(p1 - p2)
-    d * d
+    p = p1 - p2
+    p ⋅ p
 end
 
 function offset(b::Bounds3, p::Point3f0)

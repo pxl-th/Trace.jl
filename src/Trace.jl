@@ -2,7 +2,14 @@ module Trace
 
 using Parameters: @with_kw
 using LinearAlgebra
+using StaticArrays
 using GeometryBasics
+
+GeometryBasics.@fixed_vector Normal StaticVector
+const Normal3f0 = Normal{3, Float32}
+
+Maybe{T} = Union{T, Nothing}
+maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 function coordinate_system(v1::Vec3f0, v2::Vec3f0)
     if abs(v1[1]) > abs(v1[2])
@@ -13,33 +20,28 @@ function coordinate_system(v1::Vec3f0, v2::Vec3f0)
     v1, v2, v1 × v2
 end
 
-Normal3f0 = Vec3f0
-
 """
 Flip normal `n` so that it lies in the same hemisphere as `v`.
 """
-function face_forward(n::Normal3f0, v::Vec3f0)
-    (n ⋅ v) < 0 ? -n : n
-end
+face_forward(n, v) = (n ⋅ v) < 0 ? -n : n
 
 include("ray.jl")
 include("bounds.jl")
 include("transformations.jl")
 
 # TODO AnimatedTransform, AnimatedBounds
-# TODO SurfaceInteraction
 # TODO Medium & add it to structs
 
 abstract type AbstractShape end
 
-struct Interaction
+mutable struct Interaction
     p::Point3f0
     time::Float32
     wo::Vec3f0  # Negative direction of ray (for ray-shape interactions).
     n::Normal3f0  # Surface normal at the point.
 end
 
-struct ShadingInteraction
+mutable struct ShadingInteraction
     n::Normal3f0
     ∂p∂u::Vec3f0
     ∂p∂v::Vec3f0
@@ -75,18 +77,55 @@ struct SurfaceInteraction{S}
     end
 end
 
+function set_shading_geometry!(
+    i::SurfaceInteraction, tangent::Vec3f0, bitangent::Vec3f0,
+    ∂n∂u::Normal3f0, ∂n∂v::Normal3f0, orientation_is_authoritative::Bool,
+)
+    i.shading.n = normalize(tangent × bitangent)
+    if !(i.shape isa Nothing) && (i.shape.core.reverse_orientation ⊻ i.shape.core.transform_swaps_handedness)
+        i.shading.n *= -1
+    end
+    if orientation_is_authoritative
+        i.core.n = face_forward(i.core.n, i.shading.n)
+    else
+        i.shading.n = face_forward(i.shading.n, i.core.n)
+    end
+
+    i.shading.∂p∂u = tangent
+    i.shading.∂p∂v = bitangent
+    i.shading.∂n∂u = ∂n∂u
+    i.shading.∂n∂v = ∂n∂v
+end
+
 is_surface_interaction(i::Interaction) = i.n != Normal3f0(0)
 
-include("shape.jl")
+include("shapes/Shape.jl")
 
-# core = ShapeCore(translate(Vec3f0(0, 2, 0)), translate(Vec3f0(0, -2, 0)), false)
-# s = Sphere(core, 1f0, -1f0, 1f0, 360f0)
-# r = Ray(o=Point3f0(0, 0, 0), d=Vec3f0(0, 1, 0))
+# tm = create_triangle_mesh(
+#     ShapeCore(translate(Vec3f0(0)), translate(Vec3f0(0)), false),
+#     1, UInt32[1, 2, 3],
+#     3, [Point3f0(-1, -1, 2), Point3f0(0, 1, 2), Point3f0(1, -1, 2)],
+#     [Normal3f0(0, 0, -1), Normal3f0(0, 0, -1), Normal3f0(0, 0, -1)],
+# )
+# t = tm[1]
 
-# intersects, t, interaction = intersect(s, r, false)
-# @info "Intersects: $intersects || $(intersect_p(s, r, false)) @ $t"
-# @info "World interaction $(r(t))"
-# @info "Interaction @ $(interaction.core.p)"
-# @info "Area: $(area(s))"
+# r = Ray(o=Point3f0(0), d=Vec3f0(0, 0, 1))
+
+# @info object_bound(t)
+# @info world_bound(t)
+# i, t_hit, interaction = intersect(t, r)
+# @info i, r(t_hit)
+# @info interaction
+
+# rot = rotate_x(45f0)
+# v = Vec3f0(1)
+# n = Normal3f0(1)
+# Normal3f0(v)
+# convert(Normal3f0, Point3f0(0))
+# @info n ⋅ n
+# @info n × n
+
+# rot(v)
+# rot(n)
 
 end
