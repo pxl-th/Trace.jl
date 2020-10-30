@@ -37,6 +37,8 @@ struct BVHAccel{M <: BVHSplitMethods} <: AccelPrimitive
     function BVHAccel{M}(
         primitives::Vector{P}, max_node_primitives::Integer = 1,
     ) where M <: BVHSplitMethods where P <: Primitive
+        M == HLBVH && error("HLBVH method not implemented yet.")
+
         max_node_primitives = min(255, max_node_primitives)
         length(primitives) == 0 && return new{M}(primitives, max_node_primitives)
 
@@ -92,13 +94,14 @@ function _init_bvh(
     # Partition primitives into sets and build children.
     if n_primitives <= 2 # Equally-sized subsets.
         mid = (from + to) ÷ 2
-        partialsort!(@view(primitives_info[from:to]), mid, by=i -> i.centroid[dim])
+        pmid = mid > from ? mid - from + 1 : 1
+        partialsort!(@view(primitives_info[from:to]), pmid, by=i -> i.centroid[dim])
     else # Perform Surface-Area-Heuristic partitioning.
         n_buckets = 12
         buckets = [BucketInfo(0, Bounds3()) for _ in 1:n_buckets]
         # Initialize buckets.
         for i in from:to
-            b = Int32(n_buckets * offset(centroid_bounds, primitives_info[i].centroid)[dim]) + 1
+            b = Int32(floor(n_buckets * offset(centroid_bounds, primitives_info[i].centroid)[dim])) + 1
             (b == n_buckets + 1) && (b -= 1)
             buckets[b].count += 1
             buckets[b].bounds = buckets[b].bounds ∪ primitives_info[i].bounds
@@ -124,7 +127,7 @@ function _init_bvh(
             return BVHNode(first_offset, n_primitives, bounds)
         end
         mid = partition!(primitives_info, from:to, i -> begin
-            b = Int32(n_buckets * offset(centroid_bounds, i.centroid)[dim]) + 1
+            b = Int32(floor(n_buckets * offset(centroid_bounds, i.centroid)[dim])) + 1
             (b == n_buckets + 1) && (b -= 1)
             b <= min_cost_id
         end)
@@ -135,3 +138,5 @@ function _init_bvh(
         _init_bvh(primitives, primitives_info, mid + 1, to, total_nodes, ordered_primitives, max_node_primitives),
     )
 end
+
+world_bound(bvh::BVHAccel) = bvh.root ≢ nothing ? bvh.root.bounds : Bounds3()

@@ -12,7 +12,7 @@ Maybe{T} = Union{T, Nothing}
 maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
-function partition!(x, range, predicate)
+function partition!(x::Vector, range::UnitRange, predicate::Function)
     left = range[1]
     for i in range
         if left != i && predicate(x[i])
@@ -126,43 +126,26 @@ include("accel/bvh.jl")
 #     [Normal3f0(0, 0, -1), Normal3f0(0, 0, -1), Normal3f0(0, 0, -1)],
 # )
 # t = tm[1]
-
-# r = Ray(o=Point3f0(0), d=Vec3f0(0, 0, 1))
-
 # @info area(t)
 # @info object_bound(t)
 # @info world_bound(t)
+
+# r = Ray(o=Point3f0(0), d=Vec3f0(0, 0, 1))
 # i, t_hit, interaction = intersect(t, r)
-# @info i, r(t_hit)
-# @info interaction
 
-# rot = rotate_x(45f0)
-# v = Vec3f0(1)
-# n = Normal3f0(1)
-# Normal3f0(v)
-# convert(Normal3f0, Point3f0(0))
-# @info n ⋅ n
-# @info n × n
+primitives = Primitive[]
+for i in 1:3:20
+    core = ShapeCore(translate(Vec3f0(i)), translate(Vec3f0(-i)), false)
+    sphere = Sphere(core, 1f0, -1f0, 1f0, 360f0)
+    push!(primitives, GeometricPrimitive(sphere))
+end
 
-# rot(v)
-# rot(n)
-
-core = ShapeCore(translate(Vec3f0(10, 0, 0)), translate(Vec3f0(-10, 0, 0)), false)
-core2 = ShapeCore(translate(Vec3f0(0, 10, 0)), translate(Vec3f0(0, -10, 0)), false)
-core3 = ShapeCore(translate(Vec3f0(0, 0, 10)), translate(Vec3f0(0, 0, -10)), false)
-s = Sphere(core, 1f0, -1f0, 1f0, 360f0)
-s2 = Sphere(core2, 1f0, -1f0, 1f0, 360f0)
-s3 = Sphere(core3, 1f0, -1f0, 1f0, 360f0)
-p1 = GeometricPrimitive(s)
-p2 = GeometricPrimitive(s2)
-p3 = GeometricPrimitive(s3)
-bvh = BVHAccel{HLBVH}([p1, p2, p3], 1)
+@info "Total primitives $(length(primitives))"
+mid = length(primitives) ÷ 2
+bvh = BVHAccel{SAH}(primitives[1:mid])
 @info bvh.root.bounds
-@info bvh.root.children[1].bounds
-@info bvh.root.children[1].children[1].bounds
-@info bvh.root.children[1].children[2].bounds
-@info bvh.root.children[2].bounds
-# TODO implement Primitive interface for this (world_bound, etc.)
-# bvh2 = BVHAccel{SAH}([p1, bvh], 1)
+
+bvh2 = BVHAccel{SAH}(Primitive[primitives[mid + 1:end]..., bvh])
+@info bvh2.root.bounds
 
 end
