@@ -59,16 +59,27 @@ function create_triangle_mesh(
     [Triangle(core, mesh, i) for i in UnitRange{UInt32}(0:n_triangles - 1)]
 end
 
-function object_bound(t::Triangle)
-    mapreduce(j -> t.mesh.vertices[t.mesh.indices[t.i + j]] |> t.core.world_to_object |> Bounds3, ∪, 0:2)
+function area(t::Triangle)
+    vs = t |> vertices
+    0.5f0 * norm((vs[2] - vs[1]) × (vs[3] - vs[1]))
 end
-function world_bound(t::Triangle)
-    mapreduce(j -> t.mesh.vertices[t.mesh.indices[t.i + j]] |> Bounds3, ∪, 0:2)
+
+function is_degenerate(t::Triangle)::Bool
+    vs = t |> vertices
+    v = (vs[3] - vs[1]) × (vs[2] - vs[1])
+    (v ⋅ v) ≈ 0 ? true : false
 end
-function get_uv(t::Triangle)
+
+vertices(t::Triangle) = [t.mesh.vertices[t.mesh.indices[t.i + j]] for j in 0:2]
+normals(t::Triangle) = [t.mesh.normals[t.mesh.indices[t.i + j]] for j in 0:2]
+tangents(t::Triangle) = [t.mesh.tangents[t.mesh.indices[t.i + j]] for j in 0:2]
+function uvs(t::Triangle)
     t.mesh.uv isa Nothing && return [Point2f0(0), Point2f0(1, 0), Point2f0(1, 1)]
     [t.mesh.uv[t.i + j] for j in 0:2]
 end
+
+object_bound(t::Triangle) = mapreduce(v -> v |> t.core.world_to_object |> Bounds3, ∪, t |> vertices)
+world_bound(t::Triangle) = reduce(∪, Bounds3.(t |> vertices))
 
 function _edge_function(vs::Vector{Point3{T}}) where T <: Union{Float32, Float64}
     Point3f0(
@@ -78,10 +89,10 @@ function _edge_function(vs::Vector{Point3{T}}) where T <: Union{Float32, Float64
     )
 end
 
-function _to_ray_coordinate_space(vertices::Vector{Point3f0}, ray::Ray)
-    # Transform vertices.
-    vertices .-= ray.o
-    # Permute vertices & ray direction.
+function _to_ray_coordinate_space(vs::Vector{Point3f0}, ray::Ray)
+    # Transform vs.
+    vs .-= ray.o
+    # Permute vs & ray direction.
     kz = ray.d .|> abs |> argmax
     kx = kz + 1
     kx == 4 && (kx = 1)
@@ -89,21 +100,21 @@ function _to_ray_coordinate_space(vertices::Vector{Point3f0}, ray::Ray)
     ky == 4 && (ky = 1)
 
     d = ray.d[[kx, ky, kz]]
-    vertices = [v[[kx, ky, kz]] for v in vertices]
-    # Apply shear transformation to vertices.
+    vs = [v[[kx, ky, kz]] for v in vs]
+    # Apply shear transformation to vs.
     shear = Point3f0(-d[1] / d[3], -d[2] / d[3], 1f0 / d[3])
-    Point3f0[v + Point3f0(shear[1] * v[3], shear[2] * v[3], 0f0) for v in vertices], shear
+    Point3f0[v + Point3f0(shear[1] * v[3], shear[2] * v[3], 0f0) for v in vs], shear
 end
 
 function ∂p(
-    t::Triangle, vertices::Vector{Point3f0}, uv::Vector{Point2f0},
+    t::Triangle, vs::Vector{Point3f0}, uv::Vector{Point2f0},
 )::Tuple{Vec3f0, Vec3f0, Vec3f0, Vec3f0}
     # Compute deltas for partial derivative matrix.
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
-    δp_13, δp_23 = Vec3f0(vertices[1] - vertices[3]), Vec3f0(vertices[2] - vertices[3])
+    δp_13, δp_23 = Vec3f0(vs[1] - vs[3]), Vec3f0(vs[2] - vs[3])
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
     if det ≈ 0
-        v = normalize((vertices[3] - vertices[1]) × (vertices[2] - vertices[1]))
+        v = normalize((vs[3] - vs[1]) × (vs[2] - vs[1]))
         return coordinate_system(v, Vec3f0(0))[2:3], δp_13, δp_23
     end
     inv_det = 1f0 / det
@@ -136,18 +147,10 @@ function _init_triangle_shading_geometry!(
         # Compute shading normal, tangent & bitangent.
         ns = interaction.core.n
         if t.mesh.normals ≢ nothing
-            ns = normalize(
-                barycentric[1] * t.mesh.normals[t.i] +
-                barycentric[2] * t.mesh.normals[t.i + 1] +
-                barycentric[3] * t.mesh.normals[t.i + 2]
-            )
+            ns = normalize(sum_mul(barycentric, normals(t)))
         end
         if t.mesh.tangents ≢ nothing
-            ss = normalize(
-                barycentric[1] * t.mesh.tangents[t.i] +
-                barycentric[2] * t.mesh.tangents[t.i + 1] +
-                barycentric[3] * t.mesh.tangents[t.i + 2]
-            )
+            ss = normalize(sum_mul(barycentric, tangents(t)))
         else
             ss = interaction.∂p∂u |> normalize
         end
@@ -163,22 +166,16 @@ function _init_triangle_shading_geometry!(
     end
 end
 
-function is_degenerate(t::Triangle)::Bool
-    vertices = [t.mesh.vertices[t.mesh.indices[t.i + j]] for j in 0:2]
-    v = (vertices[3] - vertices[1]) × (vertices[2] - vertices[1])
-    (v ⋅ v) ≈ 0 ? true : false
-end
-
 function intersect(
     t::Triangle, ray::Ray, test_alpha_texture::Bool = false,
 )::Tuple{Bool, Maybe{Float32}, Maybe{SurfaceInteraction}}
     is_degenerate(t) && return false, nothing, nothing
-    vertices = [t.mesh.vertices[t.mesh.indices[t.i + j]] for j in 0:2]
-    t_vertices, shear = _to_ray_coordinate_space(vertices, ray)
+    vs = t |> vertices
+    t_vs, shear = _to_ray_coordinate_space(vs, ray)
     # Compute edge function coefficients.
-    edges = t_vertices |> _edge_function
+    edges = t_vs |> _edge_function
     if all(edges .≈ 0) # Fall-back to double precision.
-        edges = t_vertices .|> (x -> x .|> Float64) |> _edge_function
+        edges = t_vs .|> (x -> x .|> Float64) |> _edge_function
     end
     # Perform triangle edge & determinant tests.
     # Point is inside a triangle if all edges have the same sign.
@@ -186,12 +183,8 @@ function intersect(
     det = edges |> sum
     det ≈ 0 && return false, nothing, nothing
     # Compute scaled hit distance to triangle.
-    t_vertices .*= Point3f0(1f0, 1f0, shear[3])
-    t_scaled = (
-        edges[1] * t_vertices[1][3] +
-        edges[2] * t_vertices[2][3] +
-        edges[3] * t_vertices[3][3]
-    )
+    t_vs .*= Point3f0(1f0, 1f0, shear[3])
+    t_scaled = edges[1] * t_vs[1][3] + edges[2] * t_vs[2][3] + edges[3] * t_vs[3][3]
     # Test against t_max range.
     det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) && return false, nothing, nothing
     det > 0 && (t_scaled <= 0 || t_scaled > ray.t_max * det) && return false, nothing, nothing
@@ -200,19 +193,11 @@ function intersect(
     barycentric = edges .* inv_det
     t_hit = t_scaled * inv_det
     # TODO check that t > 0 w.r.t. error bounds.
-    uv = t |> get_uv
-    ∂p∂u, ∂p∂v, δp_13, δp_23 = ∂p(t, vertices, uv)
+    uv = t |> uvs
+    ∂p∂u, ∂p∂v, δp_13, δp_23 = ∂p(t, vs, uv)
     # Interpolate (u, v) paramteric coordinates and hit point.
-    hit_point = (
-        barycentric[1] * vertices[1] +
-        barycentric[2] * vertices[2] +
-        barycentric[3] * vertices[3]
-    )
-    uv_hit = (
-        barycentric[1] * uv[1] +
-        barycentric[2] * uv[2] +
-        barycentric[3] * uv[3]
-    )
+    hit_point = sum_mul(barycentric, vs)
+    uv_hit = sum_mul(barycentric, uv)
 
     interaction = SurfaceInteraction(
         hit_point, ray.time, -ray.d, uv_hit,

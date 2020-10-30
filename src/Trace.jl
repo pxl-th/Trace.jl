@@ -11,6 +11,18 @@ const Normal3f0 = Normal{3, Float32}
 Maybe{T} = Union{T, Nothing}
 maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
+@inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+function partition!(x, range, predicate)
+    left = range[1]
+    for i in range
+        if left != i && predicate(x[i])
+            x[i], x[left] = x[left], x[i]
+            left += 1
+        end
+    end
+    left
+end
+
 function coordinate_system(v1::Vec3f0, v2::Vec3f0)
     if abs(v1[1]) > abs(v1[2])
         v2 = typeof(v2)(-v1[3], 0, v1[1]) / sqrt(v1[1] * v1[1] + v1[3] * v1[3])
@@ -33,6 +45,7 @@ include("transformations.jl")
 # TODO Medium & add it to structs
 
 abstract type AbstractShape end
+abstract type Primitive end
 
 mutable struct Interaction
     p::Point3f0
@@ -49,7 +62,7 @@ mutable struct ShadingInteraction
     ∂n∂v::Normal3f0
 end
 
-struct SurfaceInteraction{S}
+mutable struct SurfaceInteraction{S <: AbstractShape, P <: Maybe{Primitive}}
     core::Interaction
     shading::ShadingInteraction
     uv::Point2f0
@@ -59,13 +72,14 @@ struct SurfaceInteraction{S}
     ∂n∂u::Normal3f0
     ∂n∂v::Normal3f0
 
-    shape::Union{Nothing, S}
+    shape::Maybe{S}
+    primitive::Maybe{P}
 
     function SurfaceInteraction(
         p::Point3f0, time::Float32, wo::Vec3f0, uv::Point2f0,
         ∂p∂u::Vec3f0, ∂p∂v::Vec3f0, ∂n∂u::Normal3f0, ∂n∂v::Normal3f0,
-        shape::Union{Nothing, S} = nothing,
-    ) where S <: AbstractShape
+        shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
+    ) where S <: AbstractShape where P <: Primitive
         n = ∂p∂u × ∂p∂v
         if !(shape isa Nothing) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
             n *= -1
@@ -73,7 +87,9 @@ struct SurfaceInteraction{S}
 
         core = Interaction(p, time, wo, n)
         shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
-        new{typeof(shape)}(core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, shape)
+        new{typeof(shape), typeof(primitive)}(
+            core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, shape, primitive,
+        )
     end
 end
 
@@ -100,6 +116,8 @@ end
 is_surface_interaction(i::Interaction) = i.n != Normal3f0(0)
 
 include("shapes/Shape.jl")
+include("primitive.jl")
+include("accel/bvh.jl")
 
 # tm = create_triangle_mesh(
 #     ShapeCore(translate(Vec3f0(0)), translate(Vec3f0(0)), false),
@@ -111,6 +129,7 @@ include("shapes/Shape.jl")
 
 # r = Ray(o=Point3f0(0), d=Vec3f0(0, 0, 1))
 
+# @info area(t)
 # @info object_bound(t)
 # @info world_bound(t)
 # i, t_hit, interaction = intersect(t, r)
@@ -127,5 +146,23 @@ include("shapes/Shape.jl")
 
 # rot(v)
 # rot(n)
+
+core = ShapeCore(translate(Vec3f0(10, 0, 0)), translate(Vec3f0(-10, 0, 0)), false)
+core2 = ShapeCore(translate(Vec3f0(0, 10, 0)), translate(Vec3f0(0, -10, 0)), false)
+core3 = ShapeCore(translate(Vec3f0(0, 0, 10)), translate(Vec3f0(0, 0, -10)), false)
+s = Sphere(core, 1f0, -1f0, 1f0, 360f0)
+s2 = Sphere(core2, 1f0, -1f0, 1f0, 360f0)
+s3 = Sphere(core3, 1f0, -1f0, 1f0, 360f0)
+p1 = GeometricPrimitive(s)
+p2 = GeometricPrimitive(s2)
+p3 = GeometricPrimitive(s3)
+bvh = BVHAccel{HLBVH}([p1, p2, p3], 1)
+@info bvh.root.bounds
+@info bvh.root.children[1].bounds
+@info bvh.root.children[1].children[1].bounds
+@info bvh.root.children[1].children[2].bounds
+@info bvh.root.children[2].bounds
+# TODO implement Primitive interface for this (world_bound, etc.)
+# bvh2 = BVHAccel{SAH}([p1, bvh], 1)
 
 end
