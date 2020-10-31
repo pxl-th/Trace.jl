@@ -2,8 +2,8 @@ struct GeometricPrimitive{T <: AbstractShape} <: Primitive
     shape::T
 end
 
-function intersect!(p::GeometricPrimitive, ray::Ray)
-    intersects, t_hit, interaction = intersect(p, ray)
+function intersect!(p::GeometricPrimitive{T}, ray::Ray) where T <: AbstractShape
+    intersects, t_hit, interaction = intersect(p.shape, ray)
     !intersects && return false, nothing
     ray.t_max = t_hit
     interaction.primitive = p

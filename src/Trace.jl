@@ -62,7 +62,7 @@ mutable struct ShadingInteraction
     ∂n∂v::Normal3f0
 end
 
-mutable struct SurfaceInteraction{S <: AbstractShape, P <: Maybe{Primitive}}
+mutable struct SurfaceInteraction{S <: AbstractShape}
     core::Interaction
     shading::ShadingInteraction
     uv::Point2f0
@@ -73,7 +73,7 @@ mutable struct SurfaceInteraction{S <: AbstractShape, P <: Maybe{Primitive}}
     ∂n∂v::Normal3f0
 
     shape::Maybe{S}
-    primitive::Maybe{P}
+    primitive::Maybe{P} where P <: Primitive
 
     function SurfaceInteraction(
         p::Point3f0, time::Float32, wo::Vec3f0, uv::Point2f0,
@@ -87,7 +87,7 @@ mutable struct SurfaceInteraction{S <: AbstractShape, P <: Maybe{Primitive}}
 
         core = Interaction(p, time, wo, n)
         shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
-        new{typeof(shape), typeof(primitive)}(
+        new{typeof(shape)}(
             core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, shape, primitive,
         )
     end
@@ -130,22 +130,30 @@ include("accel/bvh.jl")
 # @info object_bound(t)
 # @info world_bound(t)
 
-# r = Ray(o=Point3f0(0), d=Vec3f0(0, 0, 1))
+ray = Ray(o=Point3f0(-2, 3, 0), d=Vec3f0(1, 0, 0))
 # i, t_hit, interaction = intersect(t, r)
 
 primitives = Primitive[]
-for i in 1:3:20
-    core = ShapeCore(translate(Vec3f0(i)), translate(Vec3f0(-i)), false)
+for i in 0:3:20
+    core = ShapeCore(translate(Vec3f0(i, i, 0)), translate(Vec3f0(-i, -i, 0)), false)
     sphere = Sphere(core, 1f0, -1f0, 1f0, 360f0)
-    push!(primitives, GeometricPrimitive(sphere))
+    p = GeometricPrimitive(sphere)
+    @info "Primitive world bounds $i = $(p |> world_bound)"
+    push!(primitives, p)
 end
 
 @info "Total primitives $(length(primitives))"
 mid = length(primitives) ÷ 2
 bvh = BVHAccel{SAH}(primitives[1:mid])
-@info bvh.root.bounds
+@info bvh |> world_bound
 
-bvh2 = BVHAccel{SAH}(Primitive[primitives[mid + 1:end]..., bvh])
-@info bvh2.root.bounds
+# TODO assert that t_max >= 0
+hit, interaction = intersect!(bvh, ray)
+@info hit
+@info interaction.core.p
+@info ray.t_max, ray(ray.t_max)
+
+# bvh2 = BVHAccel{SAH}(Primitive[primitives[mid + 1:end]..., bvh])
+# @info bvh2 |> world_bound
 
 end

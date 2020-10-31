@@ -29,10 +29,24 @@ struct BVHNode
     end
 end
 
+abstract type LinearNode end
+struct LinearBVHLeaf <: LinearNode
+    bounds::Bounds3
+    primitives_offset::UInt32
+    n_primitives::UInt32
+end
+struct LinearBVHInterior <: LinearNode
+    bounds::Bounds3
+    second_child_offset::UInt32
+    split_axis::UInt8
+end
+const LinearBVH = Union{LinearBVHLeaf, LinearBVHInterior}
+
 struct BVHAccel{M <: BVHSplitMethods} <: AccelPrimitive
     primitives::Vector{P} where P <: Primitive
     max_node_primitives::UInt8
-    root::BVHNode
+    # root::BVHNode
+    nodes::Vector{LinearBVH}
 
     function BVHAccel{M}(
         primitives::Vector{P}, max_node_primitives::Integer = 1,
@@ -54,7 +68,12 @@ struct BVHAccel{M <: BVHSplitMethods} <: AccelPrimitive
             total_nodes, ordered_primitives, max_node_primitives,
         )
 
-        new{M}(ordered_primitives, max_node_primitives, root)
+        offset = Ref{UInt32}(1)
+        flattened = Vector{LinearBVH}(undef, total_nodes[])
+        _flatten_bvh(flattened, root, offset)
+        @assert total_nodes[] + 1 == offset[]
+
+        new{M}(ordered_primitives, max_node_primitives, flattened)
     end
 end
 
@@ -73,7 +92,7 @@ function _init_bvh(
     bounds = mapreduce(i -> primitives_info[i].bounds, ∪, from:to)
     n_primitives = to - from
     if n_primitives == 0
-        first_offset = ordered_primitives |> length
+        first_offset = length(ordered_primitives) + 1
         for i in from:to
             push!(ordered_primitives, primitives[primitives_info[i].primitive_number])
         end
@@ -85,7 +104,7 @@ function _init_bvh(
     dim = centroid_bounds |> maximum_extent
     # Create leaf node.
     if centroid_bounds.p_min[dim] == centroid_bounds.p_max[dim]
-        first_offset = ordered_primitives |> length
+        first_offset = length(ordered_primitives) + 1
         for i in from:to
             push!(ordered_primitives, primitives[primitives_info[i].primitive_number])
         end
@@ -120,7 +139,7 @@ function _init_bvh(
         leaf_cost = n_primitives
         # Either create leaf or split primitives at selected SAH bucket.
         if !(n_primitives > max_node_primitives || costs[min_cost_id] < leaf_cost)
-            first_offset = ordered_primitives |> length
+            first_offset = length(ordered_primitives) + 1
             for i in from:to
                 push!(ordered_primitives, primitives[primitives_info[i].primitive_number])
             end
@@ -139,4 +158,60 @@ function _init_bvh(
     )
 end
 
-world_bound(bvh::BVHAccel) = bvh.root ≢ nothing ? bvh.root.bounds : Bounds3()
+function _flatten_bvh(linear_nodes::Vector{LinearBVH}, node::BVHNode, offset::Ref{UInt32})
+    l_offset = offset[]
+    offset[] += 1
+
+    if node.n_primitives > 0
+        linear_nodes[l_offset] = LinearBVHLeaf(node.bounds, node.offset, node.n_primitives)
+        return l_offset + 1
+    end
+
+    _flatten_bvh(linear_nodes, node.children[1], offset)
+    second_child_offset = _flatten_bvh(linear_nodes, node.children[2], offset) - 1
+    linear_nodes[l_offset] = LinearBVHInterior(node.bounds, second_child_offset, node.split_axis)
+    l_offset + 1
+end
+
+world_bound(bvh::BVHAccel) = length(bvh.nodes) > 0 ? bvh.nodes[1].bounds : Bounds3()
+
+function intersect!(bvh::BVHAccel, ray::Ray)
+    hit = false
+    interaction::Maybe{SurfaceInteraction} = nothing
+    length(bvh.nodes) == 0 && return hit, interaction
+
+    inv_dir = 1f0 ./ ray.d
+    dir_is_neg = ray.d |> is_dir_negative
+
+    to_visit_offset, current_node_i = 1, 1
+    nodes_to_visit = Vector{Int32}(undef, 64)
+
+    while true
+        ln = bvh.nodes[current_node_i]
+        if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
+            if ln isa LinearBVHLeaf && ln.n_primitives > 0
+                # Intersect ray with primitives in node.
+                for i in 0:ln.n_primitives - 1
+                    hit, interaction = intersect!(bvh.primitives[ln.primitives_offset + i], ray)
+                end
+                to_visit_offset == 1 && break
+                to_visit_offset -= 1
+                current_node_i = nodes_to_visit[to_visit_offset]
+            else
+                if dir_is_neg[ln.split_axis] == 2
+                    nodes_to_visit[to_visit_offset] = current_node_i + 1
+                    current_node_i = ln.second_child_offset
+                else
+                    nodes_to_visit[to_visit_offset] = ln.second_child_offset
+                    current_node_i += 1
+                end
+                to_visit_offset += 1
+            end
+        else
+            to_visit_offset == 1 && break
+            to_visit_offset -= 1
+            current_node_i = nodes_to_visit[to_visit_offset]
+        end
+    end
+    hit, interaction
+end
