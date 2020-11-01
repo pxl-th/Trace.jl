@@ -119,6 +119,13 @@ include("shapes/Shape.jl")
 include("primitive.jl")
 include("accel/bvh.jl")
 
+"""
+TODO
+- test triangle
+- test bvh
+- assert that t_max in intersect methods >= 0
+"""
+
 # tm = create_triangle_mesh(
 #     ShapeCore(translate(Vec3f0(0)), translate(Vec3f0(0)), false),
 #     1, UInt32[1, 2, 3],
@@ -131,6 +138,7 @@ include("accel/bvh.jl")
 # @info world_bound(t)
 
 ray = Ray(o=Point3f0(-2, 3, 0), d=Vec3f0(1, 0, 0))
+ray1 = Ray(o=Point3f0(-2, 3, 0), d=Vec3f0(1, 0, 0))
 # i, t_hit, interaction = intersect(t, r)
 
 primitives = Primitive[]
@@ -153,7 +161,13 @@ hit, interaction = intersect!(bvh, ray)
 @info interaction.core.p
 @info ray.t_max, ray(ray.t_max)
 
-# bvh2 = BVHAccel{SAH}(Primitive[primitives[mid + 1:end]..., bvh])
-# @info bvh2 |> world_bound
+bvh2 = BVHAccel{SAH}(Primitive[primitives[mid + 1:end]..., bvh])
+@info bvh2 |> world_bound
+
+@info "Intersects? $(intersect_p(bvh2, ray1))"
+hit, interaction = intersect!(bvh2, ray1)
+@info hit
+@info interaction.core.p
+@info ray1.t_max, ray1(ray1.t_max)
 
 end

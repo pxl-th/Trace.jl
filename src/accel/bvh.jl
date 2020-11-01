@@ -215,3 +215,43 @@ function intersect!(bvh::BVHAccel, ray::Ray)
     end
     hit, interaction
 end
+
+function intersect_p(bvh::BVHAccel, ray::Ray)
+    length(bvh.nodes) == 0 && return false
+
+    inv_dir = 1f0 ./ ray.d
+    dir_is_neg = ray.d |> is_dir_negative
+
+    to_visit_offset, current_node_i = 1, 1
+    nodes_to_visit = Vector{Int32}(undef, 64)
+
+    while true
+        ln = bvh.nodes[current_node_i]
+        if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
+            if ln isa LinearBVHLeaf && ln.n_primitives > 0
+                # Intersect ray with primitives in node.
+                for i in 0:ln.n_primitives - 1
+                    hit = intersect_p(bvh.primitives[ln.primitives_offset + i], ray)
+                    hit && return true
+                end
+                to_visit_offset == 1 && break
+                to_visit_offset -= 1
+                current_node_i = nodes_to_visit[to_visit_offset]
+            else
+                if dir_is_neg[ln.split_axis] == 2
+                    nodes_to_visit[to_visit_offset] = current_node_i + 1
+                    current_node_i = ln.second_child_offset
+                else
+                    nodes_to_visit[to_visit_offset] = ln.second_child_offset
+                    current_node_i += 1
+                end
+                to_visit_offset += 1
+            end
+        else
+            to_visit_offset == 1 && break
+            to_visit_offset -= 1
+            current_node_i = nodes_to_visit[to_visit_offset]
+        end
+    end
+    false
+end
