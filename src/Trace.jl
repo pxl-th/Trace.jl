@@ -118,6 +118,7 @@ is_surface_interaction(i::Interaction) = i.n != Normal3f0(0)
 include("shapes/Shape.jl")
 include("primitive.jl")
 include("accel/bvh.jl")
+include("spectrum.jl")
 
 """
 TODO
@@ -169,5 +170,9 @@ hit, interaction = intersect!(bvh2, ray1)
 @info hit
 @info interaction.core.p
 @info ray1.t_max, ray1(ray1.t_max)
+
+@info from_RGB(Point3f0(1f0, 0f0, 0f0), Illuminant)
+@info from_RGB(Point3f0(1f0, 0f0, 0f0), Reflectance)
+@info from_XYZ(Point3f0(0.5f0, 0f0, 0.5f0))
 
 end
