@@ -1,14 +1,30 @@
 const NSpectralSamples = 60
 const NRGB2SpectralSamples = 32
+const NCIESamples = 471
 const λ_start = 400f0
 const λ_end = 700f0
+
+@inline function XYZ_to_RGB(xyz::Point3f0)
+    Point3f0(
+        3.240479f0 * xyz[1] - 1.537150f0 * xyz[2] - 0.498535f0 * xyz[3],
+        -0.969256f0 * xyz[1] + 1.875991f0 * xyz[2] + 0.041556f0 * xyz[3],
+        0.055648f0 * xyz[1] - 0.204043f0 * xyz[2] + 1.057311f0 * xyz[3],
+    )
+end
+@inline function RGB_to_XYZ(rgb::Point3f0)
+    Point3f0(
+        0.412453f0 * rgb[1] + 0.357580f0 * rgb[2] + 0.180423f0 * rgb[3],
+        0.212671f0 * rgb[1] + 0.715160f0 * rgb[2] + 0.072169f0 * rgb[3],
+        0.019334f0 * rgb[1] + 0.119193f0 * rgb[2] + 0.950227f0 * rgb[3],
+    )
+end
 
 include("spectrum_data.jl")
 
 abstract type Spectrum end
 
 Base.:+(c1::C, c2::C) where C <: Spectrum = C(c1.c .+ c2.c)
-Base.:-(c::C) where C <: Spectrum = C(-c1.c)
+Base.:-(c::C) where C <: Spectrum = -c.c |> C(-c.c)
 Base.:-(c1::C, c2::C) where C <: Spectrum = C(c1.c .- c2.c)
 Base.:*(c1::C, c2::C) where C <: Spectrum = C(c1.c .* c2.c)
 Base.:*(c1::C, f::Float32) where C <: Spectrum = C(c1.c .* f)
@@ -18,7 +34,6 @@ Base.:/(c1::C, f::Float32) where C <: Spectrum = C(c1.c ./ f)
 Base.sqrt(c::C) where C <: Spectrum = C(c.c .|> sqrt)
 Base.:^(c::C, e::Float32) where C <: Spectrum = C(c.c .^ e)
 Base.exp(c::C, e::Float32) where C <: Spectrum = C(c.c .|> exp)
-
 lerp(c1::C, c2::C, t::Float32) where C <: Spectrum = (1f0 - t) * c1 + t * c2
 
 Base.getindex(c::C, i) where C <: Spectrum = c.c[i]
@@ -69,7 +84,7 @@ const rgbIllum2SpectRed = SampledSpectrum()
 const rgbIllum2SpectGreen = SampledSpectrum()
 const rgbIllum2SpectBlue = SampledSpectrum()
 
-function from_sampled(λ::Vector{Float32}, v::Vector{Float32})
+function from_sampled(::Type{SampledSpectrum}, λ::Vector{Float32}, v::Vector{Float32})
     !issorted(λ) && (λ, v = sort_sampled(λ, v))
     r = SampledSpectrum()
     n = 1f0 / Float32(NSpectralSamples)
@@ -141,7 +156,7 @@ function init()
     end
 end
 
-function to_xyz(c::SampledSpectrum)
+function to_XYZ(c::SampledSpectrum)
     x, y, z = 0f0, 0f0, 0f0
     @inbounds for i in 1:NSpectralSamples
         x += X.c[i] * c.c[i]
@@ -161,24 +176,11 @@ function to_y(c::SampledSpectrum)
     y * scale
 end
 
-@inline function XYZ_to_RGB(xyz::Point3f0)
-    Point3f0(
-        3.240479f0 * xyz[1] - 1.537150f0 * xyz[2] - 0.498535f0 * xyz[3],
-        0.969256f0 * xyz[1] + 1.875991f0 * xyz[2] + 0.041556f0 * xyz[3],
-        0.055648f0 * xyz[1] - 0.204043f0 * xyz[2] + 1.057311f0 * xyz[3],
-    )
-end
-@inline function RGB_to_XYZ(rgb::Point3f0)
-    Point3f0(
-        0.412453f0 * rgb[1] + 0.357580f0 * rgb[2] + 0.180423f0 * rgb[3],
-        0.212671f0 * rgb[1] + 0.715160f0 * rgb[2] + 0.072169f0 * rgb[3],
-        0.019334f0 * rgb[1] + 0.119193f0 * rgb[2] + 0.950227f0 * rgb[3],
-    )
-end
-@inline to_RGB(c::SampledSpectrum) = c |> to_xyz |> XYZ_to_RGB
+@inline to_RGB(c::SampledSpectrum) = c |> to_XYZ |> XYZ_to_RGB
 
 @enum SpectrumType Reflectance Illuminant
-function from_RGB(rgb::Point3f0, type::SpectrumType)
+
+function from_RGB(::Type{SampledSpectrum}, rgb::Point3f0, type::SpectrumType = Reflectance)
     r = SampledSpectrum()
     if type == Reflectance
         if rgb[1] <= rgb[2] && rgb[1] <= rgb[3]
@@ -242,6 +244,50 @@ function from_RGB(rgb::Point3f0, type::SpectrumType)
     r |> clamp
 end
 
-@inline from_XYZ(xyz::Point3f0, type::SpectrumType = Reflectance) = from_RGB(xyz |> XYZ_to_RGB, type)
+@inline function from_XYZ(
+    ::Type{SampledSpectrum}, xyz::Point3f0, type::SpectrumType = Reflectance,
+)
+    from_RGB(SampledSpectrum, xyz |> XYZ_to_RGB, type)
+end
+
+struct RGBSpectrum <: Spectrum
+    c::Vector{Float32}
+end
+
+RGBSpectrum(v::Float32 = 0f0) = RGBSpectrum(fill(v, 3))
+
+@inline from_RGB(::Type{RGBSpectrum}, rgb::Point3f0, ::SpectrumType = Reflectance) = rgb |> RGBSpectrum
+@inline to_RGB(s::RGBSpectrum) = Point3f0(s.c)
+@inline to_XYZ(s::RGBSpectrum) = s |> to_RGB |> RGB_to_XYZ
+@inline function from_XYZ(
+    ::Type{RGBSpectrum}, xyz::Point3f0, type::SpectrumType = Reflectance,
+)
+    xyz |> XYZ_to_RGB |> RGBSpectrum
+end
+
+function from_sampled(::Type{RGBSpectrum}, λ::Vector{Float32}, v::Vector{Float32})
+    !issorted(λ) && (λ, v = sort_sampled(λ, v))
+    xyz = Float32[0f0, 0f0, 0f0]
+    @inbounds for i in 1:NCIESamples
+        val = interpolate_spectrum_samples(λ, v, CIE_λ[i])
+        xyz[1] += val * CIE_X[i]
+        xyz[2] += val * CIE_Y[i]
+        xyz[3] += val * CIE_Z[i]
+    end
+
+    scale = (CIE_λ[end] - CIE_λ[1]) / (CIE_Y_integral * NCIESamples)
+    xyz .*= scale
+    from_XYZ(RGBSpectrum, xyz |> Point3f0)
+end
+
+function interpolate_spectrum_samples(
+    λ::Vector{Float32}, v::Vector{Float32}, l::Float32,
+)
+    l <= λ[begin] && return λ[begin]
+    l >= λ[end] && return λ[end]
+    offset = find_interval(λ |> length, i::Int64 -> (λ[i] <= l))
+    t = (l - λ[offset]) / (λ[offset + 1] - λ[offset])
+    lerp(v[offset], v[offset + 1], t)
+end
 
 init()

@@ -12,6 +12,22 @@ Maybe{T} = Union{T, Nothing}
 maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+
+function find_interval(size::Int64, predicate::Function)
+    first, len = 0, size
+    while len > 1
+        half = len >> 1
+        middle = first + half
+        if predicate(middle)
+            first = middle + 1
+            len -= half + 1
+        else
+            len = half
+        end
+    end
+    clamp(first, 1, size - 1)
+end
+
 function partition!(x::Vector, range::UnitRange, predicate::Function)
     left = range[1]
     for i in range
@@ -171,8 +187,16 @@ hit, interaction = intersect!(bvh2, ray1)
 @info interaction.core.p
 @info ray1.t_max, ray1(ray1.t_max)
 
-@info from_RGB(Point3f0(1f0, 0f0, 0f0), Illuminant)
-@info from_RGB(Point3f0(1f0, 0f0, 0f0), Reflectance)
-@info from_XYZ(Point3f0(0.5f0, 0f0, 0.5f0))
+@info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Illuminant)
+@info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Reflectance)
+@info from_XYZ(SampledSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
+@info from_RGB(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
+@info from_XYZ(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
+
+@info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ
+@info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ |> XYZ_to_RGB
+
+x = 1:10 |> collect
+@info find_interval(x |> length, i::Int64 -> x[i] <= 5)
 
 end
