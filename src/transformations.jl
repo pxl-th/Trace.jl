@@ -5,9 +5,9 @@ end
 
 Transformation() = Transformation(Mat4f0(I), Mat4f0(I))
 Transformation(m::Mat4f0) = Transformation(m, m |> inv)
-Inverse(t::Transformation) = Transformation(t.inv_m, t.m)
-Base.transpose(t::Transformation) = Transformation(t.m |> transpose, t.inv_m |> transpose)
 is_identity(t::Transformation) = t.m == I && t.inv_m == I
+Base.transpose(t::Transformation) = Transformation(t.m |> transpose, t.inv_m |> transpose)
+Base.inv(t::Transformation) = Transformation(t.inv_m, t.m)
 
 function Base.:(==)(t1::Transformation, t2::Transformation)
     all(t1.m .== t2.m) && all(t1.inv_m .== t2.inv_m)
@@ -113,6 +113,19 @@ function look_at(position::Point3f0, look::Point3f0, up::Vec3f0)
         0, 0, 0, 1,
     ) |> transpose
     Transformation(m |> inv, m)
+end
+
+function perspective(fov::Float32, near::Float32, far::Float32)
+    # Projective divide for perspective projection.
+    p = Mat4f0(
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, far / (far - near), -far * near / (far - near),
+        0, 0, 1, 0,
+    )
+    # Scale canonical perspective view to specified field of view.
+    inv_tan = 1f0 / tan(deg2rad(fov) / 2f0)
+    scale(inv_tan, inv_tan, 1f0) * Transformation(p)
 end
 
 function (t::Transformation)(p::Point3f0)

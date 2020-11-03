@@ -48,6 +48,23 @@ function coordinate_system(v1::Vec3f0, v2::Vec3f0)
     v1, v2, v1 × v2
 end
 
+function spherical_direction(sin_θ::Float32, cos_θ::Float32, ϕ::Float32)
+    Vec3f0(sin_θ * cos(ϕ), sin_θ * sin(ϕ), cos_θ)
+end
+function spherical_direction(
+    sin_θ::Float32, cos_θ::Float32, ϕ::Float32,
+    x::Vec3f0, y::Vec3f0, z::Vec3f0,
+)
+    sin_θ * cos(ϕ) * x + sin_θ * sin(ϕ) * y + cos_θ * z
+end
+
+spherical_θ(v::Vec3f0) = clamp(v[3], -1, 1) |> acos
+function spherical_ϕ(v::Vec3f0)
+    p = atan(v[2], v[1])
+    p < 0 ? p + 2 * π : p
+end
+
+
 """
 Flip normal `n` so that it lies in the same hemisphere as `v`.
 """
@@ -136,6 +153,8 @@ include("primitive.jl")
 include("accel/bvh.jl")
 include("spectrum.jl")
 
+include("camera/camera.jl")
+
 """
 TODO
 - test triangle
@@ -198,5 +217,15 @@ hit, interaction = intersect!(bvh2, ray1)
 
 x = 1:10 |> collect
 @info find_interval(x |> length, i::Int64 -> x[i] <= 5)
+
+camera = PerspectiveCamera(
+    translate(Vec3f0(0)), Bounds2(Point2f0(0f0), Point2f0(5f0)),
+    0f0, 1f0,
+    0f0, 700f0,
+    45f0, (1280, 720),
+)
+@info camera
+r, contribution = generate_ray(camera, CameraSample(Point2f0(0), Point2f0(0), 0))
+@info r.o, r.d
 
 end
