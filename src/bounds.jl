@@ -18,6 +18,12 @@ Bounds3(p::Point3f0) = Bounds3(p, p)
 Bounds2c(p1::Point2f0, p2::Point2f0) = Bounds2(min.(p1, p2), max.(p1, p2))
 Bounds3c(p1::Point3f0, p2::Point3f0) = Bounds3(min.(p1, p2), max.(p1, p2))
 
+function Base.:(==)(b1::Union{Bounds2, Bounds3}, b2::Union{Bounds2, Bounds3})
+    b1.p_min == b2.p_min && b1.p_max == b2.p_max
+end
+function Base.:≈(b1::Union{Bounds2, Bounds3}, b2::Union{Bounds2, Bounds3})
+    b1.p_min ≈ b2.p_min && b1.p_max ≈ b2.p_max
+end
 function Base.getindex(b::Union{Bounds2, Bounds3}, i::Integer)
     i == 1 && return b.p_min
     i == 2 && return b.p_max

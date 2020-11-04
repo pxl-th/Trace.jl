@@ -157,75 +157,32 @@ include("camera/camera.jl")
 
 """
 TODO
-- test triangle
-- test bvh
 - assert that t_max in intersect methods >= 0
+- test if bvh contains duplicates
 """
 
-# tm = create_triangle_mesh(
-#     ShapeCore(translate(Vec3f0(0)), translate(Vec3f0(0)), false),
-#     1, UInt32[1, 2, 3],
-#     3, [Point3f0(-1, -1, 2), Point3f0(0, 1, 2), Point3f0(1, -1, 2)],
-#     [Normal3f0(0, 0, -1), Normal3f0(0, 0, -1), Normal3f0(0, 0, -1)],
+# hit, interaction = intersect!(bvh, ray)
+
+# @info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Illuminant)
+# @info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Reflectance)
+# @info from_XYZ(SampledSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
+# @info from_RGB(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
+# @info from_XYZ(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
+
+# @info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ
+# @info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ |> XYZ_to_RGB
+
+# x = 1:10 |> collect
+# @info find_interval(x |> length, i::Int64 -> x[i] <= 5)
+
+# camera = PerspectiveCamera(
+#     translate(Vec3f0(0)), Bounds2(Point2f0(0f0), Point2f0(5f0)),
+#     0f0, 1f0,
+#     0f0, 700f0,
+#     45f0, (1280, 720),
 # )
-# t = tm[1]
-# @info area(t)
-# @info object_bound(t)
-# @info world_bound(t)
-
-ray = Ray(o=Point3f0(-2, 3, 0), d=Vec3f0(1, 0, 0))
-ray1 = Ray(o=Point3f0(-2, 3, 0), d=Vec3f0(1, 0, 0))
-# i, t_hit, interaction = intersect(t, r)
-
-primitives = Primitive[]
-for i in 0:3:20
-    core = ShapeCore(translate(Vec3f0(i, i, 0)), translate(Vec3f0(-i, -i, 0)), false)
-    sphere = Sphere(core, 1f0, -1f0, 1f0, 360f0)
-    p = GeometricPrimitive(sphere)
-    @info "Primitive world bounds $i = $(p |> world_bound)"
-    push!(primitives, p)
-end
-
-@info "Total primitives $(length(primitives))"
-mid = length(primitives) ÷ 2
-bvh = BVHAccel{SAH}(primitives[1:mid])
-@info bvh |> world_bound
-
-# TODO assert that t_max >= 0
-hit, interaction = intersect!(bvh, ray)
-@info hit
-@info interaction.core.p
-@info ray.t_max, ray(ray.t_max)
-
-bvh2 = BVHAccel{SAH}(Primitive[primitives[mid + 1:end]..., bvh])
-@info bvh2 |> world_bound
-
-@info "Intersects? $(intersect_p(bvh2, ray1))"
-hit, interaction = intersect!(bvh2, ray1)
-@info hit
-@info interaction.core.p
-@info ray1.t_max, ray1(ray1.t_max)
-
-@info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Illuminant)
-@info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Reflectance)
-@info from_XYZ(SampledSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
-@info from_RGB(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
-@info from_XYZ(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
-
-@info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ
-@info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ |> XYZ_to_RGB
-
-x = 1:10 |> collect
-@info find_interval(x |> length, i::Int64 -> x[i] <= 5)
-
-camera = PerspectiveCamera(
-    translate(Vec3f0(0)), Bounds2(Point2f0(0f0), Point2f0(5f0)),
-    0f0, 1f0,
-    0f0, 700f0,
-    45f0, (1280, 720),
-)
-@info camera
-r, contribution = generate_ray(camera, CameraSample(Point2f0(0), Point2f0(0), 0))
-@info r.o, r.d
+# @info camera
+# r, contribution = generate_ray(camera, CameraSample(Point2f0(0), Point2f0(0), 0))
+# @info r.o, r.d
 
 end
