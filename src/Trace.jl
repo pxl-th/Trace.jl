@@ -154,6 +154,13 @@ include("accel/bvh.jl")
 include("spectrum.jl")
 
 include("camera/camera.jl")
+# include("sampler/sampler.jl")
+include("filter.jl")
+
+l = LanczosSincFilter(Point2f0(4f0), 3f0)
+@info l(Point2f0(0))
+@info l(Point2f0(5))
+@info l(Point2f0(1))
 
 """
 TODO
