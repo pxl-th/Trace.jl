@@ -142,3 +142,10 @@ end
     @test ray2(ray2.t_max) ≈ Point3f0(17f0, 18f0, 0f0)
     @test interaction.core.p ≈ Point3f0(-1f0, 0f0, 0f0)
 end
+
+@testset "LanczosSincFilter" begin
+    l = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
+    @test l(Point2f0(0f0)) ≈ 1f0
+    @test l(Point2f0(4f0)) < 1f-6
+    @test l(Point2f0(5f0)) ≈ 0f0
+end

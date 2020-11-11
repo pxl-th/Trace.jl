@@ -156,11 +156,24 @@ include("spectrum.jl")
 include("camera/camera.jl")
 # include("sampler/sampler.jl")
 include("filter.jl")
+include("film.jl")
 
 l = LanczosSincFilter(Point2f0(4f0), 3f0)
-@info l(Point2f0(0))
-@info l(Point2f0(5))
-@info l(Point2f0(1))
+f = Film(
+    Point2f0(1920f0, 1080f0), Bounds2(Point2f0(0f0), Point2f0(1f0)),
+    l, 35f0, 3f0, "output.png",
+)
+
+s = RGBSpectrum(2f0)
+
+ft = get_film_tile(f, Bounds2(Point2f0(1f0), Point2f0(6f0)))
+add_sample!(ft, Point2f0(1), s)
+for i in 1:size(ft.pixels)[1], j in 1:size(ft.pixels)[2]
+    @info "[$i, $j] -> $(ft.pixels[i, j].contrib_sum.c) & $(ft.pixels[i, j].filter_weight_sum)"
+end
+@info "======================="
+
+merge_film_tile!(f, ft)
 
 """
 TODO

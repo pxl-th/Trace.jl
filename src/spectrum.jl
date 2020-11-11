@@ -23,6 +23,7 @@ include("spectrum_data.jl")
 
 abstract type Spectrum end
 
+Base.:(==)(c::C, i) where C <: Spectrum = c.c .= i
 Base.:+(c1::C, c2::C) where C <: Spectrum = C(c1.c .+ c2.c)
 Base.:-(c::C) where C <: Spectrum = -c.c |> C(-c.c)
 Base.:-(c1::C, c2::C) where C <: Spectrum = C(c1.c .- c2.c)

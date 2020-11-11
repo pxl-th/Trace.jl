@@ -40,18 +40,12 @@ function corner(b::Bounds3, c::Integer)
     )
 end
 
-function Base.union(b1::Bounds3, b2::Bounds3)
-    Bounds3(
-        Point3f0(min.(b1.p_min, b2.p_min)),
-        Point3f0(max.(b1.p_max, b2.p_max)),
-    )
+function Base.union(b1::B, b2::B) where B <: Union{Bounds2, Bounds3}
+    B(min.(b1.p_min, b2.p_min), max.(b1.p_max, b2.p_max))
 end
 
-function Base.intersect(b1::Bounds3, b2::Bounds3)
-    Bounds3(
-        Point3f0(max.(b1.p_min, b2.p_min)),
-        Point3f0(min.(b1.p_max, b2.p_max)),
-    )
+function Base.intersect(b1::B, b2::B) where B <: Union{Bounds2, Bounds3}
+    B(max.(b1.p_min, b2.p_min), min.(b1.p_max, b2.p_max))
 end
 
 function overlaps(b1::Bounds3, b2::Bounds3)
@@ -72,6 +66,15 @@ diagonal(b::Bounds3) = b.p_max - b.p_min
 function surface_area(b::Bounds3)
     d = b |> diagonal
     2 * (d[1] * d[2] + d[1] * d[3] + d[2] * d[3])
+end
+
+function area(b::Bounds2)
+    δ = b.p_max .- b.p_min
+    δ[1] * δ[2]
+end
+
+@inline function sides(b::Union{Bounds2, Bounds3})
+    [abs(b1 - b0) for (b1, b0) in zip(b.p_max, b.p_min)]
 end
 
 function volume(b::Bounds3)
@@ -97,7 +100,7 @@ function maximum_extent(b::Bounds3)
 end
 
 lerp(v1::Float32, v2::Float32, t::Float32) = (1 - t) * v1 + t * v2
-lerp(p0::Point3f0, p1::Point3f0, t::Float32) = (1 - t) * p0 + t * p1
+lerp(p0::Point3f0, p1::Point3f0, t::Float32) = (1 - t) .* p0 .+ t .* p1
 # Linearly interpolate point between the corners of the bounds.
 lerp(b::Bounds3, p::Point3f0) = lerp.(p, b.p_min, b.p_max)
 
