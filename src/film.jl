@@ -40,7 +40,10 @@ struct Film
         )
         crop_resolution = crop_bounds |> sides .|> Int32
         # Allocate film image storage.
-        pixels = Matrix{Pixel}(undef, crop_resolution[end:-1:begin]...)
+        pixels = Pixel[
+            Pixel(Point3f0(0f0), 0f0, Point3f0(0f0))
+            for y in 1:crop_resolution[end], x in 1:crop_resolution[begin]
+        ]
         # Precompute filter weight table.
         r = filter.radius ./ filter_table_width
         for y in 0:filter_table_width - 1, x in 0:filter_table_width - 1
@@ -148,7 +151,7 @@ function add_sample!(
     end
 
     for p in t.pixels
-        @assert all(p.contrib_sum.c .≈ 0) "$(pixel.contrib_sum.c) | ($x, $y)"
+        @assert all(p.contrib_sum.c .≈ 0) "Should be zero, but not: $(p.contrib_sum.c)"
     end
     # Loop over filter support & add sample to pixel array.
     for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
@@ -176,7 +179,7 @@ Point in (x, y) format.
 """
 @inline function get_pixel(f::Film, p::Point2f0)
     pp = (p .- f.crop_bounds.p_min .+ 1f0) .|> Int32
-    @info "b $(f.crop_bounds.p_min) | $p => $pp"
+    # @info "b $(f.crop_bounds.p_min) | $p => $pp"
     f.pixels[pp[2], pp[1]] # TODO intialize pixels to zero
 end
 
@@ -194,3 +197,14 @@ function merge_film_tile!(f::Film, ft::FilmTile)
         merge_pixel.filter_weight_sum += tile_pixel.filter_weight_sum
     end
 end
+
+function set_image(f::Film, spectrum::Matrix{S}) where S <: Spectrum
+    @assert size(f.pixels) == size(spectrum)
+    for (i, p) in enumerate(f.pixels)
+        p.xyz = to_XYZ(spectrum[i])
+        p.filter_weight_sum = 1f0
+        p.splat_xyz = Point3f0(0f0)
+    end
+end
+
+# TODO image writing

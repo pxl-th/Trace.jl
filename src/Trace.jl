@@ -157,13 +157,13 @@ include("camera/camera.jl")
 # include("sampler/sampler.jl")
 include("filter.jl")
 include("film.jl")
+include("reflection.jl")
 
 l = LanczosSincFilter(Point2f0(4f0), 3f0)
 f = Film(
     Point2f0(1920f0, 1080f0), Bounds2(Point2f0(0f0), Point2f0(1f0)),
     l, 35f0, 3f0, "output.png",
 )
-
 s = RGBSpectrum(2f0)
 
 ft = get_film_tile(f, Bounds2(Point2f0(1f0), Point2f0(6f0)))
