@@ -49,12 +49,13 @@ function frensel_conductor(cos_θi::Float32, ηi::S, ηt::S, k::S) where S <: Sp
     0.5f0 * (r_parallel + r_perp)
 end
 
-struct FrenselConductor{S}
+abstract type Frensel end
+struct FrenselConductor{S <: Spectrum} <: Frensel
     ηi::S
     ηt::S
     k::S
 end
-struct FrenselDielectric
+struct FrenselDielectric <: Frensel
     ηi::Float32
     ηt::Float32
 end
@@ -62,3 +63,50 @@ struct FrenselNoOp end
 (f::FrenselConductor)(cos_θi::Float32) = frensel_conductor(cos_θi, f.ηi, f.ηt, f.k)
 (f::FrenselDielectric)(cos_θi::Float32) = frensel_dielectric(cos_θi, f.ηi, f.ηt)
 (f::FrenselNoOp)(::Float32) = RGBSpectrum(1f0)
+
+
+abstract type BxDF end
+struct SpecularReflection{S <: Spectrum, F <: Frensel} <: BxDF
+    """
+    Spectrum used to scale the reflected color.
+    """
+    r::S
+    """
+    Describes frensel properties.
+    """
+    frensel::F
+end
+
+"""
+Return value of the distribution function for the given pair of directions.
+For specular reflection, no scattering is returned, since
+for arbitrary directions δ-funcion returns no scattering.
+"""
+function f(
+    s::SpecularReflection{S, F}, wo::Vec3f0, wi::Vec3f0,
+)::S where S <: Spectrum where F <: Frensel
+    S(0f0)
+end
+
+"""
+Since normal is (0, 0, 1), cos_θ between n & w is (0, 0, 1) ⋅ w = w.z.
+"""
+@inline cos_θ(w::Vec3f0) = w[3]
+
+"""
+Compute the direction of incident light wi, given an outgoing direction wo
+and return the value of BxDF for the pair of directions.
+`sample` parameter isn't needed for the δ-distribution.
+"""
+function sample_f(
+    s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
+) where S <: Spectrum where F <: Frensel
+    wi = Vec3f0(-wo[1], -wo[2], wo[3])
+    pdf = 1f0
+    s.frensel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
+end
+
+"""
+Reflect `wo` about `n`.
+"""
+@inline reflect(wo::Vec3f0, n::Vec3f0) = -wo + 2f0 * (wo ⋅ n) * n
