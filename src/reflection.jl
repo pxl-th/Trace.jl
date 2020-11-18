@@ -100,13 +100,89 @@ and return the value of BxDF for the pair of directions.
 """
 function sample_f(
     s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
-) where S <: Spectrum where F <: Frensel
+)::Tuple{Vec3f0, Float32, S} where S <: Spectrum where F <: Frensel
     wi = Vec3f0(-wo[1], -wo[2], wo[3])
     pdf = 1f0
-    s.frensel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
+    wi, pdf, s.frensel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
 end
 
 """
 Reflect `wo` about `n`.
 """
 @inline reflect(wo::Vec3f0, n::Vec3f0) = -wo + 2f0 * (wo ⋅ n) * n
+
+const Radiance = Val{:Radiance}
+const Importance = Val{:Importance}
+const TransportMode = Union{Radiance, Importance}
+
+struct SpecularTransmission{S <: Spectrum, T <: TransportMode} <: BxDF
+    t::S
+    """
+    Index of refraction above the surface.
+    Side the surface normal lies in is "above".
+    """
+    η_a::Float32
+    """
+    Index of refraction below the surface.
+    Side the surface normal lies in is "above".
+    """
+    η_b::Float32
+    frensel::FrenselDielectric
+end
+
+"""
+Return value of the distribution function for the given pair of directions.
+For specular transmission, no scattering is returned, since
+for arbitrary directions δ-funcion returns no scattering.
+"""
+function f(
+    s::SpecularTransmission{S, T}, wo::Vec3f0, wi::Vec3f0,
+)::S where S <: Spectrum where T <: TransportMode
+    S(0f0)
+end
+
+"""
+Compute the direction of incident light wi, given an outgoing direction wo
+and return the value of BxDF for the pair of directions.
+`sample` parameter isn't needed for the δ-distribution.
+"""
+function sample_f(
+    s::SpecularTransmission{S, T}, wo::Vec3f0, sample::Point2f0,
+)::Tuple{Vec3f0, Float32, S} where S <: Spectrum where T <: TransportMode
+    # Figure out which η is incident and which is transmitted.
+    entering = cos_θ(wo) > 0
+    η_i = entering ? s.η_a : s.η_b
+    η_t = entering ? s.η_b : s.η_a
+    # Compute ray direction for specular transmission.
+    valid, wi = refract(
+        wo, face_forward(Normal3f0(0f0, 0f0, 1f0), wo), η_i / η_t,
+    )
+    !valid && return Vec3f0(0f0), 0f0, S(0f0) # Total internal reflection.
+    pdf = 1f0
+
+    cos_wi = wi |> cos_θ
+    ft = s.t * (S(1f0) - s.frensel(cos_wi))
+    # Account for non-symmetry with transmission to different medium.
+    T isa Radiance && (ft *= (η_i ^ 2) / (η_t ^ 2))
+    wi, pdf, ft / abs(cos_wi)
+end
+
+"""
+Compute refracted direction `wt` given an incident direction `wi`,
+surface normal `n` in the same hemisphere as `wi` and `η`, the ratio
+of indices of refraction in the incident transmitted media respectively.
+
+Returned boolean indicates whether a valid refracted ray was returned
+or is it the case of total internal reflection.
+"""
+function refract(wi::Vec3f0, n::Normal3f0, η::Float32)::Tuple{Bool, Vec3f0}
+    # Compute cosθt using Snell's law.
+    cos_θi = n ⋅ wi
+    sin2_θi = max(0f0, 1f0 - cos_θi ^ 2)
+    sin2_θt = (η ^ 2) * sin2_θi
+    # Handle total internal reflection for transmission.
+    sin2_θt >= 1 && return false, Vec3f0(0f0)
+    cos_θt = sqrt(1f0 - sin2_θt)
+    wt = -η .* wi + (η * cos_θi - cos_θt) .* n
+    true, wt
+end
