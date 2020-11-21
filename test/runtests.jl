@@ -235,3 +235,54 @@ end
     end
 end
 
+@testset "Frensel Dielectric" begin
+    # Vacuum gives no reflectance.
+    @test Trace.frensel_dielectric(1f0, 1f0, 1f0) ≈ 0f0
+    @test Trace.frensel_dielectric(0.5f0, 1f0, 1f0) ≈ 0f0
+    # Vacuum-diamond -> total reflection.
+    @test Trace.frensel_dielectric(cos(π / 4f0), 1f0, 2.42f0) ≈ 1f0
+end
+
+@testset "Frensel Conductor" begin
+    s = Trace.RGBSpectrum(1f0)
+    @test Trace.frensel_conductor(0f0, s, s, s) == s
+    @test all(Trace.frensel_conductor(cos(π / 4f0), s, s, s).c .> 0f0)
+    @test all(Trace.frensel_conductor(1f0, s, s, s).c .> 0f0)
+end
+
+@testset "Perspective Camera" begin
+    filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
+    film = Trace.Film(
+        Point2f0(1920f0, 1080f0), Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
+        filter, 35f0, 1f0, "output.png",
+    )
+    camera = Trace.PerspectiveCamera(
+        Trace.translate(Vec3f0(0)), Trace.Bounds2(Point2f0(0), Point2f0(10)),
+        0f0, 1f0, 0f0, 700f0, 45f0, film,
+    )
+
+    sample1 = Trace.CameraSample(Point2f0(1f0), Point2f0(1f0), 0f0)
+    ray1, contribution = Trace.generate_ray(camera, sample1)
+    sample2 = Trace.CameraSample(
+        Point2f0(film.resolution[1]), Point2f0(film.resolution[2]), 0f0,
+    )
+    ray2, contribution = Trace.generate_ray(camera, sample2)
+
+    @test contribution == 1f0
+    @test ray1.o == ray2.o == Point3f0(0f0)
+    @test ray1.time == ray2.time == camera.core.core.shutter_open
+    @test ray1.d[1] < ray2.d[1] && ray1.d[2] < ray2.d[2]
+    @test argmax(abs.(ray1.d)) == argmax(abs.(ray2.d)) == 3
+
+    ray_differential, contribution = Trace.generate_ray_differential(
+        camera, sample1,
+    )
+    @test ray_differential.has_differentials
+    @test ray_differential.r.o == Point3f0(0f0)
+    @test ray_differential.r.d ≈ Point3f0(ray1.d)
+
+    @test ray_differential.rx_direction[1] > ray_differential.r.d[1]
+    @test ray_differential.rx_direction[2] ≈ ray_differential.r.d[2]
+    @test ray_differential.ry_direction[1] ≈ ray_differential.r.d[1]
+    @test ray_differential.ry_direction[2] > ray_differential.r.d[2]
+end

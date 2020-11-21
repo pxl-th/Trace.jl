@@ -153,11 +153,12 @@ include("primitive.jl")
 include("accel/bvh.jl")
 include("spectrum.jl")
 
-include("camera/camera.jl")
-# include("sampler/sampler.jl")
 include("filter.jl")
 include("film.jl")
 include("reflection.jl")
+
+include("camera/camera.jl")
+# include("sampler/sampler.jl")
 
 """
 TODO

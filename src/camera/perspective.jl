@@ -13,18 +13,20 @@ struct ProjectiveCamera <: Camera
         screen_window::Bounds2,
         shutter_open::Float32, shutter_close::Float32,
         lens_radius::Float32, focal_distance::Float32,
-        resolution::Tuple{Integer, Integer}, # TODO replace by film
+        film::Film,
     )
-        core = CameraCore(camera_to_world, shutter_open, shutter_close)
+        core = CameraCore(camera_to_world, shutter_open, shutter_close, film)
         # Computer projective camera transformations.
         screen_to_raster = (
-            scale(resolution[1], resolution[2], 1) *
-            scale(
+            scale(film.resolution[1], film.resolution[2], 1)
+            * scale(
                 1f0 / (screen_window.p_max[1] - screen_window.p_min[1]),
                 1f0 / (screen_window.p_max[2] - screen_window.p_min[2]),
                 1,
-            ) *
-            translate(Vec3f0(-screen_window.p_min[1], -screen_window.p_max[2], 0f0))
+            )
+            * translate(Vec3f0(
+                -screen_window.p_min[1], -screen_window.p_max[2], 0f0,
+            ))
         )
         raster_to_screen = screen_to_raster |> inv
         raster_to_camera = inv(camera_to_screen) * raster_to_screen
@@ -40,25 +42,35 @@ end
 
 struct PerspectiveCamera <: Camera
     core::ProjectiveCamera
+    """
+    Precomputed change of rays as we shift pixels on the plane in x-direction.
+    """
     dx_camera::Vec3f0
+    """
+    Precomputed change of rays as we shift pixels on the plane in y-direction.
+    """
     dy_camera::Vec3f0
     A::Float32
 
+    """
+    - `screen_window::Bounds2`: Screen space extent of the image.
+    """
     function PerspectiveCamera(
         camera_to_world::Transformation, screen_window::Bounds2,
         shutter_open::Float32, shutter_close::Float32,
         lens_radius::Float32, focal_distance::Float32,
-        fov::Float32,
-        resolution::Tuple{Integer, Integer}, # TODO replace by film
+        fov::Float32, film::Film,
     )
         pc = ProjectiveCamera(
             camera_to_world, perspective(fov, 0.01f0, 1000f0),
             screen_window, shutter_open, shutter_close,
-            lens_radius, focal_distance, resolution,
+            lens_radius, focal_distance, film,
         )
 
         p_min = pc.raster_to_camera(Point3f0(0))
-        p_max = pc.raster_to_camera(Point3f0(resolution[1], resolution[2], 0f0))
+        p_max = pc.raster_to_camera(Point3f0(
+            film.resolution[1], film.resolution[2], 0f0,
+        ))
         dx_camera = pc.raster_to_camera(Point3f0(1, 0, 0)) - p_min
         dy_camera = pc.raster_to_camera(Point3f0(0, 1, 0)) - p_min
         p = (p_min[1:2] ./ p_min[3]) - (p_max[1:2] ./ p_max[3])
@@ -83,7 +95,9 @@ function concentric_sample_disk(u::Point2f0)::Point2f0
     r * Point2f0(θ |> cos, θ |> sin)
 end
 
-function generate_ray(camera::PerspectiveCamera, sample::CameraSample)::Tuple{Ray, Float32}
+function generate_ray(
+    camera::PerspectiveCamera, sample::CameraSample,
+)::Tuple{Ray, Float32}
     # Compute raster & camera sample positions.
     p_film = Point3f0(sample.film[1], sample.film[2], 0f0)
     p_camera = p_film |> camera.core.raster_to_camera

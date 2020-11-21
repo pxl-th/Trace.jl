@@ -4,7 +4,7 @@ struct CameraCore
     camera_to_world::Transformation
     shutter_open::Float32
     shutter_close::Float32
-    # film::Film
+    film::Film
     # medium::Medium
 end
 
@@ -48,13 +48,16 @@ Useful for anti-aliasing textures.
 function generate_ray_differential(
     camera::C, sample::CameraSample,
 )::Tuple{RayDifferentials, Float32} where C <: Camera
-    wt, ray = generate_ray(camera, sample)
-    shifted_x = CameraSample(sample.film + Point2f0(1f0, 0f0), sample.lens, sample.time)
-    shifted_y = CameraSample(sample.film + Point2f0(0f0, 1f0), sample.lens, sample.time)
-    wt_x, ray_x = generate_ray(camera, shifted_x)
-    wt_y, ray_y = generate_ray(camera, shifted_y)
-
-    RayDifferentials(ray, true, ray_x.o, ray_y.o, ray_x.d, ray_y.d)
+    ray, wt = generate_ray(camera, sample)
+    shifted_x = CameraSample(
+        sample.film + Point2f0(1f0, 0f0), sample.lens, sample.time,
+    )
+    shifted_y = CameraSample(
+        sample.film + Point2f0(0f0, 1f0), sample.lens, sample.time,
+    )
+    ray_x, wt_x = generate_ray(camera, shifted_x)
+    ray_y, wt_y = generate_ray(camera, shifted_y)
+    RayDifferentials(ray, true, ray_x.o, ray_y.o, ray_x.d, ray_y.d), wt
 end
 
 include("perspective.jl")

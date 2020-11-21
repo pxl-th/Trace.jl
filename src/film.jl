@@ -41,10 +41,7 @@ struct Film
             ceil.(resolution .* crop_bounds.p_min) .+ 1f0,
             ceil.(resolution .* crop_bounds.p_max),
         )
-        @info "Film bounds $crop_bounds"
-        # crop_resolution = crop_bounds |> sides .|> Int32
         crop_resolution = crop_bounds |> inclusive_sides .|> Int32
-        @info "Film crop resolution $crop_resolution"
         # Allocate film image storage.
         pixels = Pixel[
             Pixel(Point3f0(0f0), 0f0, Point3f0(0f0))
@@ -106,10 +103,8 @@ struct FilmTile
         bounds::Bounds2, filter_radius::Point2f0,
         filter_table::Matrix{Float32}, filter_table_width::Int32,
     )
-        # tbounds = Bounds2(bounds.p_min .- 1f0, bounds.p_max)
         tile_res = (bounds |> inclusive_sides .|> Int32)
         pixels = [FilmTilePixel() for _ in 1:tile_res[2], __ in 1:tile_res[1]]
-        @info "Tile bounds $bounds"
         new(
             bounds, filter_radius, 1f0 ./ filter_radius,
             filter_table, filter_table_width,
