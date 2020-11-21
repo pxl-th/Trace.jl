@@ -77,6 +77,10 @@ end
     [abs(b1 - b0) for (b1, b0) in zip(b.p_max, b.p_min)]
 end
 
+@inline function inclusive_sides(b::Union{Bounds2, Bounds3})
+    [abs(b1 - (b0 - 1f0)) for (b1, b0) in zip(b.p_max, b.p_min)]
+end
+
 function volume(b::Bounds3)
     d = b |> diagonal
     d[1] * d[2] * d[3]

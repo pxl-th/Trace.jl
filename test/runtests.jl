@@ -149,3 +149,89 @@ end
     @test l(Point2f0(4f0)) < 1f-6
     @test l(Point2f0(5f0)) ≈ 0f0
 end
+
+@testset "Film testing" begin
+    filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
+    film = Trace.Film(
+        Point2f0(1920f0, 1080f0), Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
+        filter, 35f0, 1f0, "output.png",
+    )
+    @test size(film.pixels) == (1080, 1920)
+    @test Trace.get_sample_bounds(film) == Trace.Bounds2(Point2f0(-3f0), Point2f0(1924f0, 1084f0))
+end
+
+@testset "FilmTile testing" begin
+    filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
+    film = Trace.Film(
+        Point2f0(1920f0, 1080f0), Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
+        filter, 35f0, 1f0, "output.png",
+    )
+    # Test tile from start of the film.
+    tile = Trace.FilmTile(film, Trace.Bounds2(Point2f0(1f0), Point2f0(10f0)))
+    @test size(tile.pixels) == (14, 14)
+    @test tile.bounds == Trace.Bounds2(Point2f0(1f0), Point2f0(14f0))
+    # Pixels in 1:5 radius should be affected.
+    for i in 1:5
+        @test tile.pixels[i, i].filter_weight_sum ≈ 0f0
+    end
+    Trace.add_sample!(tile, Point2f0(1f0), Trace.RGBSpectrum(1f0))
+    for (i, j) in zip(1:4, 2:5)
+        @test tile.pixels[i, i].filter_weight_sum > 0 && tile.pixels[j, j].filter_weight_sum > 0
+        @test tile.pixels[i, i].filter_weight_sum > tile.pixels[j, j].filter_weight_sum
+    end
+    # Merging tile back to film.
+    for i in 1:5
+        @test film.pixels[i, i].filter_weight_sum ≈ 0f0
+    end
+    Trace.merge_film_tile!(film, tile)
+    for (i, j) in zip(1:4, 2:5)
+        @test film.pixels[i, i].filter_weight_sum > 0 && film.pixels[j, j].filter_weight_sum > 0
+        @test film.pixels[i, i].filter_weight_sum > film.pixels[j, j].filter_weight_sum
+    end
+
+    # Test shifted tile.
+    tile = Trace.FilmTile(film, Trace.Bounds2(Point2f0(10f0), Point2f0(60f0)))
+    @test size(tile.pixels) == (59, 59) # Account for filter radius shift.
+    @test tile.bounds == Trace.Bounds2(Point2f0(6f0), Point2f0(64f0))
+    # Add to [20, 20] pixel
+    #   -> [16:24] radius of contribution on the film
+    #   -> [16 - 6 + 1:24 - 6 + 1] = [11:19] radius of contribution on the film tile.
+    for i in 11:19
+        @test tile.pixels[i, i].filter_weight_sum ≈ 0f0
+    end
+    Trace.add_sample!(tile, Point2f0(20f0), Trace.RGBSpectrum(1f0))
+    # Symmetrical.
+    for (i, j) in zip(11:14, 18:-1:15)
+        @test tile.pixels[i, i].filter_weight_sum ≈ tile.pixels[j, j].filter_weight_sum
+    end
+    # Increasing from left-to-right.
+    for (i, j) in zip(11:13, 12:14)
+        @test tile.pixels[i, i].filter_weight_sum > 0 && tile.pixels[j, j].filter_weight_sum > 0
+        @test tile.pixels[i, i].filter_weight_sum < tile.pixels[j, j].filter_weight_sum
+    end
+    # Decreasing from right-to-left.
+    for (i, j) in zip(16:18, 17:19)
+        @test tile.pixels[i, i].filter_weight_sum > 0 && tile.pixels[j, j].filter_weight_sum > 0
+        @test tile.pixels[i, i].filter_weight_sum > tile.pixels[j, j].filter_weight_sum
+    end
+    # Merging tile back to film.
+    for i in 16:24
+        @test film.pixels[i, i].filter_weight_sum ≈ 0f0
+    end
+    Trace.merge_film_tile!(film, tile)
+    # Symmetrical.
+    for (i, j) in zip(16:19, 23:-1:20)
+        @test film.pixels[i, i].filter_weight_sum ≈ film.pixels[j, j].filter_weight_sum
+    end
+    # Increasing from left-to-right.
+    for (i, j) in zip(16:18, 17:19)
+        @test film.pixels[i, i].filter_weight_sum > 0 && film.pixels[j, j].filter_weight_sum > 0
+        @test film.pixels[i, i].filter_weight_sum < film.pixels[j, j].filter_weight_sum
+    end
+    # Decreasing from right-to-left.
+    for (i, j) in zip(20:23, 21:24)
+        @test film.pixels[i, i].filter_weight_sum > 0 && film.pixels[j, j].filter_weight_sum > 0
+        @test film.pixels[i, i].filter_weight_sum > film.pixels[j, j].filter_weight_sum
+    end
+end
+
