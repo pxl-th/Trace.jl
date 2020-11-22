@@ -141,7 +141,7 @@ end
 (t::Transformation)(r::Ray) = Ray(r.o |> t, r.d |> t, r.t_max, r.time)
 function (t::Transformation)(rd::RayDifferentials)
     RayDifferentials(
-        rd.r |> t,
+        rd.o |> t, rd.d |> t, rd.t_max, rd.time,
         rd.has_differentials,
         rd.rx_origin |> t,
         rd.ry_origin |> t,

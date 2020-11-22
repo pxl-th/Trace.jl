@@ -278,11 +278,11 @@ end
         camera, sample1,
     )
     @test ray_differential.has_differentials
-    @test ray_differential.r.o == Point3f0(0f0)
-    @test ray_differential.r.d ≈ Point3f0(ray1.d)
+    @test ray_differential.o == Point3f0(0f0)
+    @test ray_differential.d ≈ Point3f0(ray1.d)
 
-    @test ray_differential.rx_direction[1] > ray_differential.r.d[1]
-    @test ray_differential.rx_direction[2] ≈ ray_differential.r.d[2]
-    @test ray_differential.ry_direction[1] ≈ ray_differential.r.d[1]
-    @test ray_differential.ry_direction[2] > ray_differential.r.d[2]
+    @test ray_differential.rx_direction[1] > ray_differential.d[1]
+    @test ray_differential.rx_direction[2] ≈ ray_differential.d[2]
+    @test ray_differential.ry_direction[1] ≈ ray_differential.d[1]
+    @test ray_differential.ry_direction[2] > ray_differential.d[2]
 end

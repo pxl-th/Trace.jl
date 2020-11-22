@@ -57,7 +57,10 @@ function generate_ray_differential(
     )
     ray_x, wt_x = generate_ray(camera, shifted_x)
     ray_y, wt_y = generate_ray(camera, shifted_y)
-    RayDifferentials(ray, true, ray_x.o, ray_y.o, ray_x.d, ray_y.d), wt
+    RayDifferentials(
+        ray.o, ray.d, ray.t_max, ray.time,
+        true, ray_x.o, ray_y.o, ray_x.d, ray_y.d,
+    ), wt
 end
 
 include("perspective.jl")
