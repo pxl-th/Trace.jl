@@ -18,10 +18,13 @@ Given surface interaction `si` at the shading point,
 return `(s, t)` texture coordinates and estimated changes in `(s, t)` w.r.t.
 pixel `x` & `y` coordinates.
 
+# Paramters:
+
 - `m::UVMapping2D`: UVMapping with offset & scale parameters.
 - `si::SurfaceInteraction`: SurfaceInteraction at the shading point.
 
-# Returns
+# Returns:
+
     `Tuple{Point2f0, Vec2f0, Vec2f0}`:
         Texture coordinates at the shading point, estimated changes
         in `(s, t)` w.r.t. pixel `x` & `y` coordinates.
@@ -34,6 +37,15 @@ function map(m::UVMapping2D, si::SurfaceInteraction)::Tuple{Point2f0, Vec2f0, Ve
 end
 
 
+"""
+3D mapping that takes world space coordinate of the point
+and applies a linear transformation to it. This will often be a transformation
+that takes the point back to the primitive's object space.
+
+Because a linear mapping is used, the differential change in texture
+coordinates can be found by applying the same transformation to the
+partial derivatives of the position.
+"""
 struct TransformMapping3D <: Mapping3D
     world_to_texture::Transformation
 end
