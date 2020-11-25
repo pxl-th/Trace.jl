@@ -185,7 +185,7 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
     elseif n[2] > n[3]
         dim = Point2f0(1, 3)
     else
-        dim = POint2f0(1, 2)
+        dim = Point2f0(1, 2)
     end
     # Initialization for offset computation.
     a = Mat2f0(dim[1], dim[1], dim[2], dim[2])
@@ -209,6 +209,7 @@ include("reflection.jl")
 
 include("camera/camera.jl")
 # include("sampler/sampler.jl")
+include("textures/mapping.jl")
 
 """
 TODO
