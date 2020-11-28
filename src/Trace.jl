@@ -210,6 +210,8 @@ include("reflection.jl")
 include("camera/camera.jl")
 # include("sampler/sampler.jl")
 include("textures/mapping.jl")
+include("textures/basic.jl")
+include("materials/bsdf.jl")
 
 """
 TODO

@@ -250,6 +250,21 @@ end
     @test all(Trace.frensel_conductor(1f0, s, s, s).c .> 0f0)
 end
 
+@testset "SpecularReflection" begin
+    sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FrenselNoOp())
+    @test sr & Trace.BSDF_REFLECTION
+    @test sr & Trace.BSDF_SPECULAR
+end
+
+@testset "SpecularTransmission" begin
+    st = Trace.SpecularTransmission{Trace.RGBSpectrum, Trace.Radiance}(
+        Trace.RGBSpectrum(1f0), 1f0, 1f0,
+        Trace.FrenselDielectric(1f0, 1f0),
+    )
+    @test st & Trace.BSDF_SPECULAR
+    @test st & Trace.BSDF_TRANSMISSION
+end
+
 @testset "Perspective Camera" begin
     filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
     film = Trace.Film(

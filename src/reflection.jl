@@ -62,13 +62,22 @@ struct FrenselDielectric <: Frensel
     ηi::Float32
     ηt::Float32
 end
-struct FrenselNoOp end
+struct FrenselNoOp <: Frensel end
 (f::FrenselConductor)(cos_θi::Float32) = frensel_conductor(cos_θi, f.ηi, f.ηt, f.k)
 (f::FrenselDielectric)(cos_θi::Float32) = frensel_dielectric(cos_θi, f.ηi, f.ηt)
 (f::FrenselNoOp)(::Float32) = RGBSpectrum(1f0)
 
 
+@enum BxDFTypes::UInt8 begin
+    BSDF_REFLECTION   = 0x1
+    BSDF_TRANSMISSION = 0b10
+    BSDF_DIFFUSE      = 0b100
+    BSDF_GLOSSY       = 0b1000
+    BSDF_SPECULAR     = 0b10000
+    BSDF_ALL          = 0b11111
+end
 abstract type BxDF end
+
 struct SpecularReflection{S <: Spectrum, F <: Frensel} <: BxDF
     """
     Spectrum used to scale the reflected color.
@@ -85,10 +94,14 @@ Return value of the distribution function for the given pair of directions.
 For specular reflection, no scattering is returned, since
 for arbitrary directions δ-funcion returns no scattering.
 """
-function f(
-    s::SpecularReflection{S, F}, wo::Vec3f0, wi::Vec3f0,
+function (s::SpecularReflection{S, F})(
+    wo::Vec3f0, wi::Vec3f0,
 )::S where S <: Spectrum where F <: Frensel
     S(0f0)
+end
+
+function Base.:&(s::SpecularReflection, t::BxDFTypes)::Bool
+    t == BSDF_SPECULAR || t == BSDF_REFLECTION
 end
 
 """
@@ -138,10 +151,14 @@ Return value of the distribution function for the given pair of directions.
 For specular transmission, no scattering is returned, since
 for arbitrary directions δ-funcion returns no scattering.
 """
-function f(
-    s::SpecularTransmission{S, T}, wo::Vec3f0, wi::Vec3f0,
+function (s::SpecularTransmission{S, T})(
+    wo::Vec3f0, wi::Vec3f0,
 )::S where S <: Spectrum where T <: TransportMode
     S(0f0)
+end
+
+function Base.:&(s::SpecularTransmission, t::BxDFTypes)::Bool
+    t == BSDF_SPECULAR || t == BSDF_TRANSMISSION
 end
 
 """
