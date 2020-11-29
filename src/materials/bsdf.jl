@@ -77,8 +77,8 @@ function (b::BSDF)(wo_world::Vec3f0, wi_world::Vec3f0, f::BxDFTypes)
     for i in 1:b.n_bxdfs
         bxdf = b.bxdfs[i]
         if ((bxdf & flags) && (
-            (reflect && (bxdf & BSDF_REFLECTION))
-            || (!reflect && (bxdf & BSDF_TRANSMISSION))
+            (reflect && (bxdf & BSDF_REFLECTION)) ||
+            (!reflect && (bxdf & BSDF_TRANSMISSION))
         ))
             output += bxdf(wo, wi)
         end

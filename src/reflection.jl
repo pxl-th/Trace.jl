@@ -78,6 +78,7 @@ struct FrenselNoOp <: Frensel end
 end
 abstract type BxDF end
 
+
 struct SpecularReflection{S <: Spectrum, F <: Frensel} <: BxDF
     """
     Spectrum used to scale the reflected color.
@@ -105,11 +106,6 @@ function Base.:&(s::SpecularReflection, t::BxDFTypes)::Bool
 end
 
 """
-Since normal is (0, 0, 1), cos_θ between n & w is (0, 0, 1) ⋅ w = w.z.
-"""
-@inline cos_θ(w::Vec3f0) = w[3]
-
-"""
 Compute the direction of incident light wi, given an outgoing direction wo
 and return the value of BxDF for the pair of directions.
 `sample` parameter isn't needed for the δ-distribution.
@@ -122,14 +118,10 @@ function sample_f(
     wi, pdf, s.frensel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
 end
 
-"""
-Reflect `wo` about `n`.
-"""
-@inline reflect(wo::Vec3f0, n::Vec3f0) = -wo + 2f0 * (wo ⋅ n) * n
-
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
 const TransportMode = Union{Radiance, Importance}
+
 
 struct SpecularTransmission{S <: Spectrum, T <: TransportMode} <: BxDF
     t::S
@@ -205,4 +197,118 @@ function refract(wi::Vec3f0, n::Normal3f0, η::Float32)::Tuple{Bool, Vec3f0}
     cos_θt = sqrt(1f0 - sin2_θt)
     wt = -η .* wi + (η * cos_θi - cos_θt) .* n
     true, wt
+end
+
+
+"""
+Lambertian Reflection models a perfect diffuse surface
+that scatters incident illumination equally in all directions.
+"""
+struct LambertianReflection{S <: Spectrum}
+    """
+    Reflectance spectrum, which is the fraction
+    of incident light that is scattered.
+    """
+    r::S
+end
+
+function Base.:&(l::LambertianReflection, t::BxDFTypes)::Bool
+    t == BSDF_DIFFUSE || t == BSDF_REFLECTION
+end
+
+"""
+Reflection distribution is constant and divides reflectance spectrum
+equally over the hemisphere.
+"""
+function (l::LambertianReflection{S})(::Vec3f0, ::Vec3f0)::S where S <: Spectrum
+    l.r * (1f0 / π)
+end
+
+"""
+Directional-hemisphirical reflectance value is constant.
+"""
+function ρ(
+    l::LambertianReflection{S}, ::Vec3f0, ::Int32, ::Vector{Point2f0},
+)::S where S <: Spectrum
+    l.r
+end
+
+"""
+Hemispherical-hemisphirical reflectance value is constant.
+"""
+function ρ(
+    l::LambertianReflection{S}, ::Vector{Point2f0}, ::Vector{Point2f0},
+)::S where S <: Spectrum
+    l.r
+end
+
+
+"""
+Lambertian Transmission models perfect transmission.
+"""
+struct LambertianTransmission{S <: Spectrum}
+    t::S
+end
+
+function Base.:&(l::LambertianTransmission, t::BxDFTypes)::Bool
+    t == BSDF_DIFFUSE || t == BSDF_TRANSMISSION
+end
+
+function (t::LambertianTransmission{S})(::Vec3f0, ::Vec3f0) where S <: Spectrum
+    t.t * (1f0 / π)
+end
+
+function ρ(
+    t::LambertianTransmission{S}, ::Vec3f0, ::Int32, ::Vector{Point2f0},
+)::S where S <: Spectrum
+    t.t
+end
+
+function ρ(
+    t::LambertianTransmission{S}, ::Vector{Point2f0}, ::Vector{Point2f0},
+)::S where S <: Spectrum
+    t.t
+end
+
+
+"""
+Describes rough surfaces by V-shaped microfacets described by a spherical
+Gaussian distribution with parameter `σ` --- the standard deviation
+of the microfacet angle.
+"""
+struct OrenNayar{S <: Spectrum} <: BxDF
+    r::S
+    a::Float32
+    b::Float32
+
+    function OrenNayar(r::S, σ::Float32) where S <: Spectrum
+        σ = σ |> deg2rad
+        σ2 = σ * σ
+        a = 1f0 - (σ2 / (2f0 * (σ2 + 0.33f0)))
+        b = 0.45f0 * σ2 / (σ2 + 0.09f0)
+        new{S}(r, a, b)
+    end
+end
+
+function (o::OrenNayar)(wo::Vec3f0, wi::Vec3f0)
+    sin_θi = wi |> sin_θ
+    sin_θo = wo |> sin_θ
+    # Compute cosine term of Oren-Nayar model.
+    max_cos = 0f0
+    if sin_θi > 1f-4 && sin_θo > 1f-4
+        sin_ϕi = wi |> sin_ϕ
+        cos_ϕi = wi |> cos_ϕ
+        sin_ϕo = wo |> sin_ϕ
+        cos_ϕo = wo |> cos_ϕ
+        max_cos = max(0f0, cos_ϕi * cos_ϕo + sin_ϕi * sin_ϕo)
+    end
+    # Compute sine & tangent terms of Oren-Nayar model.
+    if abs(cos_θ(wi) > abs(cos_θ(wo)))
+        sin_α = sin_θo
+        tan_β = sin_θi / abs(cos_θ(wi))
+    else
+        sin_α = sin_θi
+        tan_β = sin_θo / abs(cos_θ(wo))
+    end
+    o.r * (1f0 / π) * (o.a + o.b * max_cos * sin_α * tan_β)
 end

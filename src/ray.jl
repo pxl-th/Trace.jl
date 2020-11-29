@@ -23,8 +23,8 @@ function (r::Union{Ray, RayDifferentials})(t::Number)
 end
 
 function scale_differentials!(rd::RayDifferentials, s::Float32)
-    rd.rx_origin = rd.r.o + (rd.rx_origin - rd.r.o) * s
-    rd.ry_origin = rd.r.o + (rd.ry_origin - rd.r.o) * s
-    rd.rx_direction = rd.r.d + (rd.rx_direction - rd.r.d) * s
-    rd.rx_direction = rd.r.d + (rd.ry_direction - rd.r.d) * s
+    rd.rx_origin = rd.o + (rd.rx_origin - rd.o) * s
+    rd.ry_origin = rd.o + (rd.ry_origin - rd.o) * s
+    rd.rx_direction = rd.d + (rd.rx_direction - rd.d) * s
+    rd.rx_direction = rd.d + (rd.ry_direction - rd.d) * s
 end

@@ -13,6 +13,27 @@ maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
+"""
+Since normal is (0, 0, 1), cos_θ between n & w is (0, 0, 1) ⋅ w = w.z.
+"""
+@inline cos_θ(w::Vec3f0) = w[3]
+@inline sin_θ2(w::Vec3f0) = max(0f0, 1f0 - cos_θ(w) * cos_θ(w))
+@inline sin_θ(w::Vec3f0) = w |> sin_θ2 |> √
+
+@inline function cos_ϕ(w::Vec3f0)
+    sinθ = w |> sin_θ
+    sinθ ≈ 0f0 ? 1f0 : clamp(w.x / sinθ, -1f0, 1f0)
+end
+@inline function sin_ϕ(w::Vec3f0)
+    sinθ = w |> sin_θ
+    sinθ ≈ 0f0 ? 1f0 : clamp(w.y / sinθ, -1f0, 1f0)
+end
+
+"""
+Reflect `wo` about `n`.
+"""
+@inline reflect(wo::Vec3f0, n::Vec3f0) = -wo + 2f0 * (wo ⋅ n) * n
+
 function find_interval(size::Int64, predicate::Function)
     first, len = 0, size
     while len > 1
@@ -107,6 +128,7 @@ mutable struct SurfaceInteraction{S <: AbstractShape}
 
     shape::Maybe{S}
     primitive::Maybe{P} where P <: Primitive
+    bsdf # TODO ::Maybe{BSDF}
 
     ∂u∂x::Float32
     ∂u∂y::Float32
@@ -128,7 +150,8 @@ mutable struct SurfaceInteraction{S <: AbstractShape}
         core = Interaction(p, time, wo, n)
         shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
         new{typeof(shape)}(
-            core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, shape, primitive,
+            core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+            shape, primitive, nothing,
             0f0, 0f0, 0f0, 0f0, Vec3f0(0f0), Vec3f0(0f0),
         )
     end
@@ -212,6 +235,7 @@ include("camera/camera.jl")
 include("textures/mapping.jl")
 include("textures/basic.jl")
 include("materials/bsdf.jl")
+include("materials/material.jl")
 
 """
 TODO
