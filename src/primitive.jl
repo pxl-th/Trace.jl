@@ -1,11 +1,11 @@
-struct GeometricPrimitive{T <: AbstractShape, M <: Material} <: Primitive
+struct GeometricPrimitive{T <: AbstractShape} <: Primitive
     shape::T
-    material::Maybe{M}
+    material::Maybe{M} where M <: Material
 
     function GeometricPrimitive(
         shape::T, material::Maybe{M} = nothing,
     ) where {T <: AbstractShape, M <: Material}
-        new{T, Maybe{M}}(shape, material)
+        new{T}(shape, material)
     end
 end
 
