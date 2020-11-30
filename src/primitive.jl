@@ -1,5 +1,12 @@
-struct GeometricPrimitive{T <: AbstractShape} <: Primitive
+struct GeometricPrimitive{T <: AbstractShape, M <: Material} <: Primitive
     shape::T
+    material::Maybe{M}
+
+    function GeometricPrimitive(
+        shape::T, material::Maybe{M} = nothing,
+    ) where {T <: AbstractShape, M <: Material}
+        new{T, Maybe{M}}(shape, material)
+    end
 end
 
 function intersect!(p::GeometricPrimitive{T}, ray::Ray) where T <: AbstractShape

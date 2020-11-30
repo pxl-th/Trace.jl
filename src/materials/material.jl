@@ -1,6 +1,4 @@
-abstract type Material end
-
-struct MatterMaterial
+struct MatterMaterial <: Material
     Kd::Texture
     σ::Texture
     # TODO bump map

@@ -86,6 +86,12 @@ function spherical_ϕ(v::Vec3f0)
 end
 
 
+abstract type AbstractShape end
+abstract type Primitive end
+abstract type Light end
+abstract type Material end
+
+
 """
 Flip normal `n` so that it lies in the same hemisphere as `v`.
 """
@@ -97,9 +103,6 @@ include("transformations.jl")
 
 # TODO AnimatedTransform, AnimatedBounds
 # TODO Medium & add it to structs
-
-abstract type AbstractShape end
-abstract type Primitive end
 
 mutable struct Interaction
     p::Point3f0
@@ -221,6 +224,29 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
     si.∂u∂y, si.∂v∂y = any(isnan.(sy)) ? (0f0, 0f0) : sy
 end
 
+struct Scene
+    lights::Vector{L} where L <: Light
+    aggregate::P where P <: Primitive
+    bound::Bounds3
+
+    function Scene(
+        lights::Vector{L}, aggregate::P,
+    ) where L <: Light where P <: Primitive
+        # TODO preprocess for lights
+        new(lights, aggregate, aggregate |> world_bound)
+    end
+end
+
+intersect!(scene::Scene, ray::Ray) = intersect!(scene.aggregate, ray)
+intersect_p(scene::Scene, ray::Ray) = intersect_p(scene.aggregate, ray)
+
+@inline function spawn_ray(p0::Interaction, p1::Interaction)::Ray
+    Ray(o=p0.p, d=p1.p - p0.p, time=p0.time)
+end
+@inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
+    spawn_ray(p0.core, p1)
+end
+
 include("shapes/Shape.jl")
 include("primitive.jl")
 include("accel/bvh.jl")
@@ -236,6 +262,11 @@ include("textures/mapping.jl")
 include("textures/basic.jl")
 include("materials/bsdf.jl")
 include("materials/material.jl")
+
+include("lights/emission.jl")
+include("lights/light.jl")
+include("lights/point.jl")
+include("lights/directional.jl")
 
 """
 TODO
