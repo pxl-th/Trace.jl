@@ -257,7 +257,7 @@ include("film.jl")
 include("reflection.jl")
 
 include("camera/camera.jl")
-# include("sampler/sampler.jl")
+include("sampler/sampler.jl")
 include("textures/mapping.jl")
 include("textures/basic.jl")
 include("materials/bsdf.jl")
@@ -267,6 +267,8 @@ include("lights/emission.jl")
 include("lights/light.jl")
 include("lights/point.jl")
 include("lights/directional.jl")
+
+include("integrators/sampler.jl")
 
 """
 TODO
