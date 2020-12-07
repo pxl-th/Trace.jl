@@ -19,3 +19,13 @@ end
 
 intersect_p(p::GeometricPrimitive, ray::Ray) = intersect_p(p.shape, ray)
 world_bound(p::GeometricPrimitive) = p.shape |> world_bound
+
+function compute_scattering!(
+    p::GeometricPrimitive, si::SurfaceInteraction, allow_multiple_lobes::Bool,
+    transport_mode::TransportMode,
+)
+    !(p.material isa Nothing) && p.material(
+        si, allow_multiple_lobes, transport_mode,
+    )
+    @assert (si.core.n ⋅ si.shading.n) ≥ 0f0
+end

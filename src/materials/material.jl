@@ -4,8 +4,11 @@ struct MatterMaterial <: Material
     # TODO bump map
 end
 
+"""
+Compute scattering function.
+"""
 function (m::MatterMaterial)(
-    si::SurfaceInteraction, mode::TransportMode, allow_multiple_lobes::Bool,
+    si::SurfaceInteraction, allow_multiple_lobes::Bool, mode::TransportMode,
 )
     # TODO perform bump mapping
     # TODO first implement

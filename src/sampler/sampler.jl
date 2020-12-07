@@ -119,7 +119,7 @@ function get_1d(ps::PixelSampler)
 end
 
 function get_2d(ps::PixelSampler)::Point2f0
-    ps.current_2d_dimension > length(ps.samples_2d) && return Point2f0(rand(2))
+    ps.current_2d_dimension > length(ps.samples_2d) && return rand(Point2f0)
     v = ps.samples_2d[ps.current_2d_dimension][ps.sampler.current_pixel_sample_id]
     ps.current_2d_dimension += 1
     v
@@ -129,7 +129,6 @@ end
 mutable struct UniformSampler <: AbstractSampler
     current_sample::Int64
     samples_per_pixel::Int64
-
     UniformSampler(samples_per_pixel::Integer) = new(1, samples_per_pixel)
 end
 
@@ -139,15 +138,16 @@ function get_camera_sample(sampler::UniformSampler, p_raster::Point2f0)
     CameraSample(p_film, p_lens, rand())
 end
 
-function has_next_sample(u::UniformSampler)::Bool
+@inline function has_next_sample(u::UniformSampler)::Bool
     u.current_sample ≤ u.samples_per_pixel
 end
-function start_next_sample!(u::UniformSampler)
+@inline function start_next_sample!(u::UniformSampler)
     u.current_sample += 1
 end
-
-function start_pixel!(u::UniformSampler, ::Point2f0)
+@inline function start_pixel!(u::UniformSampler, ::Point2f0)
     u.current_sample = 1
 end
+@inline get_1d(u::UniformSampler)::Float32 = rand(Float32)
+@inline get_2d(u::UniformSampler)::Point2f0 = rand(Point2f0)
 
 # include("stratified.jl")

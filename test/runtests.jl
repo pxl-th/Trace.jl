@@ -3,6 +3,18 @@ using GeometryBasics
 using LinearAlgebra
 using Trace
 
+@testset "Test Bounds2 iteration" begin
+    b = Trace.Bounds2(Point2f0(1f0, 3f0), Point2f0(4f0, 4f0))
+    targets = [
+        Point2f0(1f0, 3f0), Point2f0(2f0, 3f0), Point2f0(3f0, 3f0), Point2f0(4f0, 3f0),
+        Point2f0(1f0, 4f0), Point2f0(2f0, 4f0), Point2f0(3f0, 4f0), Point2f0(4f0, 4f0),
+    ]
+    @test length(b) == 8
+    for (p, t) in zip(b, targets)
+        @test p == t
+    end
+end
+
 @testset "Ray-Bounds intersection" begin
     b = Trace.Bounds3(Point3f0(1), Point3f0(2))
     b_neg = Trace.Bounds3(Point3f0(-2), Point3f0(-1))

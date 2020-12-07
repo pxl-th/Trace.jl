@@ -35,3 +35,9 @@ function trace(t::VisibilityTester, scene::Scene)::RGBSpectrum
     end
     s
 end
+
+"""
+Emmited light if ray hit an area light source.
+By default it light sources have no area.
+"""
+@inline le(::Light, ::Union{Ray, RayDifferentials}) = RGBSpectrum(0f0)

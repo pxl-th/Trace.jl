@@ -212,4 +212,21 @@ function set_image(f::Film, spectrum::Matrix{S}) where S <: Spectrum
     end
 end
 
-# TODO image writing
+function save(film::Film, splat_scale::Float32 = 1f0)
+    image = Array{Float32}(undef, size(film.pixels)..., 3)
+    for y in 1:size(film.pixels)[1], x in 1:size(film.pixels)[2]
+        pixel = film.pixels[y, x]
+        image[y, x, :] .= XYZ_to_RGB(pixel.xyz)
+        # Normalize pixel with weight sum.
+        filter_weight_sum = pixel.filter_weight_sum
+        if filter_weight_sum != 0
+            inv_weight = 1f0 / filter_weight_sum
+            image[y, x, :] .= max.(0f0, image[y, x, :] .* inv_weight)
+        end
+        # Add splat value at pixel & scale.
+        splat_rgb = XYZ_to_RGB(pixel.splat_xyz)
+        image[y, x, :] .+= splat_scale .* splat_rgb
+        image[y, x, :] .*= film.scale
+    end
+    FileIO.save(film.filename, image)
+end

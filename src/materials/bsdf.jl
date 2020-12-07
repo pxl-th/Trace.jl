@@ -66,11 +66,18 @@ that transforms vectors in world space to local reflection space is:
 Since it is an orthonormal matrix, its inverse is its transpose.
 """
 world_to_local(b::BSDF, v::Vec3f0) = Vec3f0(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
-local_to_world(b::BSDF, v::Vec3f0) = Mat3f0(b.ss..., b.ts..., b.ns) * n
+local_to_world(b::BSDF, v::Vec3f0) = Mat3f0(b.ss..., b.ts..., b.ns) * v
 
-function (b::BSDF)(wo_world::Vec3f0, wi_world::Vec3f0, f::BxDFTypes)
+"""
+Evaluate BSDF function given incident and outgoind directions.
+"""
+function (b::BSDF)(
+    wo_world::Vec3f0, wi_world::Vec3f0, flags::BxDFTypes,
+)::S where S <: Spectrum
+    # Transform world-space direction vectors to local BSDF space.
     wi = world_to_local(b, wi_world)
     wo = world_to_local(b, wo_world)
+    # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
 
     output = RGBSpectrum(0f0) # TODO assumes that default is RGBSpectrum
@@ -84,4 +91,72 @@ function (b::BSDF)(wo_world::Vec3f0, wi_world::Vec3f0, f::BxDFTypes)
         end
     end
     output
+end
+
+"""
+Compute incident ray direction for a given outgoing direction and
+a given mode of light scattering corresponding
+to perfect specular reflection or refraction.
+"""
+function sample_f(
+    b::BSDF, wo_world::Vec3f0, u::Point2f0, type::BxDFTypes,
+)::Tuple{S, Float32, BxDFTypes} where S <: Spectrum
+    # Choose which BxDF to sample.
+    matching_components = b |> num_components
+    matching_components == 0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
+    component = min(
+        Int64(floor(u[1] * matching_components)),
+        matching_components - 1,
+    )
+    # Get BxDF for chosen component.
+    count = component
+    bxdf = nothing
+    for i in 1:b.n_bxdfs
+        b.bxdfs[i] & type && count == 1 && (bxdf = b.bxdfs[i]; break)
+        count -= 1
+    end
+    @assert bxdf ≢ nothing
+    # Remap BxDF sample u to [0, 1)^2.
+    u_remapped = Point2f0(min(u[1] * matching_components - component), u[2])
+    # Sample chosen BxDF.
+    wo = world_to_local(b, wo_world)
+    wo[3] ≈ 0f0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
+
+    sampled_type = bxdf.type # TODO store bxdf type inside bxdfs
+    wi, pdf, f = sample_f(bxdf, wo, u_remapped)
+    pdf ≈ 0f0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
+    wi_world = local_to_world(b, wi)
+    # Compute overall PDF with all matching BxDFs.
+    if !(bxdf & BSDF_SPECULAR) && matching_components > 1
+        for i in 1:b.n_bxdfs
+            if b.bxdfs[i] != bxdf && b.bxdfs[i] & flags
+                pdf += pdf(b.bxdfs[i], wo, wi) # TODO implement pdf for bxdfs
+            end
+        end
+    end
+    matching_components > 1 && (pdf /= matching_components)
+    # Compute value of BSDF for sampled direction.
+    if !(bxdf & BSDF_SPECULAR)
+        reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
+        f = RGBSpectrum(0f0)
+        for i in 1:b.n_bxdfs
+            bxdf = b.bxdfs[i]
+            if ((bxdf & type) && (
+                (reflect && (bxdf & BSDF_REFLECTION)) ||
+                (!reflect && (bxdf & BSDF_TRANSMISSION))
+            ))
+                f += bxdf(wo, wi)
+            end
+        end
+    end
+
+    f, pdf, sampled_type
+end
+
+function num_components(b::BSDF, flags::BxDFTypes)::Int64
+    num = 0
+    for i in 1:b.n_bxdfs
+        b.bxdfs[i] & flags && (num += 1)
+    end
+    num
 end

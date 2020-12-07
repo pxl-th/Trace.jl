@@ -30,6 +30,20 @@ function Base.getindex(b::Union{Bounds2, Bounds3}, i::Integer)
     error("Invalid index `$i`. Only `1` & `2` are valid.")
 end
 
+function Base.length(b::Bounds2)::Int64
+    @assert all(b.p_min .> 0f0) "When iterating Bounds2 `p_min` should start from 1."
+    δ = ceil.(b.p_max .- b.p_min .+ 1f0)
+    Int64(δ[1] * δ[2])
+end
+
+function Base.iterate(b::Bounds2, i::Integer = 1)::Union{Nothing, Tuple{Point2f0, Integer}}
+    i > length(b) && return nothing
+
+    j = i - 1
+    δ = b.p_max .- b.p_min .+ 1f0
+    b.p_min .+ Point2f0(j % δ[1], j ÷ δ[1]), i + 1
+end
+
 # Index through 8 corners.
 function corner(b::Bounds3, c::Integer)
     c -= 1

@@ -1,3 +1,15 @@
+@enum BxDFTypes::UInt8 begin
+    BSDF_NONE         = 0x0
+    BSDF_REFLECTION   = 0x1
+    BSDF_TRANSMISSION = 0b10
+    BSDF_DIFFUSE      = 0b100
+    BSDF_GLOSSY       = 0b1000
+    BSDF_SPECULAR     = 0b10000
+    BSDF_ALL          = 0b11111
+end
+abstract type BxDF end
+
+
 """
 Compute Frensel reflection formula for dielectric materials
 and unpolarized light.
@@ -67,18 +79,6 @@ struct FrenselNoOp <: Frensel end
 (f::FrenselDielectric)(cos_θi::Float32) = frensel_dielectric(cos_θi, f.ηi, f.ηt)
 (f::FrenselNoOp)(::Float32) = RGBSpectrum(1f0)
 
-
-@enum BxDFTypes::UInt8 begin
-    BSDF_REFLECTION   = 0x1
-    BSDF_TRANSMISSION = 0b10
-    BSDF_DIFFUSE      = 0b100
-    BSDF_GLOSSY       = 0b1000
-    BSDF_SPECULAR     = 0b10000
-    BSDF_ALL          = 0b11111
-end
-abstract type BxDF end
-
-
 struct SpecularReflection{S <: Spectrum, F <: Frensel} <: BxDF
     """
     Spectrum used to scale the reflected color.
@@ -101,8 +101,8 @@ function (s::SpecularReflection{S, F})(
     S(0f0)
 end
 
-function Base.:&(s::SpecularReflection, t::BxDFTypes)::Bool
-    t == BSDF_SPECULAR || t == BSDF_REFLECTION
+function Base.:&(::SpecularReflection, t::BxDFTypes)::Bool
+    t & BSDF_SPECULAR || t & BSDF_REFLECTION
 end
 
 """
@@ -117,11 +117,6 @@ function sample_f(
     pdf = 1f0
     wi, pdf, s.frensel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
 end
-
-const Radiance = Val{:Radiance}
-const Importance = Val{:Importance}
-const TransportMode = Union{Radiance, Importance}
-
 
 struct SpecularTransmission{S <: Spectrum, T <: TransportMode} <: BxDF
     t::S
@@ -149,8 +144,8 @@ function (s::SpecularTransmission{S, T})(
     S(0f0)
 end
 
-function Base.:&(s::SpecularTransmission, t::BxDFTypes)::Bool
-    t == BSDF_SPECULAR || t == BSDF_TRANSMISSION
+function Base.:&(::SpecularTransmission, t::BxDFTypes)::Bool
+    t & BSDF_SPECULAR || t & BSDF_TRANSMISSION
 end
 
 """
@@ -212,8 +207,8 @@ struct LambertianReflection{S <: Spectrum}
     r::S
 end
 
-function Base.:&(l::LambertianReflection, t::BxDFTypes)::Bool
-    t == BSDF_DIFFUSE || t == BSDF_REFLECTION
+function Base.:&(::LambertianReflection, t::BxDFTypes)::Bool
+    t & BSDF_DIFFUSE || t & BSDF_REFLECTION
 end
 
 """
@@ -250,8 +245,8 @@ struct LambertianTransmission{S <: Spectrum}
     t::S
 end
 
-function Base.:&(l::LambertianTransmission, t::BxDFTypes)::Bool
-    t == BSDF_DIFFUSE || t == BSDF_TRANSMISSION
+function Base.:&(::LambertianTransmission, t::BxDFTypes)::Bool
+    t & BSDF_DIFFUSE || t & BSDF_TRANSMISSION
 end
 
 function (t::LambertianTransmission{S})(::Vec3f0, ::Vec3f0) where S <: Spectrum
