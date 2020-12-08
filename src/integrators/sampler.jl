@@ -73,13 +73,13 @@ function li(
     l += le(surface_interaction, wo)
     # Add contribution of each light source.
     for light in scene.lights
-        li, wi, pdf, visibility_tester = sample_li(
+        sampled_li, wi, pdf, visibility_tester = sample_li(
             light, surface_interaction.core, i.sampler |> get_2d,
         )
-        (is_black(li) || pdf ≈ 0f0) && continue
+        (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
         if !is_black(f) && unoccluded(visibility_tester, scene)
-            l += f * li * abs(wi ⋅ n) / pdf
+            l += f * sampled_li * abs(wi ⋅ n) / pdf
         end
     end
     if depth + 1 ≤ i.max_depth

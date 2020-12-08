@@ -100,7 +100,7 @@ to perfect specular reflection or refraction.
 """
 function sample_f(
     b::BSDF, wo_world::Vec3f0, u::Point2f0, type::BxDFTypes,
-)::Tuple{S, Float32, BxDFTypes} where S <: Spectrum
+)::Tuple{S, Float32, UInt8} where S <: Spectrum
     # Choose which BxDF to sample.
     matching_components = b |> num_components
     matching_components == 0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
@@ -122,15 +122,15 @@ function sample_f(
     wo = world_to_local(b, wo_world)
     wo[3] ≈ 0f0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
 
-    sampled_type = bxdf.type # TODO store bxdf type inside bxdfs
+    sampled_type = bxdf.type
     wi, pdf, f = sample_f(bxdf, wo, u_remapped)
     pdf ≈ 0f0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
     wi_world = local_to_world(b, wi)
     # Compute overall PDF with all matching BxDFs.
     if !(bxdf & BSDF_SPECULAR) && matching_components > 1
         for i in 1:b.n_bxdfs
-            if b.bxdfs[i] != bxdf && b.bxdfs[i] & flags
-                pdf += pdf(b.bxdfs[i], wo, wi) # TODO implement pdf for bxdfs
+            if b.bxdfs[i] != bxdf && b.bxdfs[i] & type
+                pdf += pdf(b.bxdfs[i], wo, wi)
             end
         end
     end

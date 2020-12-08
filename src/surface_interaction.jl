@@ -131,7 +131,7 @@ function compute_scattering!(
     transport_mode::TransportMode = Radiance,
 )
     compute_differentials!(si, ray)
-    compute_scattering(si.primitive, si, allow_multiple_lobes, transport_mode)
+    compute_scattering!(si.primitive, si, allow_multiple_lobes, transport_mode)
 end
 
 @inline function le(si::SurfaceInteraction, w::Vec3f0)::S where S <: Spectrum
