@@ -31,7 +31,6 @@ function Base.getindex(b::Union{Bounds2, Bounds3}, i::Integer)
 end
 
 function Base.length(b::Bounds2)::Int64
-    @assert all(b.p_min .> 0f0) "When iterating Bounds2 `p_min` should start from 1."
     δ = ceil.(b.p_max .- b.p_min .+ 1f0)
     Int64(δ[1] * δ[2])
 end
@@ -75,7 +74,7 @@ function inside_exclusive(b::Bounds3, p::Point3f0)
 end
 
 expand(b::Bounds3, δ::Float32) = Bounds3(b.p_min .- δ, b.p_max .+ δ)
-diagonal(b::Bounds3) = b.p_max - b.p_min
+diagonal(b::Union{Bounds2, Bounds3}) = b.p_max - b.p_min
 
 function surface_area(b::Bounds3)
     d = b |> diagonal

@@ -3,7 +3,7 @@ struct PointLight{S <: Spectrum} <: Light
     Since point lights represent singularities that only emit light
     from a single position, flag is set to `LightδPosition`.
     """
-    flags::UInt8
+    flags::LightFlags
     """
     Ligh-source is positioned at the origin of its light space.
     """
@@ -56,6 +56,7 @@ function sample_li(
         ref, Interaction(p.position, ref.time, Vec3f0(0f0), Normal3f0(0f0)),
     )
     radiance = p.i / distance_squared(p.position, ref.p)
+    @info "Sampled LI", p.i, distance_squared(p.position, ref.p)
     radiance, wi, pdf, visibility
 end
 

@@ -7,13 +7,14 @@ struct OrenNayar{S <: Spectrum} <: BxDF
     r::S
     a::Float32
     b::Float32
+    type::UInt8
 
     function OrenNayar(r::S, σ::Float32) where S <: Spectrum
         σ = σ |> deg2rad
         σ2 = σ * σ
         a = 1f0 - (σ2 / (2f0 * (σ2 + 0.33f0)))
         b = 0.45f0 * σ2 / (σ2 + 0.09f0)
-        new{S}(r, a, b)
+        new{S}(r, a, b, UInt8(BSDF_DIFFUSE) | UInt8(BSDF_REFLECTION))
     end
 end
 

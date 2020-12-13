@@ -9,7 +9,9 @@ struct GeometricPrimitive{T <: AbstractShape} <: Primitive
     end
 end
 
-function intersect!(p::GeometricPrimitive{T}, ray::Ray) where T <: AbstractShape
+function intersect!(
+    p::GeometricPrimitive{T}, ray::Union{Ray, RayDifferentials},
+) where T <: AbstractShape
     intersects, t_hit, interaction = intersect(p.shape, ray)
     !intersects && return false, nothing
     ray.t_max = t_hit
@@ -17,12 +19,16 @@ function intersect!(p::GeometricPrimitive{T}, ray::Ray) where T <: AbstractShape
     true, interaction
 end
 
-intersect_p(p::GeometricPrimitive, ray::Ray) = intersect_p(p.shape, ray)
-world_bound(p::GeometricPrimitive) = p.shape |> world_bound
+@inline function intersect_p(
+    p::GeometricPrimitive, ray::Union{Ray, RayDifferentials},
+)
+    intersect_p(p.shape, ray)
+end
+@inline world_bound(p::GeometricPrimitive) = p.shape |> world_bound
 
 function compute_scattering!(
-    p::GeometricPrimitive, si::SurfaceInteraction, allow_multiple_lobes::Bool,
-    transport_mode::TransportMode,
+    p::GeometricPrimitive, si::SurfaceInteraction,
+    allow_multiple_lobes::Bool, transport_mode::TransportMode,
 )
     !(p.material isa Nothing) && p.material(
         si, allow_multiple_lobes, transport_mode,

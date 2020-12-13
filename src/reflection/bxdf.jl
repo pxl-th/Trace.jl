@@ -9,8 +9,8 @@
 end
 abstract type BxDF end
 
-@inline Base.:&(b::BxDFTypes, v::UInt8)::Bool = (UInt8(b) & v) != 0
-@inline Base.:&(v::UInt8, b::BxDFTypes)::Bool = (UInt8(b) & v) != 0
+@inline Base.:&(b::BxDFTypes, v::UInt8)::UInt8 = UInt8(b) & v
+@inline Base.:&(v::UInt8, b::BxDFTypes)::UInt8 = UInt8(b) & v
 function Base.:&(b::B, type::Union{UInt8, BxDFTypes})::Bool where B <: BxDF
     (b.type & type) != 0
 end

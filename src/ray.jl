@@ -18,6 +18,10 @@ end
     ry_direction::Vec3f0 = zeros(Vec3f0)
 end
 
+@inline function RayDifferentials(r::Ray)::RayDifferentials
+    RayDifferentials(o=r.o, d=r.d, t_max=r.t_max, time=r.time)
+end
+
 function (r::Union{Ray, RayDifferentials})(t::Number)
     r.o + r.d * t
 end

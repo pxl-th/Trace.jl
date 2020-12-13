@@ -12,6 +12,12 @@ const Normal3f0 = Normal{3, Float32}
 Maybe{T} = Union{T, Nothing}
 maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
+abstract type Spectrum end
+abstract type AbstractShape end
+abstract type Primitive end
+abstract type Light end
+abstract type Material end
+
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
 const TransportMode = Union{Radiance, Importance}
@@ -112,12 +118,6 @@ function spherical_ϕ(v::Vec3f0)
 end
 
 
-abstract type AbstractShape end
-abstract type Primitive end
-abstract type Light end
-abstract type Material end
-
-
 """
 Flip normal `n` so that it lies in the same hemisphere as `v`.
 """
@@ -147,8 +147,12 @@ struct Scene
     end
 end
 
-intersect!(scene::Scene, ray::Ray) = intersect!(scene.aggregate, ray)
-intersect_p(scene::Scene, ray::Ray) = intersect_p(scene.aggregate, ray)
+@inline function intersect!(scene::Scene, ray::Union{Ray, RayDifferentials})
+    intersect!(scene.aggregate, ray)
+end
+@inline function intersect_p(scene::Scene, ray::Union{Ray, RayDifferentials})
+    intersect_p(scene.aggregate, ray)
+end
 
 @inline function spawn_ray(p0::Interaction, p1::Interaction)::Ray
     Ray(o=p0.p, d=p1.p - p0.p, time=p0.time)
@@ -181,6 +185,32 @@ include("lights/point.jl")
 include("lights/directional.jl")
 
 include("integrators/sampler.jl")
+
+filter = LanczosSincFilter(Point2f0(4f0), 3f0)
+width, height = 28f0, 28f0
+film = Film(
+    Point2f0(width, height), Bounds2(Point2f0(0f0), Point2f0(1f0)),
+    filter, 35f0, 1f0, "output.png",
+)
+frame = width / height
+screen = Bounds2(Point2f0(-frame, -1f0), Point2f0(frame, 1f0))
+camera = PerspectiveCamera(
+    translate(Vec3f0(0)), screen,
+    0f0, 1f0, 0f0, 1f6, 35f0, film,
+)
+sampler = UniformSampler(1)
+whitted = WhittedIntegrator(camera, sampler, 1)
+
+light = PointLight(translate(Vec3f0(0, 1.5, -100)), RGBSpectrum(1f0))
+core = ShapeCore(translate(Vec3f0(0, 0, -100)), false)
+matte = MatterMaterial(
+    ConstantTexture(RGBSpectrum(1f0, 0f0, 0f0)),
+    ConstantTexture(1f0),
+)
+sphere = GeometricPrimitive(Sphere(core, 1f0, -1f0, 1f0, 360f0), matte)
+scene = Scene([light], sphere)
+
+whitted(scene)
 
 """
 TODO

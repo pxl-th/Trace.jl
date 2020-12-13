@@ -1,6 +1,12 @@
 struct MatterMaterial <: Material
-    Kd::Texture
-    σ::Texture
+    """
+    Spectral diffese reflection value.
+    """
+    Kd::Texture  # TODO check that texture is spectral
+    """
+    Scalar roughness.
+    """
+    σ::Texture  # TODO check that texture is scalar
     # TODO bump map
 end
 

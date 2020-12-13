@@ -8,7 +8,7 @@ mutable struct DirectionalLight{S <: Spectrum} <: Light
     Since directional lights represent singularities that emit light
     along a single direction, flag is set to `LightδDirection`.
     """
-    flags::UInt8
+    flags::LightFlags
     """
     Ligh-source is positioned at the origin of its light space.
     """

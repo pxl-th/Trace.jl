@@ -21,8 +21,6 @@ end
 
 include("spectrum_data.jl")
 
-abstract type Spectrum end
-
 Base.:(==)(c::C, i) where C <: Spectrum = all(c.c .== i)
 Base.:(==)(c1::C, c2::C) where C <: Spectrum = all(c1.c .== c2.c)
 Base.:+(c1::C, c2::C) where C <: Spectrum = C(c1.c .+ c2.c)
@@ -259,8 +257,8 @@ end
 struct RGBSpectrum <: Spectrum
     c::Vector{Float32}
 end
-
-RGBSpectrum(v::Float32 = 0f0) = RGBSpectrum(fill(v, 3))
+@inline RGBSpectrum(v::Float32 = 0f0) = RGBSpectrum(fill(v, 3))
+@inline RGBSpectrum(v1::Float32, v2::Float32, v3::Float32) = RGBSpectrum([v1, v2, v3])
 
 @inline from_RGB(::Type{RGBSpectrum}, rgb::Point3f0, ::SpectrumType = Reflectance) = rgb |> RGBSpectrum
 @inline to_RGB(s::RGBSpectrum) = Point3f0(s.c)

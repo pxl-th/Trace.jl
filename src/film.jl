@@ -148,11 +148,11 @@ function add_sample!(
     offsets_y = Vector{Int32}(undef, Int32(p1[2] - p0[2] + 1))
     for (i, x) in enumerate(p0[1]:p1[1])
         fx = abs((x - discrete_point[1]) * t.inv_filter_radius[1] * t.filter_table_width)
-        offsets_x[i] = min(fx |> floor, t.filter_table_width)
+        offsets_x[i] = clamp(fx |> ceil, 1, t.filter_table_width)  # TODO is clipping ok?
     end
     for (i, y) in enumerate(p0[2]:p1[2])
         fy = abs((y - discrete_point[2]) * t.inv_filter_radius[2] * t.filter_table_width)
-        offsets_y[i] = min(fy |> floor, t.filter_table_width)
+        offsets_y[i] = clamp(fy |> floor, 1, t.filter_table_width)
     end
 
     for p in t.pixels

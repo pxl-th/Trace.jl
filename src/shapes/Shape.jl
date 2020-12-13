@@ -5,11 +5,10 @@ struct ShapeCore
     transform_swaps_handedness::Bool
 
     function ShapeCore(
-        object_to_world::Transformation, world_to_object::Transformation,
-        reverse_orientation::Bool,
+        object_to_world::Transformation, reverse_orientation::Bool,
     )
         new(
-            object_to_world, world_to_object, reverse_orientation,
+            object_to_world, object_to_world |> inv, reverse_orientation,
             object_to_world |> swaps_handedness,
         )
     end

@@ -72,8 +72,8 @@ local_to_world(b::BSDF, v::Vec3f0) = Mat3f0(b.ss..., b.ts..., b.ns) * v
 Evaluate BSDF function given incident and outgoind directions.
 """
 function (b::BSDF)(
-    wo_world::Vec3f0, wi_world::Vec3f0, flags::BxDFTypes,
-)::S where S <: Spectrum
+    wo_world::Vec3f0, wi_world::Vec3f0, flags::BxDFTypes = BSDF_ALL,
+)::RGBSpectrum
     # Transform world-space direction vectors to local BSDF space.
     wi = world_to_local(b, wi_world)
     wo = world_to_local(b, wo_world)
@@ -83,7 +83,7 @@ function (b::BSDF)(
     output = RGBSpectrum(0f0) # TODO assumes that default is RGBSpectrum
     for i in 1:b.n_bxdfs
         bxdf = b.bxdfs[i]
-        if ((bxdf & flags) && (
+        if ((bxdf.type & flags == UInt8(flags)) && (
             (reflect && (bxdf & BSDF_REFLECTION)) ||
             (!reflect && (bxdf & BSDF_TRANSMISSION))
         ))
@@ -100,7 +100,7 @@ to perfect specular reflection or refraction.
 """
 function sample_f(
     b::BSDF, wo_world::Vec3f0, u::Point2f0, type::BxDFTypes,
-)::Tuple{S, Float32, UInt8} where S <: Spectrum
+)::Tuple{Vec3f0, S, Float32, UInt8} where S <: Spectrum
     # Choose which BxDF to sample.
     matching_components = b |> num_components
     matching_components == 0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
@@ -150,7 +150,7 @@ function sample_f(
         end
     end
 
-    f, pdf, sampled_type
+    wi_world, f, pdf, sampled_type
 end
 
 function num_components(b::BSDF, flags::BxDFTypes)::Int64

@@ -13,6 +13,17 @@ using Trace
     for (p, t) in zip(b, targets)
         @test p == t
     end
+
+    b = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
+    targets = [
+        Point2f0(-1f0, -1f0), Point2f0(0f0, -1f0), Point2f0(1f0, -1f0),
+        Point2f0(-1f0, 0f0), Point2f0(0f0, 0f0), Point2f0(1f0, 0f0),
+        Point2f0(-1f0, 1f0), Point2f0(0f0, 1f0), Point2f0(1f0, 1f0),
+    ]
+    @test length(b) == 9
+    for (p, t) in zip(b, targets)
+        @test p == t
+    end
 end
 
 @testset "Ray-Bounds intersection" begin
@@ -37,9 +48,7 @@ end
 end
 
 @testset "Sphere bound" begin
-    core = Trace.ShapeCore(
-        Trace.translate(Vec3f0(0)), Trace.translate(Vec3f0(0)), false,
-    )
+    core = Trace.ShapeCore(Trace.translate(Vec3f0(0)), false)
     s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
 
     sb = s |> Trace.object_bound
@@ -49,9 +58,7 @@ end
 
 @testset "Ray-Sphere insersection" begin
     # Sphere at the origin.
-    core = Trace.ShapeCore(
-        Trace.translate(Vec3f0(0)), Trace.translate(Vec3f0(0)), false,
-    )
+    core = Trace.ShapeCore(Trace.translate(Vec3f0(0)), false)
     s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
     r = Trace.Ray(o=Point3f0(0, -2, 0), d=Vec3f0(0, 1, 0))
 
@@ -64,10 +71,7 @@ end
     @test interaction.core.p ≈ Point3f0(0, -1, 0) # Object intersection.
 
     # Translated sphere.
-    core = Trace.ShapeCore(
-        Trace.translate(Vec3f0(0, 2, 0)), Trace.translate(Vec3f0(0, -2, 0)),
-        false,
-    )
+    core = Trace.ShapeCore(Trace.translate(Vec3f0(0, 2, 0)), false)
     s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
     r = Trace.Ray(o=Point3f0(0, 0, 0), d=Vec3f0(0, 1, 0))
 
@@ -81,7 +85,7 @@ end
 end
 
 @testset "Test triangle" begin
-    core = Trace.ShapeCore(Trace.translate(Vec3f0(0, 0, 2)), Trace.translate(Vec3f0(0, 0, -2)), false)
+    core = Trace.ShapeCore(Trace.translate(Vec3f0(0, 0, 2)), false)
     triangles = Trace.create_triangle_mesh(
         core,
         1, UInt32[1, 2, 3],
@@ -126,10 +130,7 @@ end
 @testset "BVH SAH" begin
     primitives = Trace.Primitive[]
     for i in 0:3:21
-        core = Trace.ShapeCore(
-            Trace.translate(Vec3f0(i, i, 0)),
-            Trace.translate(Vec3f0(-i, -i, 0)), false,
-        )
+        core = Trace.ShapeCore(Trace.translate(Vec3f0(i, i, 0)), false)
         sphere = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
         push!(primitives, Trace.GeometricPrimitive(sphere))
     end
@@ -266,6 +267,7 @@ end
     sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FrenselNoOp())
     @test sr & Trace.BSDF_REFLECTION
     @test sr & Trace.BSDF_SPECULAR
+    @test sr & (UInt8(Trace.BSDF_SPECULAR) | UInt8(Trace.BSDF_REFLECTION))
 end
 
 @testset "SpecularTransmission" begin
@@ -275,6 +277,7 @@ end
     )
     @test st & Trace.BSDF_SPECULAR
     @test st & Trace.BSDF_TRANSMISSION
+    @test st & (UInt8(Trace.BSDF_SPECULAR) | UInt8(Trace.BSDF_TRANSMISSION))
 end
 
 @testset "Perspective Camera" begin

@@ -118,7 +118,10 @@ function ∂n(
     ∂n∂u, ∂n∂v
 end
 
-function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool = false)
+function intersect(
+    s::Sphere, ray::Union{Ray, RayDifferentials},
+    test_alpha_texture::Bool = false,
+)
     # Transform ray to object space.
     or = ray |> s.core.world_to_object
     # Substitute ray into sphere equation.
@@ -156,7 +159,10 @@ function intersect(s::Sphere, ray::Ray, test_alpha_texture::Bool = false)
     true, shape_hit, interaction
 end
 
-function intersect_p(s::Sphere, ray::Ray, test_alpha_texture::Bool = false)::Bool
+function intersect_p(
+    s::Sphere, ray::Union{Ray, RayDifferentials},
+    test_alpha_texture::Bool = false,
+)::Bool
     # Transform ray to object space.
     or::Ray = ray |> s.core.world_to_object
     # Substitute ray into sphere equation.
@@ -179,6 +185,6 @@ function intersect_p(s::Sphere, ray::Ray, test_alpha_texture::Bool = false)::Boo
     end
     true
 end
-# TODO fix for rays originating inside a sphere.
+# TODO fix for rays originating inside a sphere?
 
-area(s::Sphere) = s.ϕ_max * s.radius * (s.z_max - s.z_min)
+@inline area(s::Sphere) = s.ϕ_max * s.radius * (s.z_max - s.z_min)

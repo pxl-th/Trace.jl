@@ -99,13 +99,13 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
     si.∂p∂y = py - si.core.p
     # Compute (u, v) offsets at auxiliary points.
     # Choose two dimensions for ray offset computation.
-    n = abs.(si.core.n)
+    n = si.core.n .|> abs
     if n[1] > n[2] && n[1] > n[3]
-        dim = Point2f0(2, 3)
+        dim = Point2(2, 3)
     elseif n[2] > n[3]
-        dim = Point2f0(1, 3)
+        dim = Point2(1, 3)
     else
-        dim = Point2f0(1, 2)
+        dim = Point2(1, 2)
     end
     # Initialization for offset computation.
     a = Mat2f0(dim[1], dim[1], dim[2], dim[2])
@@ -128,13 +128,13 @@ at the point.
 function compute_scattering!(
     si::SurfaceInteraction, ray::RayDifferentials,
     allow_multiple_lobes::Bool = false,
-    transport_mode::TransportMode = Radiance,
+    transport_mode::TransportMode = Radiance(),
 )
     compute_differentials!(si, ray)
     compute_scattering!(si.primitive, si, allow_multiple_lobes, transport_mode)
 end
 
-@inline function le(si::SurfaceInteraction, w::Vec3f0)::S where S <: Spectrum
+@inline function le(si::SurfaceInteraction, w::Vec3f0)::RGBSpectrum
     # TODO right now return 0, since there is no area lights implemented.
     RGBSpectrum(0f0)
 end

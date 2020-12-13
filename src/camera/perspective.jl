@@ -80,6 +80,8 @@ struct PerspectiveCamera <: Camera
     end
 end
 
+@inline get_film(c::PerspectiveCamera)::Film = c.core.core.film
+
 function generate_ray(
     camera::PerspectiveCamera, sample::CameraSample,
 )::Tuple{Ray, Float32}
