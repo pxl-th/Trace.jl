@@ -1,9 +1,9 @@
 @enum BxDFTypes::UInt8 begin
-    BSDF_NONE         = 0x0
-    BSDF_REFLECTION   = 0x1
-    BSDF_TRANSMISSION = 0b10
-    BSDF_DIFFUSE      = 0b100
-    BSDF_GLOSSY       = 0b1000
+    BSDF_NONE         = 0b00000
+    BSDF_REFLECTION   = 0b00001
+    BSDF_TRANSMISSION = 0b00010
+    BSDF_DIFFUSE      = 0b00100
+    BSDF_GLOSSY       = 0b01000
     BSDF_SPECULAR     = 0b10000
     BSDF_ALL          = 0b11111
 end

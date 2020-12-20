@@ -1,4 +1,4 @@
-struct MatterMaterial <: Material
+struct MatteMaterial <: Material
     """
     Spectral diffese reflection value.
     """
@@ -13,25 +13,21 @@ end
 """
 Compute scattering function.
 """
-function (m::MatterMaterial)(
+function (m::MatteMaterial)(
     si::SurfaceInteraction, allow_multiple_lobes::Bool, mode::TransportMode,
 )
     # TODO perform bump mapping
-    # TODO first implement
-    #   + LambertianReflection
-    #   + OrenNayar
-    #   MicrofacetReflection
-    #   TrowbridgeReitzDistribution
-
     # Evaluate textures and create BSDF.
     si.bsdf = BSDF(si)
     r = si |> m.Kd |> clamp
     is_black(r) && return
 
-    σ = clamp(m.σ(si), 0, 90)
-    if σ ≈ 0
+    σ = clamp(si |> m.σ, 0f0, 90f0)
+    if σ ≈ 0f0
+        @info "Adding Lambertian"
         add!(si.bsdf, LambertianReflection(r))
     else
+        @info "Adding OrenNayar"
         add!(si.bsdf, OrenNayar(r, σ))
     end
 end

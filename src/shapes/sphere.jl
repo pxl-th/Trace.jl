@@ -132,6 +132,7 @@ function intersect(
     exists, t0, t1 = solve_quadratic(a, b, c)
     !exists && return false, nothing, nothing
     (t0 > or.t_max || t1 < 0f0) && return false, nothing, nothing
+    t0 < 0 && (t0 = t1;)
 
     shape_hit = t0
     hit_point = refine_intersection(t0 |> or, s)
@@ -173,6 +174,7 @@ function intersect_p(
     exists, t0, t1 = solve_quadratic(a, b, c)
     !exists && return false
     (t0 > or.t_max || t1 < 0f0) && return false
+    t0 < 0 && (t0 = t1;)
 
     hit_point = refine_intersection(t0 |> or, s)
     ϕ = hit_point |> compute_ϕ

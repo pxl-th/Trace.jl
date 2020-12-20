@@ -2,16 +2,17 @@
 Lambertian Reflection models a perfect diffuse surface
 that scatters incident illumination equally in all directions.
 """
-struct LambertianReflection{S <: Spectrum}
+struct LambertianReflection{S <: Spectrum} <: BxDF
     """
     Reflectance spectrum, which is the fraction
     of incident light that is scattered.
     """
     r::S
-end
+    type::UInt8
 
-function Base.:&(::LambertianReflection, t::BxDFTypes)::Bool
-    t & BSDF_DIFFUSE || t & BSDF_REFLECTION
+    function LambertianReflection(r::S) where S <: Spectrum
+        new{S}(r, UInt8(BSDF_DIFFUSE) | UInt8(BSDF_REFLECTION))
+    end
 end
 
 """
@@ -44,12 +45,13 @@ end
 """
 Lambertian Transmission models perfect transmission.
 """
-struct LambertianTransmission{S <: Spectrum}
+struct LambertianTransmission{S <: Spectrum} <: BxDF
     t::S
-end
+    type::UInt8
 
-function Base.:&(::LambertianTransmission, t::BxDFTypes)::Bool
-    t & BSDF_DIFFUSE || t & BSDF_TRANSMISSION
+    function LambertianTransmission(t::S) where S <: Spectrum
+        new{S}(t, UInt8(BSDF_DIFFUSE) | UInt8(BSDF_TRANSMISSION))
+    end
 end
 
 function (t::LambertianTransmission{S})(::Vec3f0, ::Vec3f0) where S <: Spectrum

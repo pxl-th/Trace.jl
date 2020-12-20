@@ -12,15 +12,19 @@ Render scene.
 """
 function (i::I where I <: SamplerIntegrator)(scene::Scene)
     sample_bounds = i.camera |> get_film |> get_sample_bounds
+    @info "Sample bounds $sample_bounds"
     sample_extent = sample_bounds |> diagonal
     tile_size = 16
     n_tiles::Point2 = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
+    @info "N Tiles $n_tiles"
 
     for y in 0:n_tiles[2] - 1, x in 0:n_tiles[1] - 1
         tile = Point2f0(x, y)
+        @info "Tile $tile"
         tb_min = sample_bounds.p_min .+ tile .* tile_size
         tb_max = min.(tb_min .+ tile_size, sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
+        @info "Tile Bounds $tile_bounds"
 
         film_tile = FilmTile(i.camera |> get_film, tile_bounds)
         for pixel in tile_bounds
@@ -29,6 +33,7 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
             while i.sampler |> has_next_sample
                 camera_sample = get_camera_sample(i.sampler, pixel)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
+                @info "Ray $(ray.d)"
                 scale_differentials!(
                     ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
                 )
@@ -54,7 +59,7 @@ function li(
     # Find closest ray intersection or return background radiance.
     hit, surface_interaction = intersect!(scene, ray)
     if hit
-        @info "HIT @ $depth @ $(ray.o), $(ray.d)"
+        @info "HIT @ $depth @ $(ray.d)"
     end
     if !hit
         for light in scene.lights
@@ -81,10 +86,14 @@ function li(
         sampled_li, wi, pdf, visibility_tester = sample_li(
             light, surface_interaction.core, i.sampler |> get_2d,
         )
+        @info "wi $wi wo $(surface_interaction.core.wo)"
+        @info "Sampled LI $sampled_li"
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
-        @info "BSDF $f"
-        if !is_black(f) && unoccluded(visibility_tester, scene)
+        @info "BSDF $f $(!is_black(f)) & $(unoccluded(visibility_tester, scene))"
+        if !is_black(f) # TODO make occlusion test optional
+        # if !is_black(f) && unoccluded(visibility_tester, scene)
+            @info "Accumulating $(f * sampled_li * abs(wi ⋅ n) / pdf)"
             l += f * sampled_li * abs(wi ⋅ n) / pdf
         end
     end

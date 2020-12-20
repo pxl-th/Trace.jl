@@ -146,7 +146,7 @@ end
 const ϵ = eps(Float32) * 0.5f0
 gamma(n::Float32)::Float32 = n * ϵ / (1 - n * ϵ)
 
-function intersect_p(b::Bounds3, ray::Ray)::Tuple{Bool, Float32, Float32}
+function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
     t0, t1 = 0f0, ray.t_max
     for i in 1:3
         # Update interval for i-th bbox slab.
@@ -173,8 +173,8 @@ is_dir_negative(dir::Vec3f0) = Point3{UInt8}([d < 0 ? 2 : 1 for d in dir])
 dir_is_negative: 1 -- false, 2 -- true
 """
 function intersect_p(
-    b::Bounds3, ray::Ray, inv_dir::Vec3f0, dir_is_negative::Point3{UInt8},
-)
+    b::Bounds3, ray::AbstractRay, inv_dir::Vec3f0, dir_is_negative::Point3{UInt8},
+)::Bool
     tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
     tx_max = (b[3 - dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
     ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]

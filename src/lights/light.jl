@@ -16,6 +16,8 @@ struct VisibilityTester
 end
 
 function unoccluded(t::VisibilityTester, scene::Scene)::Bool
+    i, si = intersect!(scene, spawn_ray(t.p0, t.p1))
+    @info "Unoccluded $i, $(si.core.p) ||| $(t.p0.p), $(t.p1.p)"
     !intersect_p(scene, spawn_ray(t.p0, t.p1))
 end
 

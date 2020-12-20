@@ -175,7 +175,7 @@ end
 
 world_bound(bvh::BVHAccel) = length(bvh.nodes) > 0 ? bvh.nodes[1].bounds : Bounds3()
 
-function intersect!(bvh::BVHAccel, ray::Ray)
+function intersect!(bvh::BVHAccel, ray::AbstractRay)
     hit = false
     interaction::Maybe{SurfaceInteraction} = nothing
     length(bvh.nodes) == 0 && return hit, interaction
@@ -216,7 +216,7 @@ function intersect!(bvh::BVHAccel, ray::Ray)
     hit, interaction
 end
 
-function intersect_p(bvh::BVHAccel, ray::Ray)
+function intersect_p(bvh::BVHAccel, ray::AbstractRay)
     length(bvh.nodes) == 0 && return false
 
     inv_dir = 1f0 ./ ray.d
@@ -231,7 +231,9 @@ function intersect_p(bvh::BVHAccel, ray::Ray)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives - 1
-                    hit = intersect_p(bvh.primitives[ln.primitives_offset + i], ray)
+                    hit = intersect_p(
+                        bvh.primitives[ln.primitives_offset + i], ray,
+                    )
                     hit && return true
                 end
                 to_visit_offset == 1 && break

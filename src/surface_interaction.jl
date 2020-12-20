@@ -39,7 +39,7 @@ mutable struct SurfaceInteraction{S <: AbstractShape}
         ∂p∂u::Vec3f0, ∂p∂v::Vec3f0, ∂n∂u::Normal3f0, ∂n∂v::Normal3f0,
         shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
     ) where S <: AbstractShape where P <: Primitive
-        n = ∂p∂u × ∂p∂v
+        n = (∂p∂u × ∂p∂v) |> normalize
         if !(shape isa Nothing) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
             n *= -1
         end

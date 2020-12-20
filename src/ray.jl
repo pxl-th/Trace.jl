@@ -1,11 +1,11 @@
-@with_kw mutable struct Ray
+@with_kw mutable struct Ray <: AbstractRay
     o::Point3f0
     d::Vec3f0
     t_max::Float32 = Inf32
     time::Float32 = 0f0
 end
 
-@with_kw mutable struct RayDifferentials
+@with_kw mutable struct RayDifferentials <: AbstractRay
     o::Point3f0
     d::Vec3f0
     t_max::Float32 = Inf32

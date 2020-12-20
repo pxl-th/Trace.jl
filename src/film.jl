@@ -155,14 +155,14 @@ function add_sample!(
         offsets_y[i] = clamp(fy |> floor, 1, t.filter_table_width)
     end
 
-    for p in t.pixels
-        @assert all(p.contrib_sum.c .≈ 0) "Should be zero, but not: $(p.contrib_sum.c)"
-    end
+    # for p in t.pixels
+    #     @assert all(p.contrib_sum.c .≈ 0) "Should be zero, but not: $(p.contrib_sum.c)"
+    # end
     # Loop over filter support & add sample to pixel array.
     for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
         w = t.filter_table[offsets_y[j], offsets_x[i]]
         pixel = get_pixel(t, Point2f0(x, y))
-        @assert all(pixel.contrib_sum.c .≈ 0) "$(pixel.contrib_sum.c) | ($x, $y)"
+        # @assert all(pixel.contrib_sum.c .≈ 0) "$(pixel.contrib_sum.c) | ($x, $y)"
         @assert sample_weight <= 1
         @assert w <= 1
         pixel.contrib_sum += spectrum * sample_weight * w
@@ -227,6 +227,7 @@ function save(film::Film, splat_scale::Float32 = 1f0)
         splat_rgb = XYZ_to_RGB(pixel.splat_xyz)
         image[y, x, :] .+= splat_scale .* splat_rgb
         image[y, x, :] .*= film.scale
+        @info image[y, x, :]
     end
     FileIO.save(film.filename, image)
 end

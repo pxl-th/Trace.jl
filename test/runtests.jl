@@ -2,6 +2,14 @@ using Test
 using GeometryBasics
 using LinearAlgebra
 using Trace
+using FileIO
+using ImageCore
+
+function check_scene_average(scene_file::String, target::Float32)
+    scene = scene_file |> load |> channelview
+    average = sum(scene) / length(scene)
+    @test average ≈ target
+end
 
 @testset "Test Bounds2 iteration" begin
     b = Trace.Bounds2(Point2f0(1f0, 3f0), Point2f0(4f0, 4f0))
@@ -33,11 +41,11 @@ end
     r1 = Trace.Ray(o=Point3f0(0), d=Vec3f0(1))
     ri = Trace.Ray(o=Point3f0(1.5), d=Vec3f0(1, 1, 0))
 
-    r, t0, t1 = Trace.intersect_p(b, r1)
+    r, t0, t1 = Trace.intersect(b, r1)
     @test r && t0 ≈ 1f0 && t1 ≈ 2f0
-    r, t0, t1 = Trace.intersect_p(b, r0)
+    r, t0, t1 = Trace.intersect(b, r0)
     @test !r && t0 ≈ 0f0 && t1 ≈ 0f0
-    r, t0, t1 = Trace.intersect_p(b, ri)
+    r, t0, t1 = Trace.intersect(b, ri)
     @test r && t0 ≈ 0f0 && t1 ≈ 0.5f0
 
     # Test intersection with precomputed direction reciprocal.
@@ -58,8 +66,9 @@ end
 
 @testset "Ray-Sphere insersection" begin
     # Sphere at the origin.
-    core = Trace.ShapeCore(Trace.translate(Vec3f0(0)), false)
+    core = Trace.ShapeCore(Trace.Transformation(), false)
     s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
+    r0 = Trace.Ray(o=Point3f0(0f0), d=Vec3f0(0f0, 1f0, 0f0))
     r = Trace.Ray(o=Point3f0(0, -2, 0), d=Vec3f0(0, 1, 0))
 
     i, t, interaction = Trace.intersect(s, r, false)
@@ -69,6 +78,15 @@ end
     @test t ≈ 1f0
     @test r(t) ≈ Point3f0(0, -1, 0) # World intersection.
     @test interaction.core.p ≈ Point3f0(0, -1, 0) # Object intersection.
+    @test norm(interaction.core.n) ≈ 1f0
+    @test norm(interaction.shading.n) ≈ 1f0
+    # Test ray inside a sphere.
+    i, t, interaction = Trace.intersect(s, r0, false)
+    @test i
+    @test t ≈ 1f0
+    @test r0(t) ≈ Point3f0(0f0, 1f0, 0f0)
+    @test norm(interaction.core.n) ≈ 1f0
+    @test norm(interaction.shading.n) ≈ 1f0
 
     # Translated sphere.
     core = Trace.ShapeCore(Trace.translate(Vec3f0(0, 2, 0)), false)
@@ -315,4 +333,40 @@ end
     @test ray_differential.rx_direction[2] ≈ ray_differential.d[2]
     @test ray_differential.ry_direction[1] ≈ ray_differential.d[1]
     @test ray_differential.ry_direction[2] > ray_differential.d[2]
+end
+
+@testset "Analytic scene" begin
+    # Unit sphere, Kd = 0.5, point light I = π at center
+    # With GI, should have radiance of 1.
+    material = Trace.MatteMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
+        Trace.ConstantTexture(0f0),
+    )
+    core = Trace.ShapeCore(Trace.Transformation(), true)
+    sphere = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
+    primitive = Trace.GeometricPrimitive(sphere, material)
+    bvh = Trace.BVHAccel{Trace.SAH}([primitive])
+
+    lights = [Trace.PointLight(
+        Trace.Transformation(), Trace.RGBSpectrum(Float32(π)),
+    )]
+    scene = Trace.Scene(lights, bvh)
+    # Construct Film and Camera.
+    resolution = Point2f0(10f0, 10f0)
+    filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
+    scene_file = "test-output.png"
+    film = Trace.Film(
+        resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
+        filter, 1f0, 1f0, scene_file,
+    )
+    screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
+    camera = Trace.PerspectiveCamera(
+        Trace.Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
+    )
+
+    sampler = Trace.UniformSampler(1)
+    integrator = Trace.WhittedIntegrator(camera, sampler, 1)
+    scene |> integrator
+
+    check_scene_average(scene_file, 1f0)
 end
