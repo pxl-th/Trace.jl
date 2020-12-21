@@ -77,7 +77,7 @@ function (b::BSDF)(
     # Transform world-space direction vectors to local BSDF space.
     wi = world_to_local(b, wi_world)
     wo = world_to_local(b, wo_world)
-    @info "BSDF local wi $wi wo $wo ng $(b.ng)"
+    @info "BSDF local wi $wi_world wo $wo_world ng $(b.ng)"
     # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
 

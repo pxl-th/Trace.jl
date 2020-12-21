@@ -128,15 +128,15 @@ function perspective(fov::Float32, near::Float32, far::Float32)
     scale(inv_tan, inv_tan, 1f0) * Transformation(p)
 end
 
-function (t::Transformation)(p::Point3f0)
+function (t::Transformation)(p::Point3f0)::Point3f0
     ph = Point4f0(p..., 1f0)
     pt = t.m * ph
     pr = Point3f0(pt[1:3])
     pt[4] == 1 && return pr
     pr ./ pt[4]
 end
-(t::Transformation)(v::Vec3f0) = t.m[1:3, 1:3] * v
-(t::Transformation)(n::Normal3f0) = transpose(t.inv_m)[1:3, 1:3] * n
+(t::Transformation)(v::Vec3f0)::Vec3f0 = t.m[1:3, 1:3] * v
+(t::Transformation)(n::Normal3f0)::Normal3f0 = transpose(t.inv_m)[1:3, 1:3] * n
 (t::Transformation)(b::Bounds3) = mapreduce(i -> corner(b, i) |> t |> Bounds3, ∪, 1:8)
 (t::Transformation)(r::Ray) = Ray(r.o |> t, r.d |> t, r.t_max, r.time)
 function (t::Transformation)(rd::RayDifferentials)

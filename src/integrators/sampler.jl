@@ -59,7 +59,7 @@ function li(
     # Find closest ray intersection or return background radiance.
     hit, surface_interaction = intersect!(scene, ray)
     if hit
-        @info "HIT @ $depth @ $(ray.d)"
+        @info "HIT @ $depth @ $(ray.d) @ $(surface_interaction.core.p) @ $(surface_interaction.core.n)"
     end
     if !hit
         for light in scene.lights
@@ -90,9 +90,9 @@ function li(
         @info "Sampled LI $sampled_li"
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
-        @info "BSDF $f $(!is_black(f)) & $(unoccluded(visibility_tester, scene))"
-        if !is_black(f) # TODO make occlusion test optional
-        # if !is_black(f) && unoccluded(visibility_tester, scene)
+        @info "BSDF $f $(!is_black(f))"
+        # if !is_black(f) # TODO make occlusion test optional
+        if !is_black(f) && unoccluded(visibility_tester, scene)
             @info "Accumulating $(f * sampled_li * abs(wi ⋅ n) / pdf)"
             l += f * sampled_li * abs(wi ⋅ n) / pdf
         end

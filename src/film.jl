@@ -227,7 +227,6 @@ function save(film::Film, splat_scale::Float32 = 1f0)
         splat_rgb = XYZ_to_RGB(pixel.splat_xyz)
         image[y, x, :] .+= splat_scale .* splat_rgb
         image[y, x, :] .*= film.scale
-        @info image[y, x, :]
     end
     FileIO.save(film.filename, image)
 end

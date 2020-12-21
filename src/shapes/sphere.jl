@@ -156,7 +156,7 @@ function intersect(
     interaction = SurfaceInteraction(
         hit_point, ray.time, -ray.d, Point2f0(u, v),
         ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, s,
-    )
+    ) |> s.core.object_to_world
     true, shape_hit, interaction
 end
 

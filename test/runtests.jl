@@ -335,38 +335,38 @@ end
     @test ray_differential.ry_direction[2] > ray_differential.d[2]
 end
 
-@testset "Analytic scene" begin
-    # Unit sphere, Kd = 0.5, point light I = π at center
-    # With GI, should have radiance of 1.
-    material = Trace.MatteMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
-        Trace.ConstantTexture(0f0),
-    )
-    core = Trace.ShapeCore(Trace.Transformation(), true)
-    sphere = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
-    primitive = Trace.GeometricPrimitive(sphere, material)
-    bvh = Trace.BVHAccel{Trace.SAH}([primitive])
+# @testset "Analytic scene" begin
+#     # Unit sphere, Kd = 0.5, point light I = π at center
+#     # With GI, should have radiance of 1.
+#     material = Trace.MatteMaterial(
+#         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
+#         Trace.ConstantTexture(0f0),
+#     )
+#     core = Trace.ShapeCore(Trace.Transformation(), true)
+#     sphere = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
+#     primitive = Trace.GeometricPrimitive(sphere, material)
+#     bvh = Trace.BVHAccel{Trace.SAH}([primitive])
 
-    lights = [Trace.PointLight(
-        Trace.Transformation(), Trace.RGBSpectrum(Float32(π)),
-    )]
-    scene = Trace.Scene(lights, bvh)
-    # Construct Film and Camera.
-    resolution = Point2f0(10f0, 10f0)
-    filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
-    scene_file = "test-output.png"
-    film = Trace.Film(
-        resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
-        filter, 1f0, 1f0, scene_file,
-    )
-    screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
-    camera = Trace.PerspectiveCamera(
-        Trace.Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
-    )
+#     lights = [Trace.PointLight(
+#         Trace.Transformation(), Trace.RGBSpectrum(Float32(π)),
+#     )]
+#     scene = Trace.Scene(lights, bvh)
+#     # Construct Film and Camera.
+#     resolution = Point2f0(10f0, 10f0)
+#     filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
+#     scene_file = "test-output.png"
+#     film = Trace.Film(
+#         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
+#         filter, 1f0, 1f0, scene_file,
+#     )
+#     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
+#     camera = Trace.PerspectiveCamera(
+#         Trace.Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
+#     )
 
-    sampler = Trace.UniformSampler(1)
-    integrator = Trace.WhittedIntegrator(camera, sampler, 1)
-    scene |> integrator
+#     sampler = Trace.UniformSampler(1)
+#     integrator = Trace.WhittedIntegrator(camera, sampler, 1)
+#     scene |> integrator
 
-    check_scene_average(scene_file, 1f0)
-end
+#     check_scene_average(scene_file, 1f0)
+# end

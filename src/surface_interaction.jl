@@ -33,25 +33,25 @@ mutable struct SurfaceInteraction{S <: AbstractShape}
     ∂v∂y::Float32
     ∂p∂x::Vec3f0
     ∂p∂y::Vec3f0
+end
 
-    function SurfaceInteraction(
-        p::Point3f0, time::Float32, wo::Vec3f0, uv::Point2f0,
-        ∂p∂u::Vec3f0, ∂p∂v::Vec3f0, ∂n∂u::Normal3f0, ∂n∂v::Normal3f0,
-        shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
-    ) where S <: AbstractShape where P <: Primitive
-        n = (∂p∂u × ∂p∂v) |> normalize
-        if !(shape isa Nothing) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
-            n *= -1
-        end
-
-        core = Interaction(p, time, wo, n)
-        shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
-        new{typeof(shape)}(
-            core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
-            shape, primitive, nothing,
-            0f0, 0f0, 0f0, 0f0, Vec3f0(0f0), Vec3f0(0f0),
-        )
+function SurfaceInteraction(
+    p::Point3f0, time::Float32, wo::Vec3f0, uv::Point2f0,
+    ∂p∂u::Vec3f0, ∂p∂v::Vec3f0, ∂n∂u::Normal3f0, ∂n∂v::Normal3f0,
+    shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
+) where S <: AbstractShape where P <: Primitive
+    n = (∂p∂u × ∂p∂v) |> normalize
+    if !(shape isa Nothing) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
+        n *= -1
     end
+
+    core = Interaction(p, time, wo, n)
+    shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
+    SurfaceInteraction{typeof(shape)}(
+        core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+        shape, primitive, nothing,
+        0f0, 0f0, 0f0, 0f0, Vec3f0(0f0), Vec3f0(0f0),
+    )
 end
 
 function set_shading_geometry!(
@@ -137,4 +137,33 @@ end
 @inline function le(si::SurfaceInteraction, w::Vec3f0)::RGBSpectrum
     # TODO right now return 0, since there is no area lights implemented.
     RGBSpectrum(0f0)
+end
+
+function (t::Transformation)(sc::Interaction)
+    Interaction(
+        sc.p |> t,
+        sc.time,
+        sc.wo |> t |> normalize,
+        sc.n |> t |> normalize,
+    )
+end
+function (t::Transformation)(sh::ShadingInteraction)
+    ShadingInteraction(
+        sh.n |> t |> normalize,
+        sh.∂p∂u |> t, sh.∂p∂v |> t,
+        sh.∂n∂u |> t, sh.∂n∂v |> t,
+    )
+end
+function (t::Transformation)(si::SurfaceInteraction)
+    # TODO compute shading normal separately
+    core = si.core |> t
+    shading = si.shading |> t
+    SurfaceInteraction(
+        core, shading, si.uv,
+        si.∂p∂u |> t, si.∂p∂v |> t,
+        si.∂n∂u |> t, si.∂n∂v |> t,
+        si.shape, si.primitive, si.bsdf,
+        si.∂u∂x, si.∂u∂y, si.∂v∂x, si.∂v∂y,
+        si.∂p∂x |> t, si.∂p∂y |> t,
+    )
 end
