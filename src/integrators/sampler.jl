@@ -33,7 +33,7 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
             while i.sampler |> has_next_sample
                 camera_sample = get_camera_sample(i.sampler, pixel)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
-                @info "Ray $(ray.d) -> $(ray(3f0))"
+                # @info "Ray $(ray.d) -> $(ray(3f0))"
                 scale_differentials!(
                     ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
                 )
@@ -140,7 +140,7 @@ function specular_reflect(
         rd.rx_direction = wi - ∂wo∂x + 2f0 * (wo ⋅ ns) * ∂n∂x + ∂dn∂x * ns
         rd.ry_direction = wi - ∂wo∂y + 2f0 * (wo ⋅ ns) * ∂n∂y + ∂dn∂y * ns
     end
-    f * li(i, rd, scene, i.sampler, depth + 1) * abs(wi ⋅ ns) / pdf
+    f * li(i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
 end
 
 function specular_transmit(
@@ -191,5 +191,5 @@ function specular_transmit(
         rd.rx_direction = wi - η * ∂wo∂x + μ * ∂n∂x + ∂μ∂x * ns
         rd.ry_direction = wi - η * ∂wo∂y + μ * ∂n∂y + ∂μ∂y * ns
     end
-    f * li(i, rd, scene, i.sampler, depth + 1) * abs(wi ⋅ ns) / pdf
+    f * li(i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
 end

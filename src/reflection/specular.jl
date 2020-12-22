@@ -11,7 +11,7 @@ struct SpecularReflection{S <: Spectrum, F <: Frensel} <: BxDF
     type::UInt8
 
     function SpecularReflection(r::S, frensel::F) where {S <: Spectrum, F <: Frensel}
-        new{S, F}(r, frensel, UInt8(BSDF_SPECULAR) | UInt8(BSDF_REFLECTION))
+        new{S, F}(r, frensel, BSDF_SPECULAR | BSDF_REFLECTION)
     end
 end
 
@@ -22,7 +22,7 @@ for arbitrary directions δ-funcion returns no scattering.
 """
 function (s::SpecularReflection{S, F})(
     wo::Vec3f0, wi::Vec3f0,
-)::S where S <: Spectrum where F <: Frensel
+) where {S <: Spectrum, F <: Frensel}
     S(0f0)
 end
 
@@ -33,7 +33,7 @@ and return the value of BxDF for the pair of directions.
 """
 function sample_f(
     s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
-)::Tuple{Vec3f0, Float32, S} where S <: Spectrum where F <: Frensel
+) where {S <: Spectrum, F <: Frensel}
     wi = Vec3f0(-wo[1], -wo[2], wo[3])
     pdf = 1f0
     wi, pdf, s.frensel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
@@ -58,7 +58,7 @@ struct SpecularTransmission{S <: Spectrum, T <: TransportMode} <: BxDF
     function SpecularTransmission{S, T}(
         t::S, η_a::Float32, η_b::Float32, frensel::FrenselDielectric,
     ) where {S <: Spectrum, T <: TransportMode}
-        new{S, T}(t, η_a, η_b, frensel, UInt8(BSDF_SPECULAR) | UInt8(BSDF_TRANSMISSION))
+        new{S, T}(t, η_a, η_b, frensel, BSDF_SPECULAR | BSDF_TRANSMISSION)
     end
 end
 
@@ -69,7 +69,7 @@ for arbitrary directions δ-funcion returns no scattering.
 """
 function (s::SpecularTransmission{S, T})(
     wo::Vec3f0, wi::Vec3f0,
-)::S where S <: Spectrum where T <: TransportMode
+) where {S <: Spectrum, T <: TransportMode}
     S(0f0)
 end
 

@@ -285,7 +285,7 @@ end
     sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FrenselNoOp())
     @test sr & Trace.BSDF_REFLECTION
     @test sr & Trace.BSDF_SPECULAR
-    @test sr & (UInt8(Trace.BSDF_SPECULAR) | UInt8(Trace.BSDF_REFLECTION))
+    @test sr & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION)
 end
 
 @testset "SpecularTransmission" begin
@@ -295,7 +295,7 @@ end
     )
     @test st & Trace.BSDF_SPECULAR
     @test st & Trace.BSDF_TRANSMISSION
-    @test st & (UInt8(Trace.BSDF_SPECULAR) | UInt8(Trace.BSDF_TRANSMISSION))
+    @test st & (Trace.BSDF_SPECULAR | Trace.BSDF_TRANSMISSION)
 end
 
 @testset "Perspective Camera" begin

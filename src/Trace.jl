@@ -18,6 +18,7 @@ abstract type AbstractShape end
 abstract type Primitive end
 abstract type Light end
 abstract type Material end
+abstract type BxDF end
 
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
@@ -219,13 +220,13 @@ material = MatteMaterial(
     ConstantTexture(0f0),
 )
 # core = ShapeCore(Transformation(), true)
-core = ShapeCore(translate(Vec3f0(0.015f0, 0.015f0, -3f0)), false)
+core = ShapeCore(translate(Vec3f0(0.0125f0, 0.0125f0, -3f0)), false)
 sphere = Sphere(core, 0.01f0, -1f0, 1f0, 360f0)
 primitive = GeometricPrimitive(sphere, material)
 bvh = BVHAccel{SAH}([primitive])
 
 lights = [PointLight(
-    translate(Vec3f0(0f0, 0f0, 0f0)), RGBSpectrum(Float32(π)),
+    translate(Vec3f0(0f0, 0f0, 0f0)), RGBSpectrum(Float32(3 * π)),
 )]
 scene = Scene(lights, bvh)
 # Construct Film and Camera.
@@ -233,15 +234,15 @@ resolution = Point2f0(128f0, 128f0)
 filter = LanczosSincFilter(Point2f0(1f0), 3f0)
 film = Film(
     resolution, Bounds2(Point2f0(0f0), Point2f0(1f0)),
-    filter, 1f0, 1f0, "test-output-3.png",
+    filter, 1f0, 1f0, "test-output-2.png",
 )
 screen = Bounds2(Point2f0(-1f0), Point2f0(1f0))
 camera = PerspectiveCamera(
     Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
 )
 
-sampler = UniformSampler(4)
-integrator = WhittedIntegrator(camera, sampler, 1)
+sampler = UniformSampler(1)
+integrator = WhittedIntegrator(camera, sampler, 2)
 scene |> integrator
 
 """

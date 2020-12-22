@@ -66,13 +66,13 @@ that transforms vectors in world space to local reflection space is:
 Since it is an orthonormal matrix, its inverse is its transpose.
 """
 world_to_local(b::BSDF, v::Vec3f0) = Vec3f0(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
-local_to_world(b::BSDF, v::Vec3f0) = Mat3f0(b.ss..., b.ts..., b.ns) * v
+local_to_world(b::BSDF, v::Vec3f0) = Mat3f0(b.ss..., b.ts..., b.ns...) * v
 
 """
 Evaluate BSDF function given incident and outgoind directions.
 """
 function (b::BSDF)(
-    wo_world::Vec3f0, wi_world::Vec3f0, flags::BxDFTypes = BSDF_ALL,
+    wo_world::Vec3f0, wi_world::Vec3f0, flags::UInt8 = BSDF_ALL,
 )::RGBSpectrum
     # Transform world-space direction vectors to local BSDF space.
     wi = world_to_local(b, wi_world)
@@ -102,32 +102,43 @@ a given mode of light scattering corresponding
 to perfect specular reflection or refraction.
 """
 function sample_f(
-    b::BSDF, wo_world::Vec3f0, u::Point2f0, type::BxDFTypes,
-)::Tuple{Vec3f0, S, Float32, UInt8} where S <: Spectrum
+    b::BSDF, wo_world::Vec3f0, u::Point2f0, type::UInt8,
+)::Tuple{Vec3f0, RGBSpectrum, Float32, UInt8}
     # Choose which BxDF to sample.
-    matching_components = b |> num_components
-    matching_components == 0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
+    matching_components = num_components(b, type)
+    matching_components == 0 && return (
+        Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
+    )
     component = min(
-        Int64(floor(u[1] * matching_components)),
-        matching_components - 1,
+        Int64(ceil(u[1] * matching_components)), matching_components,
     )
     # Get BxDF for chosen component.
     count = component
+    component -= 1
     bxdf = nothing
     for i in 1:b.n_bxdfs
-        b.bxdfs[i] & type && count == 1 && (bxdf = b.bxdfs[i]; break)
-        count -= 1
+        if b.bxdfs[i] & type
+            count == 1 && (bxdf = b.bxdfs[i]; break)
+            count -= 1
+        end
     end
     @assert bxdf ≢ nothing
     # Remap BxDF sample u to [0, 1)^2.
-    u_remapped = Point2f0(min(u[1] * matching_components - component), u[2])
+    u_remapped = Point2f0(
+        min(u[1] * matching_components - component, 1f0),
+        u[2],
+    )
     # Sample chosen BxDF.
     wo = world_to_local(b, wo_world)
-    wo[3] ≈ 0f0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
+    wo[3] ≈ 0f0 && return (
+        Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
+    )
 
     sampled_type = bxdf.type
     wi, pdf, f = sample_f(bxdf, wo, u_remapped)
-    pdf ≈ 0f0 && return RGBSpectrum(0f0), 0f0, BSDF_NONE
+    pdf ≈ 0f0 && return (
+        Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
+    )
     wi_world = local_to_world(b, wi)
     # Compute overall PDF with all matching BxDFs.
     if !(bxdf & BSDF_SPECULAR) && matching_components > 1
@@ -156,10 +167,10 @@ function sample_f(
     wi_world, f, pdf, sampled_type
 end
 
-function num_components(b::BSDF, flags::BxDFTypes)::Int64
+function num_components(b::BSDF, flags::UInt8)::Int64
     num = 0
     for i in 1:b.n_bxdfs
-        b.bxdfs[i] & flags && (num += 1)
+        (b.bxdfs[i] & flags) && (num += 1)
     end
     num
 end

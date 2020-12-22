@@ -1,17 +1,12 @@
-@enum BxDFTypes::UInt8 begin
-    BSDF_NONE         = 0b00000
-    BSDF_REFLECTION   = 0b00001
-    BSDF_TRANSMISSION = 0b00010
-    BSDF_DIFFUSE      = 0b00100
-    BSDF_GLOSSY       = 0b01000
-    BSDF_SPECULAR     = 0b10000
-    BSDF_ALL          = 0b11111
-end
-abstract type BxDF end
+const BSDF_NONE         = 0b00000 |> UInt8
+const BSDF_REFLECTION   = 0b00001 |> UInt8
+const BSDF_TRANSMISSION = 0b00010 |> UInt8
+const BSDF_DIFFUSE      = 0b00100 |> UInt8
+const BSDF_GLOSSY       = 0b01000 |> UInt8
+const BSDF_SPECULAR     = 0b10000 |> UInt8
+const BSDF_ALL          = 0b11111 |> UInt8
 
-@inline Base.:&(b::BxDFTypes, v::UInt8)::UInt8 = UInt8(b) & v
-@inline Base.:&(v::UInt8, b::BxDFTypes)::UInt8 = UInt8(b) & v
-function Base.:&(b::B, type::Union{UInt8, BxDFTypes})::Bool where B <: BxDF
+function Base.:&(b::B, type::UInt8)::Bool where B <: BxDF
     (b.type & type) != 0
 end
 
@@ -35,13 +30,11 @@ and return the value of BxDF for the pair of directions.
 **Note** all BxDFs that implement this method,
 have to implement `compute_pdf` as well.
 """
-function sample_f(
-    b::B, wo::Vec3f0, sample::Point2f0,
-)::Tuple{Vec3f0, Float32, S} where {S <: Spectrum, B <: BxDF}
-    wi = sample |> cosine_sample_hemisphere
+function sample_f(b::B, wo::Vec3f0, sample::Point2f0) where B <: BxDF
+    wi::Vec3f0 = sample |> cosine_sample_hemisphere
     # Flipping the direction if necessary.
-    wo[3] < 0 && (wi[3] *= -1)
-    pdf = compute_pdf(b, wo, wi)
+    wo[3] < 0 && (wi *= Vec3f0(-1f0, 1f0, 1f0))
+    pdf::Float32 = compute_pdf(b, wo, wi)
     wi, pdf, b(wo, wi)
 end
 
@@ -97,7 +90,9 @@ General Frensel reflection formula with complex index of refraction η^ = η + i
 where some incident light is potentially absorbed by the material and turned into heat.
 k - is referred to as the absorption coefficient.
 """
-function frensel_conductor(cos_θi::Float32, ηi::S, ηt::S, k::S)::S where S <: Spectrum
+function frensel_conductor(
+    cos_θi::Float32, ηi::S, ηt::S, k::S,
+) where S <: Spectrum
     cos_θi = clamp(cos_θi, -1f0, 1f0)
     η = ηt / ηi
     ηk = k / ηi

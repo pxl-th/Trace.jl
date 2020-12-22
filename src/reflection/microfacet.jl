@@ -14,7 +14,7 @@ struct OrenNayar{S <: Spectrum} <: BxDF
         σ2 = σ * σ
         a = 1f0 - (σ2 / (2f0 * (σ2 + 0.33f0)))
         b = 0.45f0 * σ2 / (σ2 + 0.09f0)
-        new{S}(r, a, b, UInt8(BSDF_DIFFUSE) | UInt8(BSDF_REFLECTION))
+        new{S}(r, a, b, BSDF_DIFFUSE | BSDF_REFLECTION)
     end
 end
 
