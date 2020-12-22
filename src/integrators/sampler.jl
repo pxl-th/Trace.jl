@@ -33,7 +33,7 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
             while i.sampler |> has_next_sample
                 camera_sample = get_camera_sample(i.sampler, pixel)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
-                @info "Ray $(ray.d)"
+                @info "Ray $(ray.d) -> $(ray(3f0))"
                 scale_differentials!(
                     ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
                 )
@@ -91,7 +91,7 @@ function li(
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
         @info "BSDF $f $(!is_black(f))"
-        # if !is_black(f) # TODO make occlusion test optional
+        # TODO make occlusion test optional
         if !is_black(f) && unoccluded(visibility_tester, scene)
             @info "Accumulating $(f * sampled_li * abs(wi ⋅ n) / pdf)"
             l += f * sampled_li * abs(wi ⋅ n) / pdf

@@ -1,8 +1,21 @@
 mutable struct Interaction
+    """
+    Intersection point in world coordinates.
+    """
     p::Point3f0
+    """
+    Time of intersection.
+    """
     time::Float32
-    wo::Vec3f0  # Negative direction of ray (for ray-shape interactions).
-    n::Normal3f0  # Surface normal at the point.
+    """
+    Negative direction of ray (for ray-shape interactions)
+    in world coordinates.
+    """
+    wo::Vec3f0
+    """
+    Surface normal at the point in world coordinates.
+    """
+    n::Normal3f0
 end
 
 mutable struct ShadingInteraction

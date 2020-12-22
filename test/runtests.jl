@@ -99,7 +99,7 @@ end
     @test i == ip
     @test t ≈ 1f0
     @test r(t) ≈ Point3f0(0, 1, 0) # World intersection.
-    @test interaction.core.p ≈ Point3f0(0, -1, 0) # Object intesection.
+    @test interaction.core.p ≈ Point3f0(0, 1, 0) # Object intesection.
 end
 
 @testset "Test triangle" begin
@@ -171,7 +171,7 @@ end
     @test intersects
     @test ray2.t_max ≈ 17f0
     @test ray2(ray2.t_max) ≈ Point3f0(17f0, 18f0, 0f0)
-    @test interaction.core.p ≈ Point3f0(-1f0, 0f0, 0f0)
+    @test interaction.core.p ≈ Point3f0(17f0, 18f0, 0f0)
 end
 
 @testset "LanczosSincFilter" begin
