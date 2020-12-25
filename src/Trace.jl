@@ -219,14 +219,24 @@ material = MatteMaterial(
     ConstantTexture(RGBSpectrum(1f0, 0.2f0, 0.1f0)),
     ConstantTexture(0f0),
 )
-# core = ShapeCore(Transformation(), true)
-core = ShapeCore(translate(Vec3f0(0.0125f0, 0.0125f0, -3f0)), false)
-sphere = Sphere(core, 0.01f0, -1f0, 1f0, 360f0)
+material2 = MatteMaterial(
+    ConstantTexture(RGBSpectrum(0.2f0, 1f0, 0.1f0)),
+    ConstantTexture(0f0),
+)
+
+core = ShapeCore(translate(Vec3f0(0.0175f0, 0.0175f0, -3f0)), false)
+sphere = Sphere(core, 0.006f0, -1f0, 1f0, 360f0)
 primitive = GeometricPrimitive(sphere, material)
-bvh = BVHAccel{SAH}([primitive])
+
+core2 = ShapeCore(translate(Vec3f0(0.0075f0, 0.0075f0, -3f0)), false)
+sphere2 = Sphere(core2, 0.006f0, -1f0, 1f0, 360f0)
+primitive2 = GeometricPrimitive(sphere2, material2)
+
+bvh = BVHAccel{SAH}([primitive, primitive2], 1)
+@info bvh.nodes
 
 lights = [PointLight(
-    translate(Vec3f0(0f0, 0f0, 0f0)), RGBSpectrum(Float32(3 * π)),
+    translate(Vec3f0(0f0, 0f0, 0f0)), RGBSpectrum(Float32(4 * π)),
 )]
 scene = Scene(lights, bvh)
 # Construct Film and Camera.
@@ -234,7 +244,7 @@ resolution = Point2f0(128f0, 128f0)
 filter = LanczosSincFilter(Point2f0(1f0), 3f0)
 film = Film(
     resolution, Bounds2(Point2f0(0f0), Point2f0(1f0)),
-    filter, 1f0, 1f0, "test-output-2.png",
+    filter, 1f0, 1f0, "test-output.png",
 )
 screen = Bounds2(Point2f0(-1f0), Point2f0(1f0))
 camera = PerspectiveCamera(
@@ -242,7 +252,7 @@ camera = PerspectiveCamera(
 )
 
 sampler = UniformSampler(1)
-integrator = WhittedIntegrator(camera, sampler, 2)
+integrator = WhittedIntegrator(camera, sampler, 1)
 scene |> integrator
 
 """
