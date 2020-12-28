@@ -33,10 +33,10 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
             while i.sampler |> has_next_sample
                 camera_sample = get_camera_sample(i.sampler, pixel)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
-                # @info "Ray $(ray.d) -> $(ray(3f0))"
                 scale_differentials!(
                     ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
                 )
+                @info "Tracing ray $(ray.o), $(ray.d)"
 
                 l = RGBSpectrum(0f0)
                 ω > 0f0 && (l = li(i, ray, scene, 1);)
@@ -59,7 +59,11 @@ function li(
     # Find closest ray intersection or return background radiance.
     hit, surface_interaction = intersect!(scene, ray)
     if hit
-        @info "HIT @ $depth @ $(ray.d) @ $(surface_interaction.core.p) @ $(surface_interaction.core.n)"
+        @info "Ray hit:"
+        @info "\t-> Depth: $depth"
+        @info "\t-> Ray direction: $(ray.d)"
+        @info "\t-> Surface point: $(surface_interaction.core.p)"
+        @info "\t-> Surface  norm: $(surface_interaction.core.n)"
     end
     if !hit
         for light in scene.lights
@@ -86,18 +90,19 @@ function li(
         sampled_li, wi, pdf, visibility_tester = sample_li(
             light, surface_interaction.core, i.sampler |> get_2d,
         )
-        @info "wi $wi wo $(surface_interaction.core.wo)"
-        @info "Sampled LI $sampled_li"
+        # @info "wi $wi wo $(surface_interaction.core.wo)"
+        # @info "Sampled LI $sampled_li"
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
-        @info "BSDF $f $(!is_black(f))"
-        # TODO make occlusion test optional
+        # @info "BSDF $f $(!is_black(f))"
+        # TODO make occlusion test optional or fix it!
         if !is_black(f) && unoccluded(visibility_tester, scene)
-            @info "Accumulating $(f * sampled_li * abs(wi ⋅ n) / pdf)"
+            @info "Accumulating: $(f * sampled_li * abs(wi ⋅ n) / pdf)"
             l += f * sampled_li * abs(wi ⋅ n) / pdf
         end
     end
     if depth + 1 ≤ i.max_depth
+        @info "Tracing ray at the next depth"
         # Trace rays for specular reflection & refraction.
         l += specular_reflect(i, ray, surface_interaction, scene, depth)
         l += specular_transmit(i, ray, surface_interaction, scene, depth)
@@ -117,9 +122,13 @@ function specular_reflect(
     )
     # Return contribution of specular reflection.
     ns = surface_intersect.shading.n
-    !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0) && return RGBSpectrum(0f0)
+    if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
+        @info "No specular reflect"
+        return RGBSpectrum(0f0)
+    end
     # Compute ray differential for specular reflection.
     rd = spawn_ray(surface_intersect, wi) |> RayDifferentials
+    @info "Spawned ray at depth $depth: $(rd.o), $(rd.d)"
     if ray.has_differentials
         rd.has_differentials = true
         rd.rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
@@ -155,7 +164,10 @@ function specular_transmit(
     )
     # Return contribution of specular reflection.
     ns = surface_intersect.shading.n
-    !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0) && return RGBSpectrum(0f0)
+    if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
+        @info "No specular transmission"
+        return RGBSpectrum(0f0)
+    end
     rd = spawn_ray(surface_intersect, wi) |> RayDifferentials
     if ray.has_differentials
         rd.has_differentials = true

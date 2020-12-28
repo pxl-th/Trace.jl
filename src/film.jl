@@ -134,15 +134,13 @@ function add_sample!(
     t::FilmTile, point::Point2f0, spectrum::S,
     sample_weight::Float32 = 1f0,
 ) where S <: Spectrum
+    @info "Adding sample $spectrum at $point point"
     # Compute sample's raster bounds.
     discrete_point = point .- 0.5f0
     p0 = ceil.(discrete_point .- t.filter_radius)
     p1 = floor.(discrete_point .+ t.filter_radius) .+ 1f0
     p0 = max.(p0, max.(t.bounds.p_min, Point2f0(1f0)))
     p1 = min.(p1, t.bounds.p_max)
-    # @info "point $point"
-    # @info "t bounds $(t.bounds.p_min) - $(t.bounds.p_max)"
-    # @info "p0 $p0 | p1 $p1"
     # Precompute x & y filter offsets.
     offsets_x = Vector{Int32}(undef, Int32(p1[1] - p0[1] + 1))
     offsets_y = Vector{Int32}(undef, Int32(p1[2] - p0[2] + 1))
@@ -154,15 +152,10 @@ function add_sample!(
         fy = abs((y - discrete_point[2]) * t.inv_filter_radius[2] * t.filter_table_width)
         offsets_y[i] = clamp(fy |> floor, 1, t.filter_table_width)
     end
-
-    # for p in t.pixels
-    #     @assert all(p.contrib_sum.c .≈ 0) "Should be zero, but not: $(p.contrib_sum.c)"
-    # end
     # Loop over filter support & add sample to pixel array.
     for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
         w = t.filter_table[offsets_y[j], offsets_x[i]]
         pixel = get_pixel(t, Point2f0(x, y))
-        # @assert all(pixel.contrib_sum.c .≈ 0) "$(pixel.contrib_sum.c) | ($x, $y)"
         @assert sample_weight <= 1
         @assert w <= 1
         pixel.contrib_sum += spectrum * sample_weight * w
@@ -175,7 +168,6 @@ Point in (x, y) format.
 """
 @inline function get_pixel(t::FilmTile, p::Point2f0)
     pp = (p .- t.bounds.p_min .+ 1f0) .|> Int32
-    # @info "b $(t.bounds.p_min) | $p => $pp"
     t.pixels[pp[2], pp[1]]
 end
 
@@ -184,15 +176,12 @@ Point in (x, y) format.
 """
 @inline function get_pixel(f::Film, p::Point2f0)
     pp = (p .- f.crop_bounds.p_min .+ 1f0) .|> Int32
-    # @info "b $(f.crop_bounds.p_min) | $p => $pp"
     f.pixels[pp[2], pp[1]]
 end
 
 function merge_film_tile!(f::Film, ft::FilmTile)
     x_range = ft.bounds.p_min[1]:ft.bounds.p_max[1]
     y_range = ft.bounds.p_min[2]:ft.bounds.p_max[2]
-    # @info x_range
-    # @info y_range
 
     for y in y_range, x in x_range
         pixel = Point2f0(x, y)

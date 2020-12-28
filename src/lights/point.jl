@@ -55,9 +55,7 @@ function sample_li(
     visibility = VisibilityTester(
         ref, Interaction(p.position, ref.time, Vec3f0(0f0), Normal3f0(0f0)),
     )
-    @info ref.p, p.position
     radiance = p.i / distance_squared(p.position, ref.p)
-    @info "Sampled LI $(p.i), $(distance_squared(p.position, ref.p)), $(radiance)"
     radiance, wi, pdf, visibility
 end
 

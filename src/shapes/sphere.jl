@@ -18,11 +18,15 @@ struct Sphere <: AbstractShape
             core, radius,
             clamp(min(z_min, z_max), -radius, radius),
             clamp(max(z_min, z_max), -radius, radius),
-            acos(clamp(z_min / radius, -1f0, 1f0)),
-            acos(clamp(z_max / radius, -1f0, 1f0)),
+            acos(clamp(min(z_min, z_max) / radius, -1f0, 1f0)),
+            acos(clamp(max(z_min, z_max) / radius, -1f0, 1f0)),
             deg2rad(clamp(ϕ_max, 0f0, 360f0)),
         )
     end
+end
+
+function Sphere(core::ShapeCore, radius::Float32, ϕ_max::Float32)
+    Sphere(core, radius, -radius, radius, ϕ_max)
 end
 
 function object_bound(s::Sphere)
@@ -51,7 +55,7 @@ end
 
 function refine_intersection(p::Point, s::Sphere)
     p *= s.radius ./ distance(Point3f0(0), p)
-    p[1] ≈ 0 && p[2] ≈ 0 && (p *= Point3f0(1e-5, 0f0, 0f0))
+    p[1] ≈ 0 && p[2] ≈ 0 && (p = Point3f0(1f-6 * s.radius, p[2], p[3]))
     p
 end
 
@@ -187,6 +191,5 @@ function intersect_p(
     end
     true
 end
-# TODO fix for rays originating inside a sphere?
 
 @inline area(s::Sphere) = s.ϕ_max * s.radius * (s.z_max - s.z_min)

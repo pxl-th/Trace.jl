@@ -77,19 +77,16 @@ function (b::BSDF)(
     # Transform world-space direction vectors to local BSDF space.
     wi = world_to_local(b, wi_world)
     wo = world_to_local(b, wo_world)
-    @info "BSDF local wi $wi_world wo $wo_world ng $(b.ng)"
     # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
 
-    output = RGBSpectrum(0f0) # TODO assumes that default is RGBSpectrum
+    output = RGBSpectrum(0f0)
     for i in 1:b.n_bxdfs
         bxdf = b.bxdfs[i]
-        @info "Reflect $reflect, $(bxdf & BSDF_TRANSMISSION), $(bxdf & BSDF_REFLECTION)"
         if ((UInt8(bxdf.type) & UInt8(flags) == UInt8(bxdf.type)) && (
             (reflect && (bxdf & BSDF_REFLECTION)) ||
             (!reflect && (bxdf & BSDF_TRANSMISSION))
         ))
-            @info "Bxdf type matched"
             output += bxdf(wo, wi)
         end
     end

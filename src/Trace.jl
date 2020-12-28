@@ -156,14 +156,24 @@ end
     intersect_p(scene.aggregate, ray)
 end
 
-@inline function spawn_ray(p0::Interaction, p1::Interaction)::Ray
-    Ray(o=p0.p, d=p1.p - p0.p, time=p0.time)
+@inline function spawn_ray(
+    p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
+)::Ray
+    @assert norm(p0.n) ≈ 1f0
+    origin = p0.p .+ δ .* p0.n
+    # @info "Shifted origin from $(p0.p) to $(origin)"
+    Ray(o=origin, d=p1.p - p0.p, time=p0.time)
 end
 @inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
     spawn_ray(p0.core, p1)
 end
-@inline function spawn_ray(si::SurfaceInteraction, direction::Vec3f0)::Ray
-    Ray(o=si.core.p, d=direction, time=si.core.time)
+@inline function spawn_ray(
+    si::SurfaceInteraction, direction::Vec3f0, δ::Float32 = 1f-6,
+)::Ray
+    @assert norm(si.core.n) ≈ 1f0
+    origin = si.core.p .+ δ .* si.core.n
+    @info "Shifted origin from $(si.core.p) to $(origin)"
+    Ray(o=origin, d=direction, time=si.core.time)
 end
 
 include("shapes/Shape.jl")
@@ -188,33 +198,6 @@ include("lights/directional.jl")
 
 include("integrators/sampler.jl")
 
-# filter = LanczosSincFilter(Point2f0(4f0), 3f0)
-# width, height = 28f0, 28f0
-# film = Film(
-#     Point2f0(width, height), Bounds2(Point2f0(0f0), Point2f0(1f0)),
-#     filter, 35f0, 1f0, "output.png",
-# )
-# frame = width / height
-# screen = Bounds2(Point2f0(-frame, -1f0), Point2f0(frame, 1f0))
-# camera = PerspectiveCamera(
-#     translate(Vec3f0(0)), screen,
-#     0f0, 1f0, 0f0, 1f6, 35f0, film,
-# )
-# sampler = UniformSampler(1)
-# whitted = WhittedIntegrator(camera, sampler, 1)
-
-# light = PointLight(translate(Vec3f0(0, 1.5, -100)), RGBSpectrum(1f0))
-# core = ShapeCore(translate(Vec3f0(0, 0, -100)), false)
-# matte = MatteMaterial(
-#     ConstantTexture(RGBSpectrum(1f0, 0f0, 0f0)),
-#     ConstantTexture(1f0),
-# )
-# sphere = GeometricPrimitive(Sphere(core, 1f0, -1f0, 1f0, 360f0), matte)
-# scene = Scene([light], sphere)
-
-# whitted(scene)
-
-
 material = MatteMaterial(
     ConstantTexture(RGBSpectrum(1f0, 0.2f0, 0.1f0)),
     ConstantTexture(0f0),
@@ -223,24 +206,35 @@ material2 = MatteMaterial(
     ConstantTexture(RGBSpectrum(0.2f0, 1f0, 0.1f0)),
     ConstantTexture(0f0),
 )
+mirror = MirrorMaterial(ConstantTexture(RGBSpectrum(1f0, 1f0, 1f0)))
 
-core = ShapeCore(translate(Vec3f0(0.0175f0, 0.0175f0, -3f0)), false)
-sphere = Sphere(core, 0.006f0, -1f0, 1f0, 360f0)
+core = ShapeCore(translate(Vec3f0(0.017f0, 0.017f0, -3f0)), false)
+sphere = Sphere(core, 0.006f0, 360f0)
 primitive = GeometricPrimitive(sphere, material)
 
-core2 = ShapeCore(translate(Vec3f0(0.0075f0, 0.0075f0, -3f0)), false)
-sphere2 = Sphere(core2, 0.006f0, -1f0, 1f0, 360f0)
-primitive2 = GeometricPrimitive(sphere2, material2)
+core2 = ShapeCore(translate(Vec3f0(0.007f0, 0.007f0, -3f0)), false)
+sphere2 = Sphere(core2, 0.006f0, 360f0)
+primitive2 = GeometricPrimitive(sphere2, mirror)
 
-bvh = BVHAccel{SAH}([primitive, primitive2], 1)
-@info bvh.nodes
+core3 = ShapeCore(translate(Vec3f0(0.004f0, 0.02f0, -3f0)), false)
+sphere3 = Sphere(core3, 0.006f0, 360f0)
+primitive3 = GeometricPrimitive(sphere3, material2)
+
+core4 = ShapeCore(translate(Vec3f0(0.004f0, 0.023f0, -2.95f0)), false)
+sphere4 = Sphere(core4, 0.004f0, 360f0)
+primitive4 = GeometricPrimitive(sphere4, material)
+
+bvh = BVHAccel{SAH}([primitive, primitive2, primitive3, primitive4], 1)
+for n in bvh.nodes
+    @info n
+end
 
 lights = [PointLight(
     translate(Vec3f0(0f0, 0f0, 0f0)), RGBSpectrum(Float32(4 * π)),
 )]
 scene = Scene(lights, bvh)
 # Construct Film and Camera.
-resolution = Point2f0(128f0, 128f0)
+resolution = Point2f0(128, 128)
 filter = LanczosSincFilter(Point2f0(1f0), 3f0)
 film = Film(
     resolution, Bounds2(Point2f0(0f0), Point2f0(1f0)),
@@ -251,8 +245,8 @@ camera = PerspectiveCamera(
     Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
 )
 
-sampler = UniformSampler(1)
-integrator = WhittedIntegrator(camera, sampler, 1)
+sampler = UniformSampler(4)
+integrator = WhittedIntegrator(camera, sampler, 2)
 scene |> integrator
 
 """
@@ -260,14 +254,5 @@ TODO
 - assert that t_max in intersect methods >= 0
 - test if bvh contains duplicates
 """
-
-# @info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Illuminant)
-# @info from_RGB(SampledSpectrum, Point3f0(1f0, 0f0, 0f0), Reflectance)
-# @info from_XYZ(SampledSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
-# @info from_RGB(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
-# @info from_XYZ(RGBSpectrum, Point3f0(0.5f0, 0f0, 0.5f0))
-
-# @info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ
-# @info Point3f0(1.0, 0.0, 0.0) |> RGB_to_XYZ |> XYZ_to_RGB
 
 end
