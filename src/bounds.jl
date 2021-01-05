@@ -143,9 +143,6 @@ function bounding_sphere(b::Bounds3)::Tuple{Point3f0, Float32}
     center, radius
 end
 
-const ϵ = eps(Float32) * 0.5f0
-gamma(n::Float32)::Float32 = n * ϵ / (1 - n * ϵ)
-
 function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
     t0, t1 = 0f0, ray.t_max
     for i in 1:3
@@ -157,8 +154,6 @@ function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
         if t_near > t_far
             t_near, t_far = t_far, t_near
         end
-        # Update t_far to ensure robust ray-bounds intersection.
-        t_far *= 1f0 + gamma(3f0)
 
         t0 = t_near > t0 ? t_near : t0
         t1 = t_far < t1 ? t_far : t1
@@ -167,7 +162,9 @@ function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
     true, t0, t1
 end
 
-is_dir_negative(dir::Vec3f0) = Point3{UInt8}([d < 0 ? 2 : 1 for d in dir])
+@inline function is_dir_negative(dir::Vec3f0)
+    Point3{UInt8}([d < 0 ? 2 : 1 for d in dir])
+end
 
 """
 dir_is_negative: 1 -- false, 2 -- true
@@ -179,23 +176,16 @@ function intersect_p(
     tx_max = (b[3 - dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
     ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
     ty_max = (b[3 - dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
+
     (tx_min > tx_max || ty_min > ty_max) && return false
-    if ty_min > tx_min
-        tx_min = ty_min
-    end
-    if ty_max > tx_max
-        tx_max = ty_max
-    end
+    ty_min > tx_min && (tx_min = ty_min;)
+    ty_max > tx_max && (tx_max = ty_max;)
 
     tz_min = (b[dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
     tz_max = (b[3 - dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
     (tx_min > tz_max || tz_min > tx_max) && return false
 
-    if tz_min > tx_min
-        tx_min = tz_min
-    end
-    if tz_max < tx_max
-        tx_max = tz_max
-    end
+    (isnan(tx_min) || tz_min > tx_min) && (tx_min = tz_min;)
+    (isnan(tx_max) || tz_max < tx_max) && (tx_max = tz_max;)
     tx_min < ray.t_max && tx_max > 0
 end

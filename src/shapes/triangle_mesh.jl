@@ -20,8 +20,6 @@ struct TriangleMesh
         tangents::Maybe{Vector{Vec3f0}} = nothing,
         uv::Maybe{Vector{Point2f0}} = nothing,
     )
-        # Transform vertices to world space.
-        # vertices = [object_to_world(v) for v in vertices]
         vertices = object_to_world.(vertices)
         new(
             n_triangles, n_vertices, vertices,
@@ -73,12 +71,17 @@ end
 vertices(t::Triangle) = [t.mesh.vertices[t.mesh.indices[t.i + j]] for j in 0:2]
 normals(t::Triangle) = [t.mesh.normals[t.mesh.indices[t.i + j]] for j in 0:2]
 tangents(t::Triangle) = [t.mesh.tangents[t.mesh.indices[t.i + j]] for j in 0:2]
+
 function uvs(t::Triangle)
-    t.mesh.uv isa Nothing && return [Point2f0(0), Point2f0(1, 0), Point2f0(1, 1)]
+    t.mesh.uv isa Nothing &&
+        return [Point2f0(0), Point2f0(1, 0), Point2f0(1, 1)]
     [t.mesh.uv[t.i + j] for j in 0:2]
 end
 
-object_bound(t::Triangle) = mapreduce(v -> v |> t.core.world_to_object |> Bounds3, ∪, t |> vertices)
+object_bound(t::Triangle) = mapreduce(
+    v -> v |> t.core.world_to_object |> Bounds3,
+    ∪, t |> vertices,
+)
 world_bound(t::Triangle) = reduce(∪, Bounds3.(t |> vertices))
 
 function _edge_function(vs::Vector{Point3{T}}) where T <: Union{Float32, Float64}
@@ -89,9 +92,11 @@ function _edge_function(vs::Vector{Point3{T}}) where T <: Union{Float32, Float64
     )
 end
 
-function _to_ray_coordinate_space(vs::Vector{Point3f0}, ray::Ray)
+function _to_ray_coordinate_space(
+    vs::Vector{Point3f0}, ray::Union{Ray, RayDifferentials},
+)::Tuple{Vector{Point3f0}, Point3f0}
     # Transform vs.
-    vs .-= ray.o
+    t_vs = vs .- ray.o
     # Permute vs & ray direction.
     kz = ray.d .|> abs |> argmax
     kx = kz + 1
@@ -100,10 +105,10 @@ function _to_ray_coordinate_space(vs::Vector{Point3f0}, ray::Ray)
     ky == 4 && (ky = 1)
 
     d = ray.d[[kx, ky, kz]]
-    vs = [v[[kx, ky, kz]] for v in vs]
-    # Apply shear transformation to vs.
+    t_vs = [v[[kx, ky, kz]] for v in t_vs]
+    # Apply shear transformation to t_vs.
     shear = Point3f0(-d[1] / d[3], -d[2] / d[3], 1f0 / d[3])
-    Point3f0[v + Point3f0(shear[1] * v[3], shear[2] * v[3], 0f0) for v in vs], shear
+    [v + Point3f0(shear[1] * v[3], shear[2] * v[3], 0f0) for v in t_vs], shear
 end
 
 function ∂p(
@@ -142,32 +147,34 @@ function _init_triangle_shading_geometry!(
     t::Triangle, interaction::SurfaceInteraction{Triangle},
     barycentric::Point3f0, uv::Vector{Point2f0},
 )
+    !(t.mesh.normals ≢ nothing || t.mesh.tangents ≢ nothing) && return
     # Initialize triangle shading geometry.
-    if t.mesh.normals ≢ nothing || t.mesh.tangents ≢ nothing
-        # Compute shading normal, tangent & bitangent.
-        ns = interaction.core.n
-        if t.mesh.normals ≢ nothing
-            ns = normalize(sum_mul(barycentric, normals(t)))
-        end
-        if t.mesh.tangents ≢ nothing
-            ss = normalize(sum_mul(barycentric, tangents(t)))
-        else
-            ss = interaction.∂p∂u |> normalize
-        end
-        ts = ns × ss
-        if (ts ⋅ ts) > 0
-            ts = ts |> normalize
-            ss = ts × ns
-        else
-            ss, ts = coordinate_system(ns, ss)[2:3]
-        end
-        ∂n∂u, ∂n∂v = ∂n(t, uv)
-        set_shading_geometry!(interaction, Vec3f0(ss), Vec3f0(ts), ∂n∂u, ∂n∂v, true)
+    # Compute shading normal, tangent & bitangent.
+    ns = interaction.core.n
+    if t.mesh.normals ≢ nothing
+        ns = normalize(sum_mul(barycentric, normals(t)))
     end
+    if t.mesh.tangents ≢ nothing
+        ss = normalize(sum_mul(barycentric, tangents(t)))
+    else
+        ss = interaction.∂p∂u |> normalize
+    end
+    ts = ns × ss
+    if (ts ⋅ ts) > 0
+        ts = ts |> normalize
+        ss = ts × ns
+    else
+        ss, ts = coordinate_system(ns, ss)[2:3]
+    end
+    ∂n∂u, ∂n∂v = ∂n(t, uv)
+    set_shading_geometry!(
+        interaction, Vec3f0(ss), Vec3f0(ts), ∂n∂u, ∂n∂v, true,
+    )
 end
 
 function intersect(
-    t::Triangle, ray::Ray, test_alpha_texture::Bool = false,
+    t::Triangle, ray::Union{Ray, RayDifferentials},
+    test_alpha_texture::Bool = false,
 )::Tuple{Bool, Maybe{Float32}, Maybe{SurfaceInteraction}}
     is_degenerate(t) && return false, nothing, nothing
     vs = t |> vertices
@@ -184,15 +191,21 @@ function intersect(
     det ≈ 0 && return false, nothing, nothing
     # Compute scaled hit distance to triangle.
     t_vs .*= Point3f0(1f0, 1f0, shear[3])
-    t_scaled = edges[1] * t_vs[1][3] + edges[2] * t_vs[2][3] + edges[3] * t_vs[3][3]
+    t_scaled = (
+        edges[1] * t_vs[1][3]
+        + edges[2] * t_vs[2][3]
+        + edges[3] * t_vs[3][3]
+    )
     # Test against t_max range.
-    det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) && return false, nothing, nothing
-    det > 0 && (t_scaled <= 0 || t_scaled > ray.t_max * det) && return false, nothing, nothing
+    det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) &&
+        return false, nothing, nothing
+    det > 0 && (t_scaled <= 0 || t_scaled > ray.t_max * det) &&
+        return false, nothing, nothing
     # Compute barycentric coordinates and t value for triangle intersection.
     inv_det = 1f0 / det
     barycentric = edges .* inv_det
     t_hit = t_scaled * inv_det
-    # TODO check that t > 0 w.r.t. error bounds.
+    # TODO check that t_hit > 0
     uv = t |> uvs
     ∂p∂u, ∂p∂v, δp_13, δp_23 = ∂p(t, vs, uv)
     # Interpolate (u, v) paramteric coordinates and hit point.
@@ -208,10 +221,43 @@ function intersect(
     _init_triangle_shading_geometry!(t, interaction, barycentric, uv)
     # Ensure correct orientation of the geometric normal.
     if t.mesh.normals ≢ nothing
-        interaction.core.n = face_forward(interaction.core.n, interaction.shading.n)
+        interaction.core.n = face_forward(
+            interaction.core.n, interaction.shading.n,
+        )
     elseif t.core.reverse_orientation ⊻ t.core.transform_swaps_handedness
         interaction.core.n = interaction.shading.n = -interaction.core.n
     end
-    # TODO test against alpha texture if present (when we have textures).
+    # TODO test against alpha texture if present.
     true, t_hit, interaction
+end
+
+function intersect_p(
+    t::Triangle, ray::Union{Ray, RayDifferentials},
+    test_alpha_texture::Bool = false,
+)::Bool
+    is_degenerate(t) && return false
+    vs = t |> vertices
+    t_vs, shear = _to_ray_coordinate_space(vs, ray)
+    # Compute edge function coefficients.
+    edges = t_vs |> _edge_function
+    if all(edges .≈ 0) # Fall-back to double precision.
+        edges = t_vs .|> (x -> x .|> Float64) |> _edge_function
+    end
+    # Perform triangle edge & determinant tests.
+    # Point is inside a triangle if all edges have the same sign.
+    any(edges .< 0) && any(edges .> 0) && return false
+    det = edges |> sum
+    det ≈ 0 && return false
+    # Compute scaled hit distance to triangle.
+    t_vs .*= Point3f0(1f0, 1f0, shear[3])
+    t_scaled = (
+        edges[1] * t_vs[1][3]
+        + edges[2] * t_vs[2][3]
+        + edges[3] * t_vs[3][3]
+    )
+    # Test against t_max range.
+    det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) && return false
+    det > 0 && (t_scaled <= 0 || t_scaled > ray.t_max * det) && return false
+    # TODO test against alpha texture if present.
+    true
 end

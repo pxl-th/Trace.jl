@@ -192,7 +192,9 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives - 1
-                    hit, interaction = intersect!(bvh.primitives[ln.primitives_offset + i], ray)
+                    hit, interaction = intersect!(
+                        bvh.primitives[ln.primitives_offset + i], ray,
+                    )
                 end
                 to_visit_offset == 1 && break
                 to_visit_offset -= 1
@@ -231,10 +233,9 @@ function intersect_p(bvh::BVHAccel, ray::AbstractRay)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives - 1
-                    hit = intersect_p(
+                    intersect_p(
                         bvh.primitives[ln.primitives_offset + i], ray,
-                    )
-                    hit && return true
+                    ) && return true
                 end
                 to_visit_offset == 1 && break
                 to_visit_offset -= 1

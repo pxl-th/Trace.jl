@@ -12,19 +12,19 @@ Render scene.
 """
 function (i::I where I <: SamplerIntegrator)(scene::Scene)
     sample_bounds = i.camera |> get_film |> get_sample_bounds
-    @info "Sample bounds $sample_bounds"
+    # @info "Sample bounds $sample_bounds"
     sample_extent = sample_bounds |> diagonal
     tile_size = 16
     n_tiles::Point2 = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
-    @info "N Tiles $n_tiles"
+    # @info "N Tiles $n_tiles"
 
     for y in 0:n_tiles[2] - 1, x in 0:n_tiles[1] - 1
         tile = Point2f0(x, y)
-        @info "Tile $tile"
+        # @info "Tile $tile"
         tb_min = sample_bounds.p_min .+ tile .* tile_size
         tb_max = min.(tb_min .+ tile_size, sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
-        @info "Tile Bounds $tile_bounds"
+        # @info "Tile Bounds $tile_bounds"
 
         film_tile = FilmTile(i.camera |> get_film, tile_bounds)
         for pixel in tile_bounds
@@ -36,7 +36,7 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
                 scale_differentials!(
                     ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
                 )
-                @info "Tracing ray $(ray.o), $(ray.d)"
+                # @info "Tracing ray $(ray.o), $(ray.d)"
 
                 l = RGBSpectrum(0f0)
                 ω > 0f0 && (l = li(i, ray, scene, 1);)
@@ -58,13 +58,13 @@ function li(
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
     hit, surface_interaction = intersect!(scene, ray)
-    if hit
-        @info "Ray hit:"
-        @info "\t-> Depth: $depth"
-        @info "\t-> Ray direction: $(ray.d)"
-        @info "\t-> Surface point: $(surface_interaction.core.p)"
-        @info "\t-> Surface  norm: $(surface_interaction.core.n)"
-    end
+    # if hit
+    #     @info "Ray hit:"
+    #     @info "\t-> Depth: $depth"
+    #     @info "\t-> Ray direction: $(ray.d)"
+    #     @info "\t-> Surface point: $(surface_interaction.core.p)"
+    #     @info "\t-> Surface  norm: $(surface_interaction.core.n)"
+    # end
     if !hit
         for light in scene.lights
             l += le(light, ray)
@@ -102,7 +102,7 @@ function li(
         end
     end
     if depth + 1 ≤ i.max_depth
-        @info "Tracing ray at the next depth"
+        # @info "Tracing ray at the next depth"
         # Trace rays for specular reflection & refraction.
         l += specular_reflect(i, ray, surface_interaction, scene, depth)
         l += specular_transmit(i, ray, surface_interaction, scene, depth)
@@ -123,12 +123,12 @@ function specular_reflect(
     # Return contribution of specular reflection.
     ns = surface_intersect.shading.n
     if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
-        @info "No specular reflect"
+        # @info "No specular reflect"
         return RGBSpectrum(0f0)
     end
     # Compute ray differential for specular reflection.
     rd = spawn_ray(surface_intersect, wi) |> RayDifferentials
-    @info "Spawned ray at depth $depth: $(rd.o), $(rd.d)"
+    # @info "Spawned ray at depth $depth: $(rd.o), $(rd.d)"
     if ray.has_differentials
         rd.has_differentials = true
         rd.rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
@@ -165,7 +165,7 @@ function specular_transmit(
     # Return contribution of specular reflection.
     ns = surface_intersect.shading.n
     if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
-        @info "No specular transmission"
+        # @info "No specular transmission"
         return RGBSpectrum(0f0)
     end
     rd = spawn_ray(surface_intersect, wi) |> RayDifferentials

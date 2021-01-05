@@ -104,29 +104,26 @@ end
     @test Trace.object_bound(triangles[1]) ≈ target_ob
     @test Trace.world_bound(triangles[1]) ≈ target_wb
 
+    # Test ray intersection.
     ray = Trace.Ray(o=Point3f0(0, 0, -2), d=Vec3f0(0, 0, 1))
+    intersects_p = Trace.intersect_p(triangles[1], ray)
     intersects, t_hit, interaction = Trace.intersect(triangles[1], ray)
-    # CS origin is at the ray's origin, and triangle transformed to that CS.
-    target_intersection = Point3f0(0, 0, 4)
-    target_uv = Point2f0(0)
-
-    @test intersects
+    @test intersects_p == intersects == true
     @test t_hit ≈ 4f0
-    @test interaction.core.p ≈ target_intersection
+    @test ray(t_hit) ≈ interaction.core.p ≈ Point3f0(0, 0, 2)
+    @test interaction.uv ≈ Point2f0(0)
+    @test interaction.core.n ≈ Trace.Normal3f0(0, 0, -1)
     @test interaction.core.wo ≈ -ray.d
-    @test interaction.uv ≈ target_uv
-
+    # Test ray intersection (lower-left corner).
     ray = Trace.Ray(o=Point3f0(1, 0.5, 0), d=Vec3f0(0, 0, 1))
+    intersects_p = Trace.intersect_p(triangles[1], ray)
     intersects, t_hit, interaction = Trace.intersect(triangles[1], ray)
-    # CS origin is at the ray's origin, and triangle transformed to that CS.
-    target_intersection = Point3f0(0, 0, 2)
-    target_uv = Point2f0(1, 0.5)
-
-    @test intersects
+    @test intersects_p == intersects == true
     @test t_hit ≈ 2f0
-    @test interaction.core.p ≈ target_intersection
+    @test ray(t_hit) ≈ interaction.core.p ≈ Point3f0(1, 0.5, 2)
+    @test interaction.uv ≈ Point2f0(1, 0.5)
+    @test interaction.core.n ≈ Trace.Normal3f0(0, 0, -1)
     @test interaction.core.wo ≈ -ray.d
-    @test interaction.uv ≈ target_uv
 end
 
 @testset "BVH" begin
