@@ -44,6 +44,6 @@ function (m::MirrorMaterial)(
     si.bsdf = si |> BSDF
     r = si |> m.Kr |> clamp
     is_black(r) && return
-    @info "Adding Mirror"
+    # @info "Adding Mirror"
     add!(si.bsdf, SpecularReflection(r, FrenselNoOp()))
 end

@@ -169,11 +169,11 @@ function intersect_p(
     test_alpha_texture::Bool = false,
 )::Bool
     # Transform ray to object space.
-    or::Ray = ray |> s.core.world_to_object
+    or = ray |> s.core.world_to_object
     # Substitute ray into sphere equation.
-    a = or.d |> norm
+    a = norm(or.d) ^ 2
     b = 2f0 * or.o ⋅ or.d
-    c = norm(or.o) - s.radius ^ 2
+    c = norm(or.o) ^ 2 - s.radius ^ 2
     # Solve quadratic equation for t.
     exists, t0, t1 = solve_quadratic(a, b, c)
     !exists && return false

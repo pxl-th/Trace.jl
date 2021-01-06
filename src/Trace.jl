@@ -198,69 +198,14 @@ include("lights/directional.jl")
 
 include("integrators/sampler.jl")
 
-# core = ShapeCore(translate(Vec3f0(0, 0, 2)), false)
-# triangles = create_triangle_mesh(
-#     core,
-#     1, UInt32[1, 2, 3],
-#     3, [Point3f0(0, 0, 0), Point3f0(1, 0, 0), Point3f0(1, 1, 0)],
-#     [Normal3f0(0, 0, -1), Normal3f0(0, 0, -1), Normal3f0(0, 0, -1)],
-# )
-
-# tv = triangles[1] |> vertices
-# display(tv); println()
-
-# a = norm(tv[1] - tv[2]) ^ 2 * 0.5f0
-# area(triangles[1]) ≈ a
-
-# target_wb = Bounds3(Point3f0(0, 0, 2), Point3f0(1, 1, 2))
-# target_ob = Bounds3(Point3f0(0, 0, 0), Point3f0(1, 1, 0))
-# @show object_bound(triangles[1])
-# @show world_bound(triangles[1])
-
-# ray = Ray(o=Point3f0(0, 0, -2), d=Vec3f0(0, 0, 1))
-# intersects_p = intersect_p(triangles[1], ray)
-# intersects, t_hit, interaction = intersect(triangles[1], ray)
-# @show intersects, intersects_p
-# @show t_hit, ray(t_hit)
-# @show interaction.core.p
-# @show interaction.core.n
-
-# tv = triangles[1] |> vertices
-# display(tv); println()
-
-# triangle_primitive = GeometricPrimitive(triangles[1])
-# bvh = BVHAccel{SAH}([triangle_primitive], 1)
-# for n in bvh.nodes
-#     @show n
-# end
-
-# interaction = Interaction(Point3f0(0, 0, -2), 0, Vec3f0(0), Normal3f0(0))
-# for i in 0:0.1:1
-#     ray = Ray(o=Point3f0(i, 0, -2), d=Vec3f0(0, 0, 1))
-#     hit, si = intersect!(bvh, ray)
-#     @show ray.o, ray.d
-#     @show hit, si.core.p
-
-#     ray_light = spawn_ray(si, interaction)
-#     @show ray_light.o, ray_light.d
-#     hit, si = intersect!(bvh, ray_light)
-#     @show hit
-# end
-# for i in 0:0.1:1
-#     ray = Ray(o=Point3f0(i, i, -2), d=Vec3f0(0, 0, 1))
-#     hit, si = intersect!(bvh, ray)
-#     @show ray.o, ray.d
-#     @show hit, si.core.p
-# end
-
-
 material = MatteMaterial(
-    ConstantTexture(RGBSpectrum(1f0, 0.2f0, 0.1f0)),
-    ConstantTexture(0f0),
+    ConstantTexture(RGBSpectrum(1f0, 0f0, 0f0)), ConstantTexture(0f0),
+)
+material_tr = MatteMaterial(
+    ConstantTexture(RGBSpectrum(1f0, 0f0, 0f0)), ConstantTexture(0f0),
 )
 material2 = MatteMaterial(
-    ConstantTexture(RGBSpectrum(0.2f0, 1f0, 0.1f0)),
-    ConstantTexture(0f0),
+    ConstantTexture(RGBSpectrum(0.2f0, 0.1f0, 1f0)), ConstantTexture(0f0),
 )
 mirror = MirrorMaterial(ConstantTexture(RGBSpectrum(1f0, 1f0, 1f0)))
 
@@ -281,43 +226,40 @@ sphere4 = Sphere(core4, 0.004f0, 360f0)
 primitive4 = GeometricPrimitive(sphere4, material)
 
 triangles = Trace.create_triangle_mesh(
-    ShapeCore(translate(Vec3f0(0.0035, 0.001, -3.5)), false),
+    ShapeCore(translate(Vec3f0(0, 0, -3.5)), false),
     1, UInt32[1, 2, 3],
     3, [Point3f0(0, 0, 0), Point3f0(0.02, 0, 0), Point3f0(0.02, 0.02, 0)],
     [Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1)],
 )
-triangle_primitive = GeometricPrimitive(triangles[1], material)
+triangle_primitive = GeometricPrimitive(triangles[1], material_tr)
 
-# bvh = BVHAccel{SAH}([primitive, primitive2, primitive3, primitive4, triangle_primitive], 1)
-bvh = BVHAccel{SAH}([primitive3, triangle_primitive], 1)
+bvh = BVHAccel{SAH}([primitive, primitive2, primitive3, primitive4, triangle_primitive], 1)
 for n in bvh.nodes
     display(n); println()
 end
-# exit()
 
 lights = [PointLight(
-    translate(Vec3f0(0f0, -1f0, 0f0)), RGBSpectrum(Float32(4 * π)),
+    translate(Vec3f0(0f0, -1f0, -1f0)), RGBSpectrum(Float32(4 * π)),
 )]
 scene = Scene(lights, bvh)
-# Construct Film and Camera.
-resolution = Point2f0(64, 64)
+
+resolution = Point2f0(512, 512)
 filter = LanczosSincFilter(Point2f0(1f0), 3f0)
 film = Film(
     resolution, Bounds2(Point2f0(0f0), Point2f0(1f0)),
-    filter, 1f0, 1f0, "test-output-triangle.png",
+    filter, 1f0, 1f0, "output.png",
 )
 screen = Bounds2(Point2f0(-1f0), Point2f0(1f0))
 camera = PerspectiveCamera(
     Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
 )
 
-sampler = UniformSampler(1)
-integrator = WhittedIntegrator(camera, sampler, 1)
+sampler = UniformSampler(8)
+integrator = WhittedIntegrator(camera, sampler, 2)
 scene |> integrator
 
 """
 TODO
-- intersect_p & intersect! produces different results
 - assert that t_max in intersect methods >= 0
 - test if bvh contains duplicates
 """

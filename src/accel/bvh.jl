@@ -184,7 +184,7 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
     dir_is_neg = ray.d |> is_dir_negative
 
     to_visit_offset, current_node_i = 1, 1
-    nodes_to_visit = Vector{Int32}(undef, 64)
+    nodes_to_visit = zeros(Int32, 64)
 
     while true
         ln = bvh.nodes[current_node_i]
@@ -192,13 +192,18 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives - 1
-                    hit, interaction = intersect!(
+                    tmp_hit, tmp_interaction = intersect!(
                         bvh.primitives[ln.primitives_offset + i], ray,
                     )
+                    if tmp_hit
+                        hit = tmp_hit
+                        interaction = tmp_interaction
+                    end
                 end
                 to_visit_offset == 1 && break
                 to_visit_offset -= 1
                 current_node_i = nodes_to_visit[to_visit_offset]
+                @assert current_node_i != 0
             else
                 if dir_is_neg[ln.split_axis] == 2
                     nodes_to_visit[to_visit_offset] = current_node_i + 1
@@ -213,6 +218,7 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
             to_visit_offset == 1 && break
             to_visit_offset -= 1
             current_node_i = nodes_to_visit[to_visit_offset]
+            @assert current_node_i != 0
         end
     end
     hit, interaction
@@ -223,23 +229,30 @@ function intersect_p(bvh::BVHAccel, ray::AbstractRay)
 
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = ray.d |> is_dir_negative
+    # println("bvh ray: \n\t- $(ray.o), \n\t- $(ray.d), \n\t- $inv_dir, \n\t- $dir_is_neg")
 
     to_visit_offset, current_node_i = 1, 1
-    nodes_to_visit = Vector{Int32}(undef, 64)
+    nodes_to_visit = zeros(Int32, 64)
 
     while true
         ln = bvh.nodes[current_node_i]
+        # println("bvh intersect_p:\n\t- $(ln.bounds)")
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
+            # println("\t-> intersects [true]")
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
-                # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives - 1
-                    intersect_p(
+                    hit = intersect_p(
                         bvh.primitives[ln.primitives_offset + i], ray,
-                    ) && return true
+                    )
+                    if hit
+                        # println("\t-> found hit: i=$i, p-offset=$(ln.primitives_offset)")
+                        return true
+                    end
                 end
                 to_visit_offset == 1 && break
                 to_visit_offset -= 1
                 current_node_i = nodes_to_visit[to_visit_offset]
+                @assert current_node_i != 0
             else
                 if dir_is_neg[ln.split_axis] == 2
                     nodes_to_visit[to_visit_offset] = current_node_i + 1
@@ -254,6 +267,7 @@ function intersect_p(bvh::BVHAccel, ray::AbstractRay)
             to_visit_offset == 1 && break
             to_visit_offset -= 1
             current_node_i = nodes_to_visit[to_visit_offset]
+            @assert current_node_i != 0
         end
     end
     false

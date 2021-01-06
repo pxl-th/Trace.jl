@@ -97,7 +97,7 @@ function li(
         # @info "BSDF $f $(!is_black(f))"
         # TODO make occlusion test optional or fix it!
         if !is_black(f) && unoccluded(visibility_tester, scene)
-            @info "Accumulating: $(f * sampled_li * abs(wi ⋅ n) / pdf)"
+            # @info "Accumulating: $(f * sampled_li * abs(wi ⋅ n) / pdf)"
             l += f * sampled_li * abs(wi ⋅ n) / pdf
         end
     end

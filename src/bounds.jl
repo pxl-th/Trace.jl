@@ -145,12 +145,11 @@ end
 
 function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
     t0, t1 = 0f0, ray.t_max
-    for i in 1:3
+    @inbounds for i in 1:3
         # Update interval for i-th bbox slab.
         inv_ray_dir = 1f0 / ray.d[i]
         t_near = (b.p_min[i] - ray.o[i]) * inv_ray_dir
         t_far = (b.p_max[i] - ray.o[i]) * inv_ray_dir
-        # Swap if needed.
         if t_near > t_far
             t_near, t_far = t_far, t_near
         end
@@ -177,7 +176,7 @@ function intersect_p(
     ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
     ty_max = (b[3 - dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
 
-    (tx_min > tx_max || ty_min > ty_max) && return false
+    (tx_min > ty_max || ty_min > tx_max) && return false
     ty_min > tx_min && (tx_min = ty_min;)
     ty_max > tx_max && (tx_max = ty_max;)
 
@@ -185,7 +184,9 @@ function intersect_p(
     tz_max = (b[3 - dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
     (tx_min > tz_max || tz_min > tx_max) && return false
 
-    (isnan(tx_min) || tz_min > tx_min) && (tx_min = tz_min;)
-    (isnan(tx_max) || tz_max < tx_max) && (tx_max = tz_max;)
+    # (isnan(tx_min) || tz_min > tx_min) && (tx_min = tz_min;)
+    # (isnan(tx_max) || tz_max < tx_max) && (tx_max = tz_max;)
+    (tz_min > tx_min) && (tx_min = tz_min;)
+    (tz_max < tx_max) && (tx_max = tz_max;)
     tx_min < ray.t_max && tx_max > 0
 end

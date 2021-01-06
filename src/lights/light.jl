@@ -16,12 +16,11 @@ end
 
 function unoccluded(t::VisibilityTester, scene::Scene)::Bool
     ray = spawn_ray(t.p0, t.p1)
+    # @show "ray $(ray.o), $(ray.d)"
     hit = !intersect_p(scene, ray)
-    # if !hit
-    #     @info "Checking if ray $(ray.o), $(ray.d) is not occluded..."
-    #     @info "\t-> Unoccluded $hit"
-    #     ray = spawn_ray(t.p0, t.p1)
-    #     i, si = intersect!(scene, ray)
+    # hito, si = intersect!(scene, ray)
+    # hito = !hito
+    # if hit != hito
     #     @info "\t -> Occlusion point $(si.core.p)"
     # end
     hit
