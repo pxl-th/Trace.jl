@@ -216,7 +216,7 @@ end
 #     core = Trace.ShapeCore(Trace.Transformation(), true)
 #     sphere = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
 #     primitive = Trace.GeometricPrimitive(sphere, material)
-#     bvh = Trace.BVHAccel{Trace.SAH}([primitive])
+#     bvh = Trace.BVHAccel([primitive])
 
 #     lights = [Trace.PointLight(
 #         Trace.Transformation(), Trace.RGBSpectrum(Float32(π)),

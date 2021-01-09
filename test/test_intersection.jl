@@ -134,8 +134,8 @@ end
         push!(primitives, Trace.GeometricPrimitive(sphere))
     end
 
-    bvh = Trace.BVHAccel{Trace.SAH}(primitives[1:4])
-    bvh2 = Trace.BVHAccel{Trace.SAH}(Trace.Primitive[primitives[5:end]..., bvh])
+    bvh = Trace.BVHAccel(primitives[1:4])
+    bvh2 = Trace.BVHAccel(Trace.Primitive[primitives[5:end]..., bvh])
     @test Trace.world_bound(bvh) ≈ Trace.Bounds3(Point3f0(-1f0), Point3f0(10f0, 10f0, 1f0))
     @test Trace.world_bound(bvh2) ≈ Trace.Bounds3(Point3f0(-1f0), Point3f0(22f0, 22f0, 1f0))
 
@@ -170,7 +170,7 @@ end
     sphere = Trace.Sphere(core, 4f0, 360f0)
     push!(primitives, Trace.GeometricPrimitive(sphere))
 
-    bvh = Trace.BVHAccel{Trace.SAH}(primitives)
+    bvh = Trace.BVHAccel(primitives)
     @test Trace.world_bound(bvh) ≈ Trace.Bounds3(
         Point3f0(-4, -4, -1), Point3f0(4, 4, 15),
     )

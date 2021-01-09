@@ -233,7 +233,7 @@ triangles = Trace.create_triangle_mesh(
 )
 triangle_primitive = GeometricPrimitive(triangles[1], material_tr)
 
-bvh = BVHAccel{SAH}([primitive, primitive2, primitive3, primitive4, triangle_primitive], 1)
+bvh = BVHAccel([primitive, primitive2, primitive3, primitive4, triangle_primitive], 1)
 for n in bvh.nodes
     display(n); println()
 end
