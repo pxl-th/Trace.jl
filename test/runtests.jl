@@ -5,6 +5,7 @@ using Trace
 using FileIO
 using ImageCore
 
+include("test_transformations.jl")
 include("test_intersection.jl")
 
 function check_scene_average(scene_file::String, target::Float32)

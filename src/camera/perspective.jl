@@ -108,6 +108,9 @@ function generate_ray(
         sample.time,
     )
     # TODO add medium
+    # println("Camer Ray: $(ray.o) -> $(ray.d)")
     ray = ray |> camera.core.core.camera_to_world
+    ray.d = ray.d |> normalize
+    # println("World Ray: $(ray.o) -> $(ray.d)")
     ray, 1f0
 end

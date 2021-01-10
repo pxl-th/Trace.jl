@@ -1,3 +1,4 @@
+using Printf
 using GeometryBasics
 using Trace
 
@@ -43,12 +44,13 @@ function render()
     primitive4 = Trace.GeometricPrimitive(sphere4, material)
 
     triangles = Trace.create_triangle_mesh(
-        Trace.ShapeCore(Trace.translate(Vec3f0(0, 0, -3.5)), false),
+        Trace.ShapeCore(Trace.translate(Vec3f0(0, 0, -1.1)), false),
         1, UInt32[1, 2, 3],
         3, [Point3f0(0, 0, 0), Point3f0(0.02, 0, 0), Point3f0(0.02, 0.02, 0)],
         [Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1)],
     )
     triangle_primitive = Trace.GeometricPrimitive(triangles[1], material_tr)
+    tv = triangles[1] |> Trace.vertices
 
     bvh = Trace.BVHAccel([
         primitive, primitive2, primitive3, primitive4, triangle_primitive,
@@ -63,20 +65,28 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(512, 512)
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
-    film = Trace.Film(
-        resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
-        filter, 1f0, 1f0, "scenes/simple.png",
-    )
+    sampler = Trace.UniformSampler(1)
     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
-    camera = Trace.PerspectiveCamera(
-        Trace.Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
-    )
 
-    sampler = Trace.UniformSampler(8)
-    integrator = Trace.WhittedIntegrator(camera, sampler, 2)
-    scene |> integrator
+    target = tv[1]
+    println("Target $target")
+
+    for (i, shift) in enumerate(0:0.1:1)
+        film = Trace.Film(
+            Point2f0(64, 64), Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
+            filter, 1f0, 1f0, "scenes/perspective-$i.png",
+        )
+        transform = Trace.look_at(
+            Point3f0(shift, 0, 0), target, Vec3f0(0, 1, 0),
+        )
+
+        camera = Trace.PerspectiveCamera(
+            transform, screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
+        )
+        integrator = Trace.WhittedIntegrator(camera, sampler, 2)
+        scene |> integrator
+    end
 end
 
 render()

@@ -119,7 +119,9 @@ function sample_f(
             count -= 1
         end
     end
-    @assert bxdf ≢ nothing
+    # TODO fix bsdf ≡ nothing
+    # bxdf ≡ nothing && (bxdf = b.bxdfs[1];)
+    @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f0(
         min(u[1] * matching_components - component, 1f0),

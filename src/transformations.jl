@@ -6,7 +6,9 @@ end
 Transformation() = Transformation(Mat4f0(I), Mat4f0(I))
 Transformation(m::Mat4f0) = Transformation(m, m |> inv)
 is_identity(t::Transformation) = t.m == I && t.inv_m == I
-Base.transpose(t::Transformation) = Transformation(t.m |> transpose, t.inv_m |> transpose)
+function Base.transpose(t::Transformation)
+    Transformation(t.m |> transpose, t.inv_m |> transpose)
+end
 Base.inv(t::Transformation) = Transformation(t.inv_m, t.m)
 
 function Base.:(==)(t1::Transformation, t2::Transformation)
@@ -92,7 +94,6 @@ function rotate(θ::Float32, axis::Vec3f0)
     sin_θ = θ |> deg2rad |> sin
     cos_θ = θ |> deg2rad |> cos
     m = Mat4f0(
-        # 1                                      2                                         3                                         4
         a[1] * a[1] + (1 - a[1] * a[1]) * cos_θ, a[1] * a[2] * (1 - cos_θ) - a[3] * sin_θ, a[1] * a[3] * (1 - cos_θ) + a[2] * sin_θ, 0,
         a[1] * a[2] * (1 - cos_θ) + a[3] * sin_θ, a[2] * a[2] + (1 - a[2] * a[2]) * cos_θ, a[2] * a[3] * (1 - cos_θ) - a[1] * sin_θ, 0,
         a[1] * a[3] * (1 - cos_θ) - a[2] * sin_θ, a[2] * a[3] * (1 - cos_θ) + a[1] * sin_θ, a[3] * a[3] + (1 - a[3] * a[3]) * cos_θ, 0,
@@ -101,18 +102,18 @@ function rotate(θ::Float32, axis::Vec3f0)
     Transformation(m, m |> transpose)
 end
 
-function look_at(position::Point3f0, look::Point3f0, up::Vec3f0)
-    dir = normalize(look - position)
-    right = normalize(normalize(up) × dir)
-    new_up = dir × right
-    # Camera-to-World transformation.
+function look_at(position::Point3f0, target::Point3f0, up::Vec3f0)
+    z_axis = (position - target) |> normalize
+    x_axis = (up × z_axis) |> normalize
+    y_axis = z_axis × x_axis
+
     m = Mat4f0(
-        right[1], new_up[1], dir[1], position[1],
-        right[2], new_up[2], dir[2], position[2],
-        right[3], new_up[3], dir[3], position[3],
+        x_axis[1], y_axis[1], z_axis[1], 0,
+        x_axis[2], y_axis[2], z_axis[2], 0,
+        x_axis[3], y_axis[3], z_axis[3], 0,
         0, 0, 0, 1,
     ) |> transpose
-    Transformation(m |> inv, m)
+    translate(Vec3f0(position)) * Transformation(m, m |> transpose)
 end
 
 function perspective(fov::Float32, near::Float32, far::Float32)
@@ -136,8 +137,10 @@ function (t::Transformation)(p::Point3f0)::Point3f0
     pr ./ pt[4]
 end
 (t::Transformation)(v::Vec3f0)::Vec3f0 = t.m[1:3, 1:3] * v
-(t::Transformation)(n::Normal3f0)::Normal3f0 = transpose(t.inv_m)[1:3, 1:3] * n
-(t::Transformation)(b::Bounds3) = mapreduce(i -> corner(b, i) |> t |> Bounds3, ∪, 1:8)
+(t::Transformation)(n::Normal3f0)::Normal3f0 = transpose(t.inv_m[1:3, 1:3]) * n
+function (t::Transformation)(b::Bounds3)
+    mapreduce(i -> corner(b, i) |> t |> Bounds3, ∪, 1:8)
+end
 (t::Transformation)(r::Ray) = Ray(r.o |> t, r.d |> t, r.t_max, r.time)
 function (t::Transformation)(rd::RayDifferentials)
     RayDifferentials(
@@ -208,10 +211,19 @@ Base.:*(q::Quaternion, f::Float32) = Quaternion(q.v .* f, q.w * f)
 LinearAlgebra.dot(q1::Quaternion, q2::Quaternion) = q1.v ⋅ q2.v + q1.w * q2.w
 LinearAlgebra.normalize(q::Quaternion) = q / sqrt(q ⋅ q)
 
-function to_transform(q::Quaternion)
-    xx = q.v[1] * q.v[1]; yy = q.v[2] * q.v[2]; zz = q.v[3] * q.v[3];
-    xy = q.v[1] * q.v[2]; xz = q.v[1] * q.v[3]; yz = q.v[2] * q.v[3];
-    wx = q.w * q.v[1]; wy = q.w * q.v[2]; wz = q.w * q.v[3];
+function Transformation(q::Quaternion)
+    xx = q.v[1] * q.v[1]
+    yy = q.v[2] * q.v[2]
+    zz = q.v[3] * q.v[3]
+
+    xy = q.v[1] * q.v[2]
+    xz = q.v[1] * q.v[3]
+    yz = q.v[2] * q.v[3]
+
+    wx = q.w * q.v[1]
+    wy = q.w * q.v[2]
+    wz = q.w * q.v[3]
+
     m = Mat4f0(
         1 - 2 * (yy + zz), 2 * (xy + wz), 2 * (xz - wy), 0,
         2 * (xy - wz), 1 - 2 * (xx + zz), 2 * (yz + wx), 0,

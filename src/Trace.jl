@@ -132,10 +132,6 @@ include("spectrum.jl")
 
 include("surface_interaction.jl")
 
-# TODO AnimatedTransform, AnimatedBounds
-# TODO Medium & add it to structs
-
-
 struct Scene
     lights::Vector{L} where L <: Light
     aggregate::P where P <: Primitive
@@ -161,7 +157,6 @@ end
 )::Ray
     @assert norm(p0.n) ≈ 1f0
     origin = p0.p .+ δ .* p0.n
-    # @info "Shifted origin from $(p0.p) to $(origin)"
     Ray(o=origin, d=p1.p - p0.p, time=p0.time)
 end
 @inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
@@ -172,7 +167,6 @@ end
 )::Ray
     @assert norm(si.core.n) ≈ 1f0
     origin = si.core.p .+ δ .* si.core.n
-    # @info "Shifted origin from $(si.core.p) to $(origin)"
     Ray(o=origin, d=direction, time=si.core.time)
 end
 
@@ -198,10 +192,11 @@ include("lights/directional.jl")
 
 include("integrators/sampler.jl")
 
-"""
-TODO
+""" TODO
 - assert that t_max in intersect methods >= 0
 - test if bvh contains duplicates
+- AnimatedTransform, AnimatedBounds
+- Medium & add it to structs
 """
 
 end
