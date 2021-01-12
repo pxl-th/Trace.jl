@@ -24,10 +24,8 @@ function (m::MatteMaterial)(
 
     σ = clamp(si |> m.σ, 0f0, 90f0)
     if σ ≈ 0f0
-        # @info "Adding Lambertian"
         add!(si.bsdf, LambertianReflection(r))
     else
-        # @info "Adding OrenNayar"
         add!(si.bsdf, OrenNayar(r, σ))
     end
 end
@@ -44,6 +42,5 @@ function (m::MirrorMaterial)(
     si.bsdf = si |> BSDF
     r = si |> m.Kr |> clamp
     is_black(r) && return
-    # @info "Adding Mirror"
     add!(si.bsdf, SpecularReflection(r, FrenselNoOp()))
 end
