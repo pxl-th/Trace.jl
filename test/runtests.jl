@@ -137,36 +137,55 @@ end
     end
 end
 
-@testset "Frensel Dielectric" begin
+@testset "Fresnel Dielectric" begin
     # Vacuum gives no reflectance.
-    @test Trace.frensel_dielectric(1f0, 1f0, 1f0) ≈ 0f0
-    @test Trace.frensel_dielectric(0.5f0, 1f0, 1f0) ≈ 0f0
+    @test Trace.fresnel_dielectric(1f0, 1f0, 1f0) ≈ 0f0
+    @test Trace.fresnel_dielectric(0.5f0, 1f0, 1f0) ≈ 0f0
     # Vacuum-diamond -> total reflection.
-    @test Trace.frensel_dielectric(cos(π / 4f0), 1f0, 2.42f0) ≈ 1f0
+    @test Trace.fresnel_dielectric(cos(π / 4f0), 1f0, 2.42f0) ≈ 1f0
 end
 
-@testset "Frensel Conductor" begin
+@testset "Fresnel Conductor" begin
     s = Trace.RGBSpectrum(1f0)
-    @test Trace.frensel_conductor(0f0, s, s, s) == s
-    @test all(Trace.frensel_conductor(cos(π / 4f0), s, s, s).c .> 0f0)
-    @test all(Trace.frensel_conductor(1f0, s, s, s).c .> 0f0)
+    @test Trace.fresnel_conductor(0f0, s, s, s) == s
+    @test all(Trace.fresnel_conductor(cos(π / 4f0), s, s, s).c .> 0f0)
+    @test all(Trace.fresnel_conductor(1f0, s, s, s).c .> 0f0)
 end
 
 @testset "SpecularReflection" begin
-    sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FrenselNoOp())
+    sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FresnelNoOp())
     @test sr & Trace.BSDF_REFLECTION
     @test sr & Trace.BSDF_SPECULAR
     @test sr & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION)
 end
 
 @testset "SpecularTransmission" begin
-    st = Trace.SpecularTransmission{Trace.RGBSpectrum, Trace.Radiance}(
+    st = Trace.SpecularTransmission(
         Trace.RGBSpectrum(1f0), 1f0, 1f0,
-        Trace.FrenselDielectric(1f0, 1f0),
+        Trace.FresnelDielectric(1f0, 1f0),
+        Trace.Radiance,
     )
     @test st & Trace.BSDF_SPECULAR
     @test st & Trace.BSDF_TRANSMISSION
     @test st & (Trace.BSDF_SPECULAR | Trace.BSDF_TRANSMISSION)
+end
+
+@testset "FresnelSpecular" begin
+    f = Trace.FresnelSpecular(
+        Trace.RGBSpectrum(1f0), Trace.RGBSpectrum(1f0),
+        1f0, 1f0, Trace.Radiance,
+    )
+    @test f & Trace.BSDF_SPECULAR
+    @test f & Trace.BSDF_TRANSMISSION
+    @test f & Trace.BSDF_REFLECTION
+    @test f & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION | Trace.BSDF_TRANSMISSION)
+
+    wo = Vec3f0(0, 0, 1)
+    u = Point2f0(0, 0)
+    wi, pdf, bxdf_value, sampled_type = Trace.sample_f(f, wo, u)
+    @test wi ≈ -wo
+    @test pdf ≈ 1f0
+    @test sampled_type == Trace.BSDF_SPECULAR | Trace.BSDF_TRANSMISSION
 end
 
 @testset "Perspective Camera" begin

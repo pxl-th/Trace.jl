@@ -42,7 +42,7 @@ function (o::OrenNayar)(wo::Vec3f0, wi::Vec3f0)
 end
 
 
-abstract type MicrofacetDistribution <: BxDF end
+abstract type MicrofacetDistribution end
 
 """
 Microfacet distribution function based on Gaussian distribution of
@@ -56,7 +56,7 @@ struct TrowbridgeReitzDistribution <: MicrofacetDistribution
     sample_visible_area::Bool
 
     function TrowbridgeReitzDistribution(
-        sample_visible_area::Bool, α_x::Float32, α_y::Float32,
+        α_x::Float32, α_y::Float32, sample_visible_area::Bool = true,
     )
         new(max(1f-3, α_x), max(1f-3, α_y), sample_visible_area)
     end

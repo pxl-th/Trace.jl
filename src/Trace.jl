@@ -48,12 +48,19 @@ end
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
 """
-Since normal is (0, 0, 1), cos_θ between n & w is (0, 0, 1) ⋅ w = w.z.
+The shading coordinate system gives a frame for expressing directions
+in spherical coordinates (θ, ϕ).
+The angle θ is measured from the given direction to the z-axis
+and ϕ is the angle formed with the x-axis after projection
+of the direction onto xy-plane.
+
+Since normal is `(0, 0, 1) → cos_θ = n · w = (0, 0, 1) ⋅ w = w.z`.
 """
 @inline cos_θ(w::Vec3f0) = w[3]
 @inline sin_θ2(w::Vec3f0) = max(0f0, 1f0 - cos_θ(w) * cos_θ(w))
 @inline sin_θ(w::Vec3f0) = w |> sin_θ2 |> √
 @inline tan_θ(w::Vec3f0) = sin_θ(w) / cos_θ(w)
+
 
 @inline function cos_ϕ(w::Vec3f0)
     sinθ = w |> sin_θ
@@ -130,6 +137,8 @@ include("ray.jl")
 include("bounds.jl")
 include("transformations.jl")
 include("spectrum.jl")
+
+const TargetSpectrum = RGBSpectrum
 
 include("surface_interaction.jl")
 

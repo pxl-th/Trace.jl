@@ -63,11 +63,12 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(512, 512)
+    resolution = Point2f0(64)
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
-        filter, 1f0, 1f0, "scenes/simple.png",
+        filter, 1f0, 1f0,
+        "scenes/simple-$(Int64(resolution[1]))x$(Int64(resolution[2])).png",
     )
     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
     camera = Trace.PerspectiveCamera(

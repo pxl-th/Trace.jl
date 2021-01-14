@@ -134,6 +134,7 @@ function sample_f(
     )
 
     sampled_type = bxdf.type
+    # TODO update sampled type
     wi, pdf, f = sample_f(bxdf, wo, u_remapped)
     pdf ≈ 0f0 && return (
         Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,

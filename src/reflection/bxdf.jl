@@ -53,14 +53,14 @@ function refract(wi::Vec3f0, n::Normal3f0, η::Float32)::Tuple{Bool, Vec3f0}
     sin2_θt = (η ^ 2) * sin2_θi
     # Handle total internal reflection for transmission.
     sin2_θt >= 1 && return false, Vec3f0(0f0)
-    cos_θt = sqrt(1f0 - sin2_θt)
+    cos_θt = √(1f0 - sin2_θt)
     wt = -η .* wi + (η * cos_θi - cos_θt) .* n
     true, wt
 end
 
 
 """
-Compute Frensel reflection formula for dielectric materials
+Compute Fresnel reflection formula for dielectric materials
 and unpolarized light.
 Which describes the amount of light reflected from a surface.
 
@@ -68,17 +68,17 @@ Which describes the amount of light reflected from a surface.
 - `ηi::Float32`: index of refraction for the incident media.
 - `ηt::Float32`: index of refraction for the transmitted media.
 """
-function frensel_dielectric(cos_θi::Float32, ηi::Float32, ηt::Float32)
+function fresnel_dielectric(cos_θi::Float32, ηi::Float32, ηt::Float32)
     cos_θi = clamp(cos_θi, -1f0, 1f0)
     if cos_θi > 0f0 # entering
         ηi, ηt = ηt, ηi
         cos_θi = cos_θi |> abs
     end
     # Compute cos_θt using Snell's law.
-    sin_θi = max(0f0, 1f0 - cos_θi ^ 2) |> sqrt
+    sin_θi = √max(0f0, 1f0 - cos_θi ^ 2)
     sin_θt = ηi / ηt * sin_θi
     sin_θt ≥ 1f0 && return 1f0 # Handle total internal reflection.
-    cos_θt = sqrt(max(0f0, 1f0 - sin_θt ^ 2))
+    cos_θt = √max(0f0, 1f0 - sin_θt ^ 2)
 
     r_parallel = ((ηt * cos_θi) - (ηi * cos_θt)) / ((ηt * cos_θi) + (ηi * cos_θt))
     r_perp = ((ηi * cos_θi) - (ηt * cos_θt)) / ((ηi * cos_θi) + (ηt * cos_θt))
@@ -86,11 +86,11 @@ function frensel_dielectric(cos_θi::Float32, ηi::Float32, ηt::Float32)
 end
 
 """
-General Frensel reflection formula with complex index of refraction η^ = η + ik,
+General Fresnel reflection formula with complex index of refraction η^ = η + ik,
 where some incident light is potentially absorbed by the material and turned into heat.
 k - is referred to as the absorption coefficient.
 """
-function frensel_conductor(
+function fresnel_conductor(
     cos_θi::Float32, ηi::S, ηt::S, k::S,
 ) where S <: Spectrum
     cos_θi = clamp(cos_θi, -1f0, 1f0)
@@ -103,9 +103,9 @@ function frensel_conductor(
     ηk2 = ηk * ηk
 
     t0 = η2 - ηk2 - sin_θi2
-    a2_plus_b2 = sqrt(t0 * t0 + 4f0 * η2 * ηk2)
+    a2_plus_b2 = √(t0 * t0 + 4f0 * η2 * ηk2)
     t1 = a2_plus_b2 + cos_θi2
-    a = sqrt(0.5f0 * (a2_plus_b2 + t0))
+    a = √(0.5f0 * (a2_plus_b2 + t0))
     t2 = 2f0 * cos_θi * a
     r_perp = (t1 - t2) / (t1 + t2)
 
@@ -115,17 +115,17 @@ function frensel_conductor(
     0.5f0 * (r_parallel + r_perp)
 end
 
-abstract type Frensel end
-struct FrenselConductor{S <: Spectrum} <: Frensel
+abstract type Fresnel end
+struct FresnelConductor{S <: Spectrum} <: Fresnel
     ηi::S
     ηt::S
     k::S
 end
-struct FrenselDielectric <: Frensel
+struct FresnelDielectric <: Fresnel
     ηi::Float32
     ηt::Float32
 end
-struct FrenselNoOp <: Frensel end
-(f::FrenselConductor)(cos_θi::Float32) = frensel_conductor(cos_θi, f.ηi, f.ηt, f.k)
-(f::FrenselDielectric)(cos_θi::Float32) = frensel_dielectric(cos_θi, f.ηi, f.ηt)
-(f::FrenselNoOp)(::Float32) = RGBSpectrum(1f0)
+struct FresnelNoOp <: Fresnel end
+(f::FresnelConductor)(cos_θi::Float32) = fresnel_conductor(cos_θi, f.ηi, f.ηt, f.k)
+(f::FresnelDielectric)(cos_θi::Float32) = fresnel_dielectric(cos_θi, f.ηi, f.ηt)
+(f::FresnelNoOp)(::Float32) = RGBSpectrum(1f0)
