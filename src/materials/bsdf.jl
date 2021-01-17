@@ -65,8 +65,12 @@ that transforms vectors in world space to local reflection space is:
 
 Since it is an orthonormal matrix, its inverse is its transpose.
 """
-world_to_local(b::BSDF, v::Vec3f0) = Vec3f0(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
-local_to_world(b::BSDF, v::Vec3f0) = Mat3f0(b.ss..., b.ts..., b.ns...) * v
+@inline function world_to_local(b::BSDF, v::Vec3f0)
+    Vec3f0(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
+end
+@inline function local_to_world(b::BSDF, v::Vec3f0)
+    Mat3f0(b.ss..., b.ts..., b.ns...) * v
+end
 
 """
 Evaluate BSDF function given incident and outgoind directions.
@@ -79,14 +83,17 @@ function (b::BSDF)(
     wo = world_to_local(b, wo_world)
     # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
+    # println("BSDF reflect $reflect")
 
     output = RGBSpectrum(0f0)
     for i in 1:b.n_bxdfs
         bxdf = b.bxdfs[i]
-        if ((UInt8(bxdf.type) & UInt8(flags) == UInt8(bxdf.type)) && (
+        # TODO check if flags match with reflect
+        if ((bxdf.type & flags == bxdf.type) && (
             (reflect && (bxdf & BSDF_REFLECTION)) ||
             (!reflect && (bxdf & BSDF_TRANSMISSION))
         ))
+            # TODO check angles
             output += bxdf(wo, wi)
         end
     end
@@ -103,11 +110,14 @@ function sample_f(
 )::Tuple{Vec3f0, RGBSpectrum, Float32, UInt8}
     # Choose which BxDF to sample.
     matching_components = num_components(b, type)
+    # println("BSDF")
+    # println("\t- matching components $matching_components")
     matching_components == 0 && return (
         Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
     component = min(
-        Int64(ceil(u[1] * matching_components)), matching_components,
+        max(1, Int64(ceil(u[1] * matching_components))),
+        matching_components,
     )
     # Get BxDF for chosen component.
     count = component
@@ -119,9 +129,8 @@ function sample_f(
             count -= 1
         end
     end
-    # TODO fix bsdf ≡ nothing
-    # bxdf ≡ nothing && (bxdf = b.bxdfs[1];)
     @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
+    # println("[!] Matched BxDF $(typeof(bxdf)) $(bitstring(type)) & $(bitstring(bxdf.type))")
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f0(
         min(u[1] * matching_components - component, 1f0),
@@ -133,15 +142,17 @@ function sample_f(
         Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
 
+    # TODO when to update sampled type
     sampled_type = bxdf.type
-    # TODO update sampled type
-    wi, pdf, f = sample_f(bxdf, wo, u_remapped)
+    wi, pdf, f, sampled_type_tmp = sample_f(bxdf, wo, u_remapped)
+    sampled_type_tmp ≢ nothing && (sampled_type = sampled_type_tmp;)
+
     pdf ≈ 0f0 && return (
         Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
     wi_world = local_to_world(b, wi)
     # Compute overall PDF with all matching BxDFs.
-    if !(bxdf & BSDF_SPECULAR) && matching_components > 1
+    if !(bxdf.type & BSDF_SPECULAR != 0) && matching_components > 1
         for i in 1:b.n_bxdfs
             if b.bxdfs[i] != bxdf && b.bxdfs[i] & type
                 pdf += pdf(b.bxdfs[i], wo, wi)
@@ -150,14 +161,14 @@ function sample_f(
     end
     matching_components > 1 && (pdf /= matching_components)
     # Compute value of BSDF for sampled direction.
-    if !(bxdf & BSDF_SPECULAR)
+    if !(bxdf.type & BSDF_SPECULAR != 0)
         reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
         f = RGBSpectrum(0f0)
         for i in 1:b.n_bxdfs
             bxdf = b.bxdfs[i]
             if ((bxdf & type) && (
-                (reflect && (bxdf & BSDF_REFLECTION)) ||
-                (!reflect && (bxdf & BSDF_TRANSMISSION))
+                (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
+                (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
             ))
                 f += bxdf(wo, wi)
             end

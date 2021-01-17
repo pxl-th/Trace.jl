@@ -77,8 +77,8 @@ function render()
         screen, 0f0, 1f0, 0f0, 10f6, 90f0, film,
     )
 
-    sampler = Trace.UniformSampler(8)
-    integrator = Trace.WhittedIntegrator(camera, sampler, 8)
+    sampler = Trace.UniformSampler(1)
+    integrator = Trace.WhittedIntegrator(camera, sampler, 4)
     scene |> integrator
 end
 

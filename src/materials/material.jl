@@ -14,8 +14,8 @@ end
 Compute scattering function.
 """
 function (m::MatteMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, mode::TransportMode,
-)
+    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+) where T <: TransportMode
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
     si.bsdf = si |> BSDF
@@ -37,8 +37,8 @@ struct MirrorMaterial <: Material
 end
 
 function (m::MirrorMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, mode::TransportMode,
-)
+    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+) where T <: TransportMode
     si.bsdf = si |> BSDF
     r = si |> m.Kr |> clamp
     is_black(r) && return
@@ -73,20 +73,25 @@ struct GlassMaterial <: Material
 end
 
 function (g::GlassMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, mode::TransportMode,
-)
+    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+) where T <: TransportMode
     η = si |> g.index
     u_roughness = si |> g.u_roughness
     v_roughness = si |> g.v_roughness
+    # println("=== Glass Material ===")
+    # println("\t- η $η")
+    # println("\t- UV roughness $u_roughness, $v_roughness")
 
     si.bsdf = BSDF(si, η)
     r = si |> g.Kr |> clamp
     t = si |> g.Kt |> clamp
+    # println("\t- R $r")
+    # println("\t- T $t")
     is_black(r) && is_black(t) && return
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
     if is_specular && allow_multiple_lobes
-        add!(si.bsdf, FresnelSpecular{mode}(r, t, 1f0, η))
+        add!(si.bsdf, FresnelSpecular(r, t, 1f0, η, T))
         return
     end
 
@@ -94,32 +99,27 @@ function (g::GlassMaterial)(
         u_roughness = roughness_to_α(u_roughness)
         v_roughness = roughness_to_α(v_roughness)
     end
-    distribution = (
-        is_specular
-        ? nothing
-        : TrowbridgeReitzDistribution(u_roughness, v_roughness)
+    distribution = is_specular ? nothing : TrowbridgeReitzDistribution(
+        u_roughness, v_roughness,
     )
 
     if !is_black(r)
         fresnel = FresnelDielectric(1f0, η)
         if is_specular
+            # println("\t+ Adding SpecularReflection")
             add!(si.bsdf, SpecularReflection(r, fresnel))
         else
-            add!(si.bsdf, MicrofacetReflection{mode}(r, distribution, fresnel))
+            # println("\t+ Adding MicrofacetReflection")
+            add!(si.bsdf, MicrofacetReflection(r, distribution, fresnel, T))
         end
     end
     if !is_black(t)
         if is_specular
-            add!(si.bsdf, SpecularTransmission{mode}(t, 1f0, η))
+            # println("\t+ Adding SpecularTransmission")
+            add!(si.bsdf, SpecularTransmission(t, 1f0, η, T))
         else
-            add!(si.bsdf, MicrofacetTransmission{mode}(t, distribution, 1f0, η))
+            # println("\t+ Adding MicrofacetTransmission")
+            add!(si.bsdf, MicrofacetTransmission(t, distribution, 1f0, η, T))
         end
     end
-
-    """
-    TODO
-    + FresnelSpecular
-    - MicrofacetReflection
-    - MicrofacetTransmission
-    """
 end

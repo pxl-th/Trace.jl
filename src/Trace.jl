@@ -166,8 +166,10 @@ end
     p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
 )::Ray
     @assert norm(p0.n) ≈ 1f0
+    direction = p1.p - p0.p
+    # origin = p0.p .+ δ .* direction
     origin = p0.p .+ δ .* p0.n
-    Ray(o=origin, d=p1.p - p0.p, time=p0.time)
+    Ray(o=origin, d=direction, time=p0.time)
 end
 @inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
     spawn_ray(p0.core, p1)
@@ -176,6 +178,7 @@ end
     si::SurfaceInteraction, direction::Vec3f0, δ::Float32 = 1f-6,
 )::Ray
     @assert norm(si.core.n) ≈ 1f0
+    # origin = si.core.p .+ δ .* direction
     origin = si.core.p .+ δ .* si.core.n
     Ray(o=origin, d=direction, time=si.core.time)
 end
@@ -208,5 +211,32 @@ include("integrators/sampler.jl")
 - AnimatedTransform, AnimatedBounds
 - Medium & add it to structs
 """
+
+
+# s = Sphere(ShapeCore(translate(Vec3f0(0, 0, -2.95)), false), 0.01f0, 360f0)
+# p = GeometricPrimitive(s)
+# bvh = BVHAccel([p], 1,)
+
+
+# b = Bounds3(Point3f0(-0.01, -0.01, -2.96), Point3f0(0.01, 0.01, -2.94))
+
+# r = Ray(o=Point3f0(1f-8, 0, -2.940001f0), d=Vec3f0(0, -0, -1))
+# inv_dir = 1f0 ./ r.d
+# inv_dir = inv_dir .* Point3f0(1, -1, 1)
+# dir_is_neg = r.d |> is_dir_negative
+
+# @info r.o, r.d, inv_dir, dir_is_neg
+# @info intersect_p(b, r, inv_dir, dir_is_neg)
+
+# hit, t, si = intersect(s, r)
+# @info hit
+# @info t
+# @info si.core.p
+
+# @info intersect_p(bvh, r)
+
+# hit, si = intersect!(bvh, r)
+# @info hit
+# @info si.core.p
 
 end

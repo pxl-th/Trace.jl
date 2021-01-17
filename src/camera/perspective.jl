@@ -88,6 +88,7 @@ function generate_ray(
     # Compute raster & camera sample positions.
     p_film = Point3f0(sample.film[1], sample.film[2], 0f0)
     p_camera = p_film |> camera.core.raster_to_camera
+    # p_camera = Vec3f0(0, 0, -1)
 
     ray = Ray(o=Point3f0(0), d=p_camera |> Vec3f0 |> normalize)
     # Modify ray for depth of field.

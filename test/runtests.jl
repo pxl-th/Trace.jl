@@ -6,12 +6,7 @@ using FileIO
 using ImageCore
 
 include("test_intersection.jl")
-
-function check_scene_average(scene_file::String, target::Float32)
-    scene = scene_file |> load |> channelview
-    average = sum(scene) / length(scene)
-    @test average ≈ target
-end
+include("test_materials.jl")
 
 @testset "Test Bounds2 iteration" begin
     b = Trace.Bounds2(Point2f0(1f0, 3f0), Point2f0(4f0, 4f0))
@@ -137,57 +132,6 @@ end
     end
 end
 
-@testset "Fresnel Dielectric" begin
-    # Vacuum gives no reflectance.
-    @test Trace.fresnel_dielectric(1f0, 1f0, 1f0) ≈ 0f0
-    @test Trace.fresnel_dielectric(0.5f0, 1f0, 1f0) ≈ 0f0
-    # Vacuum-diamond -> total reflection.
-    @test Trace.fresnel_dielectric(cos(π / 4f0), 1f0, 2.42f0) ≈ 1f0
-end
-
-@testset "Fresnel Conductor" begin
-    s = Trace.RGBSpectrum(1f0)
-    @test Trace.fresnel_conductor(0f0, s, s, s) == s
-    @test all(Trace.fresnel_conductor(cos(π / 4f0), s, s, s).c .> 0f0)
-    @test all(Trace.fresnel_conductor(1f0, s, s, s).c .> 0f0)
-end
-
-@testset "SpecularReflection" begin
-    sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FresnelNoOp())
-    @test sr & Trace.BSDF_REFLECTION
-    @test sr & Trace.BSDF_SPECULAR
-    @test sr & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION)
-end
-
-@testset "SpecularTransmission" begin
-    st = Trace.SpecularTransmission(
-        Trace.RGBSpectrum(1f0), 1f0, 1f0,
-        Trace.FresnelDielectric(1f0, 1f0),
-        Trace.Radiance,
-    )
-    @test st & Trace.BSDF_SPECULAR
-    @test st & Trace.BSDF_TRANSMISSION
-    @test st & (Trace.BSDF_SPECULAR | Trace.BSDF_TRANSMISSION)
-end
-
-@testset "FresnelSpecular" begin
-    f = Trace.FresnelSpecular(
-        Trace.RGBSpectrum(1f0), Trace.RGBSpectrum(1f0),
-        1f0, 1f0, Trace.Radiance,
-    )
-    @test f & Trace.BSDF_SPECULAR
-    @test f & Trace.BSDF_TRANSMISSION
-    @test f & Trace.BSDF_REFLECTION
-    @test f & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION | Trace.BSDF_TRANSMISSION)
-
-    wo = Vec3f0(0, 0, 1)
-    u = Point2f0(0, 0)
-    wi, pdf, bxdf_value, sampled_type = Trace.sample_f(f, wo, u)
-    @test wi ≈ -wo
-    @test pdf ≈ 1f0
-    @test sampled_type == Trace.BSDF_SPECULAR | Trace.BSDF_TRANSMISSION
-end
-
 @testset "Perspective Camera" begin
     filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
     film = Trace.Film(
@@ -224,39 +168,3 @@ end
     @test ray_differential.ry_direction[1] ≈ ray_differential.d[1]
     @test ray_differential.ry_direction[2] > ray_differential.d[2]
 end
-
-# @testset "Analytic scene" begin
-#     # Unit sphere, Kd = 0.5, point light I = π at center
-#     # With GI, should have radiance of 1.
-#     material = Trace.MatteMaterial(
-#         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
-#         Trace.ConstantTexture(0f0),
-#     )
-#     core = Trace.ShapeCore(Trace.Transformation(), true)
-#     sphere = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
-#     primitive = Trace.GeometricPrimitive(sphere, material)
-#     bvh = Trace.BVHAccel([primitive])
-
-#     lights = [Trace.PointLight(
-#         Trace.Transformation(), Trace.RGBSpectrum(Float32(π)),
-#     )]
-#     scene = Trace.Scene(lights, bvh)
-#     # Construct Film and Camera.
-#     resolution = Point2f0(10f0, 10f0)
-#     filter = Trace.LanczosSincFilter(Point2f0(4f0), 3f0)
-#     scene_file = "test-output.png"
-#     film = Trace.Film(
-#         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
-#         filter, 1f0, 1f0, scene_file,
-#     )
-#     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
-#     camera = Trace.PerspectiveCamera(
-#         Trace.Transformation(), screen, 0f0, 1f0, 0f0, 10f0, 45f0, film,
-#     )
-
-#     sampler = Trace.UniformSampler(1)
-#     integrator = Trace.WhittedIntegrator(camera, sampler, 1)
-#     scene |> integrator
-
-#     check_scene_average(scene_file, 1f0)
-# end
