@@ -22,6 +22,12 @@ end
     RayDifferentials(o=r.o, d=r.d, t_max=r.t_max, time=r.time)
 end
 
+@inline function set_direction!(r::AbstractRay, d::Vec3f0)
+    r.d = Vec3f0([i ≈ 0f0 ? 0f0 : i for i in d])
+end
+
+@inline check_direction!(r::AbstractRay) = set_direction!(r, r.d)
+
 function (r::Union{Ray, RayDifferentials})(t::Number)
     r.o + r.d * t
 end

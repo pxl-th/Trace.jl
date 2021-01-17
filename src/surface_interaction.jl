@@ -140,11 +140,10 @@ at the point.
 """
 function compute_scattering!(
     si::SurfaceInteraction, ray::RayDifferentials,
-    allow_multiple_lobes::Bool = false,
-    transport_mode::TransportMode = Radiance(),
-)
+    allow_multiple_lobes::Bool = false, ::Type{T} = Radiance,
+) where T <: TransportMode
     compute_differentials!(si, ray)
-    compute_scattering!(si.primitive, si, allow_multiple_lobes, transport_mode)
+    compute_scattering!(si.primitive, si, allow_multiple_lobes, T)
 end
 
 @inline function le(si::SurfaceInteraction, w::Vec3f0)::RGBSpectrum

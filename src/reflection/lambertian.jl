@@ -75,13 +75,13 @@ function sample_f(
 ) where S <: Spectrum
     wi = sample |> cosine_sample_hemisphere
     # Flipping the direction if necessary.
-    wo[3] > 0 && (wi[3] *= -1)
+    wo[3] > 0 && (wi = Vec3f0(wi[1], wi[2], -wi[3]);)
     pdf = compute_pdf(b, wo, wi)
-    wi, pdf, b(wo, wi)
+    wi, pdf, b(wo, wi), nothing
 end
 
 @inline function compute_pdf(
     ::LambertianTransmission, wo::Vec3f0, wi::Vec3f0,
 )::Float32
-    !same_hemisphere(wo, wi) ? abs(cos_θ(wi)) * (1f0 / π) : 0
+    !same_hemisphere(wo, wi) ? abs(cos_θ(wi)) * (1f0 / π) : 0f0
 end

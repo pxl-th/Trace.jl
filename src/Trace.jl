@@ -166,8 +166,9 @@ end
     p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
 )::Ray
     @assert norm(p0.n) ≈ 1f0
-    origin = p0.p .+ δ .* p0.n
-    Ray(o=origin, d=p1.p - p0.p, time=p0.time)
+    direction = p1.p - p0.p
+    origin = p0.p .+ δ .* direction
+    Ray(o=origin, d=direction, time=p0.time)
 end
 @inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
     spawn_ray(p0.core, p1)
@@ -176,7 +177,7 @@ end
     si::SurfaceInteraction, direction::Vec3f0, δ::Float32 = 1f-6,
 )::Ray
     @assert norm(si.core.n) ≈ 1f0
-    origin = si.core.p .+ δ .* si.core.n
+    origin = si.core.p .+ δ .* direction
     Ray(o=origin, d=direction, time=si.core.time)
 end
 

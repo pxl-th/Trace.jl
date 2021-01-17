@@ -217,6 +217,7 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
     interaction::Maybe{SurfaceInteraction} = nothing
     length(bvh.nodes) == 0 && return hit, interaction
 
+    ray |> check_direction!
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = ray.d |> is_dir_negative
 

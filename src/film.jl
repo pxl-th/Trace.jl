@@ -134,7 +134,6 @@ function add_sample!(
     t::FilmTile, point::Point2f0, spectrum::S,
     sample_weight::Float32 = 1f0,
 ) where S <: Spectrum
-    # @info "Adding sample $spectrum at $point point"
     # Compute sample's raster bounds.
     discrete_point = point .- 0.5f0
     p0 = ceil.(discrete_point .- t.filter_radius)

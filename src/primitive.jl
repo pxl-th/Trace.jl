@@ -28,10 +28,8 @@ end
 
 function compute_scattering!(
     p::GeometricPrimitive, si::SurfaceInteraction,
-    allow_multiple_lobes::Bool, transport_mode::TransportMode,
-)
-    !(p.material isa Nothing) && p.material(
-        si, allow_multiple_lobes, transport_mode,
-    )
+    allow_multiple_lobes::Bool, ::Type{T},
+) where T <: TransportMode
+    !(p.material isa Nothing) && p.material(si, allow_multiple_lobes, T)
     @assert (si.core.n ⋅ si.shading.n) ≥ 0f0
 end

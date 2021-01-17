@@ -35,8 +35,7 @@ function sample_f(
     s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
 ) where {S <: Spectrum, F <: Fresnel}
     wi = Vec3f0(-wo[1], -wo[2], wo[3])
-    pdf = 1f0
-    wi, pdf, s.fresnel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
+    wi, 1f0, s.fresnel(cos_θ(wi)) * s.r / abs(cos_θ(wi)), nothing
 end
 
 struct SpecularTransmission{S <: Spectrum, T <: TransportMode} <: BxDF
@@ -56,10 +55,13 @@ struct SpecularTransmission{S <: Spectrum, T <: TransportMode} <: BxDF
     type::UInt8
 
     function SpecularTransmission(
-        t::S, η_a::Float32, η_b::Float32, fresnel::FresnelDielectric,
-        ::Type{T}
+        t::S, η_a::Float32, η_b::Float32, ::Type{T}
     ) where {S <: Spectrum, T <: TransportMode}
-        new{S, T}(t, η_a, η_b, fresnel, BSDF_SPECULAR | BSDF_TRANSMISSION)
+        new{S, T}(
+            t, η_a, η_b,
+            FresnelDielectric(η_a, η_b),
+            BSDF_SPECULAR | BSDF_TRANSMISSION,
+        )
     end
 end
 
@@ -90,14 +92,15 @@ function sample_f(
     valid, wi = refract(
         wo, face_forward(Normal3f0(0f0, 0f0, 1f0), wo), η_i / η_t,
     )
-    !valid && return Vec3f0(0f0), 0f0, S(0f0) # Total internal reflection.
+    # Total internal reflection.
+    !valid && return Vec3f0(0f0), 0f0, S(0f0), nothing
     pdf = 1f0
 
     cos_wi = wi |> cos_θ
     ft = s.t * (S(1f0) - s.fresnel(cos_wi))
     # Account for non-symmetry with transmission to different medium.
     T isa Radiance && (ft *= (η_i ^ 2) / (η_t ^ 2))
-    wi, pdf, ft / abs(cos_wi)
+    wi, pdf, ft / abs(cos_wi), nothing
 end
 
 
@@ -133,7 +136,7 @@ end
     S(0f0)
 end
 
-@inline pdf(f::FresnelSpecular, wo::Vec3f0, wi::Vec3f0)::Float32 = 0f0
+@inline compute_pdf(f::FresnelSpecular, wo::Vec3f0, wi::Vec3f0)::Float32 = 0f0
 
 """
 Compute the direction of incident light wi, given an outgoing direction wo
@@ -151,21 +154,20 @@ function sample_f(
 
     # Figure out which η is incident and which is transmitted.
     if cos_θ(wo) > 0
-        η_i = f.η_a
-        η_t = f.η_b
+        η_i, η_t = f.η_a, f.η_b
     else
-        η_i = f.η_b
-        η_t = f.η_a
+        η_i, η_t = f.η_b, f.η_a
     end
     # Compute ray direction for specular transmission.
     refracted, wi = refract(
-        wo, face_forward(Normal3f0(0, 0, 1), wo), η_i / η_t,
+        wo, face_forward(Normal3f0(0f0, 0f0, 1f0), wo), η_i / η_t,
     )
-    !refracted && return wi, fd, 0, nothing
+    !refracted && return wi, fd, 0f0, nothing
 
-    ft = f.t * (1 - fd)
+    pdf = 1f0 - fd
+    ft = f.t * pdf
     # Account for non-symmetry with transmission to different medium.
     T isa Radiance && (ft *= (η_i ^ 2) / (η_t ^ 2))
     sampled_type = BSDF_SPECULAR | BSDF_TRANSMISSION
-    wi, 1f0 - fd, ft / abs(cos_θ(wi)), sampled_type
+    wi, pdf, ft / abs(cos_θ(wi)), sampled_type
 end
