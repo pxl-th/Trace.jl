@@ -2,8 +2,6 @@
     # Vacuum gives no reflectance.
     @test Trace.fresnel_dielectric(1f0, 1f0, 1f0) ≈ 0f0
     @test Trace.fresnel_dielectric(0.5f0, 1f0, 1f0) ≈ 0f0
-    # Vacuum-diamond -> total reflection.
-    @test Trace.fresnel_dielectric(cos(π / 4f0), 1f0, 2.42f0) ≈ 1f0
 end
 
 @testset "Fresnel Conductor" begin
@@ -15,8 +13,6 @@ end
 
 @testset "SpecularReflection" begin
     sr = Trace.SpecularReflection(Trace.RGBSpectrum(1f0), Trace.FresnelNoOp())
-    @test sr & Trace.BSDF_REFLECTION
-    @test sr & Trace.BSDF_SPECULAR
     @test sr & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION)
 end
 
