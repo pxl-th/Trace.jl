@@ -78,15 +78,10 @@ function (g::GlassMaterial)(
     η = si |> g.index
     u_roughness = si |> g.u_roughness
     v_roughness = si |> g.v_roughness
-    # println("=== Glass Material ===")
-    # println("\t- η $η")
-    # println("\t- UV roughness $u_roughness, $v_roughness")
 
     si.bsdf = BSDF(si, η)
     r = si |> g.Kr |> clamp
     t = si |> g.Kt |> clamp
-    # println("\t- R $r")
-    # println("\t- T $t")
     is_black(r) && is_black(t) && return
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
@@ -106,19 +101,15 @@ function (g::GlassMaterial)(
     if !is_black(r)
         fresnel = FresnelDielectric(1f0, η)
         if is_specular
-            # println("\t+ Adding SpecularReflection")
             add!(si.bsdf, SpecularReflection(r, fresnel))
         else
-            # println("\t+ Adding MicrofacetReflection")
             add!(si.bsdf, MicrofacetReflection(r, distribution, fresnel, T))
         end
     end
     if !is_black(t)
         if is_specular
-            # println("\t+ Adding SpecularTransmission")
             add!(si.bsdf, SpecularTransmission(t, 1f0, η, T))
         else
-            # println("\t+ Adding MicrofacetTransmission")
             add!(si.bsdf, MicrofacetTransmission(t, distribution, 1f0, η, T))
         end
     end

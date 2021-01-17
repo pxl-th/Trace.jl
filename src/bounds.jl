@@ -184,8 +184,6 @@ function intersect_p(
     tz_max = (b[3 - dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
     (tx_min > tz_max || tz_min > tx_max) && return false
 
-    # (isnan(tx_min) || tz_min > tx_min) && (tx_min = tz_min;)
-    # (isnan(tx_max) || tz_max < tx_max) && (tx_max = tz_max;)
     (tz_min > tx_min) && (tx_min = tz_min;)
     (tz_max < tx_max) && (tx_max = tz_max;)
     tx_min < ray.t_max && tx_max > 0

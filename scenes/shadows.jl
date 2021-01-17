@@ -17,6 +17,20 @@ function render()
     mirror = Trace.MirrorMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 1f0, 1f0)),
     )
+    glass = Trace.GlassMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
+        Trace.ConstantTexture(0f0),
+        Trace.ConstantTexture(0f0),
+        Trace.ConstantTexture(1.5f0),
+        true,
+    )
+
+    core = Trace.ShapeCore(
+        Trace.translate(Vec3f0(0.02, -0.01, -2.83)), false,
+    )
+    sphere = Trace.Sphere(core, 0.007f0, 360f0)
+    primitive = Trace.GeometricPrimitive(sphere, glass)
 
     core2 = Trace.ShapeCore(
         Trace.translate(Vec3f0(0.01, 0.002, -2.97)), false,
@@ -48,6 +62,7 @@ function render()
     triangle_primitive2 = Trace.GeometricPrimitive(triangles[2], material_white)
 
     bvh = Trace.BVHAccel([
+        primitive,
         primitive2,
         primitive3,
         primitive4,
@@ -64,7 +79,7 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(64)
+    resolution = Point2f0(1024)
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
@@ -77,8 +92,8 @@ function render()
         screen, 0f0, 1f0, 0f0, 10f6, 90f0, film,
     )
 
-    sampler = Trace.UniformSampler(1)
-    integrator = Trace.WhittedIntegrator(camera, sampler, 4)
+    sampler = Trace.UniformSampler(8)
+    integrator = Trace.WhittedIntegrator(camera, sampler, 8)
     scene |> integrator
 end
 

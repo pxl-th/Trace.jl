@@ -213,7 +213,6 @@ end
 end
 
 function intersect!(bvh::BVHAccel, ray::AbstractRay)
-    # println("BVH! ray $(ray.o) -> $(ray.d), $(ray.t_max)")
     hit = false
     interaction::Maybe{SurfaceInteraction} = nothing
     length(bvh.nodes) == 0 && return hit, interaction
@@ -221,21 +220,16 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
     ray |> check_direction!
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = ray.d |> is_dir_negative
-    # println("\t- $inv_dir, $dir_is_neg")
 
     to_visit_offset, current_node_i = 1, 1
     nodes_to_visit = zeros(Int32, 64)
 
     while true
         ln = bvh.nodes[current_node_i]
-        # println("\t- ln.bounds $(ln.bounds)")
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
-            # println("\t- intersects_p")
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
-                # println("\t- poffset $(ln.primitives_offset)")
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives - 1
-                    println("\t\t- $(typeof(bvh.primitives[ln.primitives_offset + i]))")
                     tmp_hit, tmp_interaction = intersect!(
                         bvh.primitives[ln.primitives_offset + i], ray,
                     )

@@ -7,7 +7,6 @@ const BSDF_SPECULAR     = 0b10000 |> UInt8
 const BSDF_ALL          = 0b11111 |> UInt8
 
 function Base.:&(b::B, type::UInt8)::Bool where B <: BxDF
-    # (b.type & type) != 0
     (b.type & type) == b.type
 end
 

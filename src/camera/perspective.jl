@@ -88,7 +88,6 @@ function generate_ray(
     # Compute raster & camera sample positions.
     p_film = Point3f0(sample.film[1], sample.film[2], 0f0)
     p_camera = p_film |> camera.core.raster_to_camera
-    # p_camera = Vec3f0(0, 0, -1)
 
     ray = Ray(o=Point3f0(0), d=p_camera |> Vec3f0 |> normalize)
     # Modify ray for depth of field.
@@ -109,9 +108,7 @@ function generate_ray(
         sample.time,
     )
     # TODO add medium
-    # println("Camer Ray: $(ray.o) -> $(ray.d)")
     ray = ray |> camera.core.core.camera_to_world
     ray.d = ray.d |> normalize
-    # println("World Ray: $(ray.o) -> $(ray.d)")
     ray, 1f0
 end

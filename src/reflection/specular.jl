@@ -34,7 +34,6 @@ and return the value of BxDF for the pair of directions.
 function sample_f(
     s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
 ) where {S <: Spectrum, F <: Fresnel}
-    # println("[xxx] BxDF SpecularReflection")
     wi = Vec3f0(-wo[1], -wo[2], wo[3])
     wi, 1f0, s.fresnel(cos_θ(wi)) * s.r / abs(cos_θ(wi)), nothing
 end
@@ -85,35 +84,22 @@ and return the value of BxDF for the pair of directions.
 function sample_f(
     s::SpecularTransmission{S, T}, wo::Vec3f0, sample::Point2f0,
 ) where {S <: Spectrum, T <: TransportMode}
-    # println("BxDF SpecularTransmission")
-    # println("\t- wo $wo")
     # Figure out which η is incident and which is transmitted.
     entering = cos_θ(wo) > 0
     η_i = entering ? s.η_a : s.η_b
     η_t = entering ? s.η_b : s.η_a
-    # println("\t- η_i $η_i, η_t $η_t")
     # Compute ray direction for specular transmission.
     valid, wi = refract(
         wo, face_forward(Normal3f0(0f0, 0f0, 1f0), wo), η_i / η_t,
     )
-    # println("\t- valid refraction $valid")
-    # println("\t- wi $wi")
     # Total internal reflection.
-    # !valid && println("[x] SpecularTransmission total internal reflection")
     !valid && return Vec3f0(0f0), 0f0, S(0f0), nothing
     pdf = 1f0
 
-    # println("SpecularTransmission")
     cos_wi = wi |> cos_θ
     ft = s.t * (S(1f0) - s.fresnel(cos_wi))
-    # println("\t- cos_wi $cos_wi")
-    # println("\t- fesnel cos_wi $(s.fresnel(cos_wi))")
-    # println("\t- ft $ft")
     # Account for non-symmetry with transmission to different medium.
     T isa Radiance && (ft *= (η_i ^ 2) / (η_t ^ 2))
-    # println("\t- wi $wi")
-    # println("\t- pdf $pdf")
-    # println("\t- $(ft / abs(cos_wi))")
     wi, pdf, ft / abs(cos_wi), nothing
 end
 

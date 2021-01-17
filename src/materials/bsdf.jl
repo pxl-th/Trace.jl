@@ -83,17 +83,14 @@ function (b::BSDF)(
     wo = world_to_local(b, wo_world)
     # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
-    # println("BSDF reflect $reflect")
 
     output = RGBSpectrum(0f0)
     for i in 1:b.n_bxdfs
         bxdf = b.bxdfs[i]
-        # TODO check if flags match with reflect
-        if ((bxdf.type & flags == bxdf.type) && (
-            (reflect && (bxdf & BSDF_REFLECTION)) ||
-            (!reflect && (bxdf & BSDF_TRANSMISSION))
+        if ((bxdf & flags) && (
+            (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
+            (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
         ))
-            # TODO check angles
             output += bxdf(wo, wi)
         end
     end
@@ -110,8 +107,6 @@ function sample_f(
 )::Tuple{Vec3f0, RGBSpectrum, Float32, UInt8}
     # Choose which BxDF to sample.
     matching_components = num_components(b, type)
-    # println("BSDF")
-    # println("\t- matching components $matching_components")
     matching_components == 0 && return (
         Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
@@ -130,7 +125,6 @@ function sample_f(
         end
     end
     @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
-    # println("[!] Matched BxDF $(typeof(bxdf)) $(bitstring(type)) & $(bitstring(bxdf.type))")
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f0(
         min(u[1] * matching_components - component, 1f0),
