@@ -29,18 +29,15 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
             # TODO check if pixel is inside pixel bounds
             while i.sampler |> has_next_sample
                 camera_sample = get_camera_sample(i.sampler, pixel)
-                # camera_sample = CameraSample(Point2f0(0), Point2f0(0), 0f0)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
                 scale_differentials!(
                     ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
                 )
-                # println("Casting ray: $(ray.o) -> $(ray.d)")
 
                 l = RGBSpectrum(0f0)
                 ω > 0f0 && (l = li(i, ray, scene, 1);)
                 # TODO check l for invalid values
                 isnan(l) && (l = RGBSpectrum(0f0);)
-                # exit()
 
                 add_sample!(film_tile, camera_sample.film, l, ω)
                 i.sampler |> start_next_sample!
@@ -54,8 +51,6 @@ end
 function li(
     i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
 )::RGBSpectrum
-    # println("Integrator LI [depth=$depth]")
-    # println("\t- ray $(ray.o) -> $(ray.d)")
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
     hit, surface_interaction = intersect!(scene, ray)
@@ -63,10 +58,8 @@ function li(
         for light in scene.lights
             l += le(light, ray)
         end
-        # println("\t[x] no hit")
         return l
     end
-    # println("\t- hit at $(surface_interaction.core.p) from $(surface_interaction.core.wo) direction")
     # Compute emmited & reflected light at ray intersection point.
     # Initialize common variables for Whitted integrator.
     n = surface_interaction.shading.n
@@ -88,7 +81,6 @@ function li(
         )
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
-        # println("\t- BSDF f $f, unoccluded $(unoccluded(visibility_tester, scene))")
         if !is_black(f) && unoccluded(visibility_tester, scene)
             l += f * sampled_li * abs(wi ⋅ n) / pdf
         end
@@ -98,7 +90,6 @@ function li(
         l += specular_reflect(i, ray, surface_interaction, scene, depth)
         l += specular_transmit(i, ray, surface_interaction, scene, depth)
     end
-    # println("[♥ | depth=$depth] return l=$l")
     l
 end
 
@@ -152,16 +143,9 @@ function specular_transmit(
     wi, f, pdf, sampled_type = sample_f(
         surface_intersect.bsdf, wo, i.sampler |> get_2d, type,
     )
-    # println("Specular transmit [depth=$depth]:")
-    # println("\t- wo $wo")
-    # println("\t- wi $wi")
-    # println("\t- pdf $pdf")
-    # println("\t- f $f")
 
     ns = surface_intersect.shading.n
-    # println("\t- abs(wi ⋅ ns) $(abs(wi ⋅ ns))")
     if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
-        # println("\t[x] Specular transmit return black")
         return RGBSpectrum(0f0)
     end
     # TODO shift in ray direction instead of normal?
