@@ -217,5 +217,5 @@ function save(film::Film, splat_scale::Float32 = 1f0)
         image[y, x, :] .*= film.scale
     end
     clamp!(image, 0f0, 1f0) # TODO remap instead of clamping?
-    FileIO.save(film.filename, image)
+    FileIO.save(film.filename, image[end:-1:begin, :, :])
 end

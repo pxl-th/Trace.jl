@@ -29,6 +29,9 @@ function Base.getindex(b::Union{Bounds2, Bounds3}, i::Integer)
     i == 2 && return b.p_max
     error("Invalid index `$i`. Only `1` & `2` are valid.")
 end
+function is_valid(b::Bounds3)::Bool
+    all(b.p_min .!= Inf32) && all(b.p_max .!= -Inf32)
+end
 
 function Base.length(b::Bounds2)::Int64
     δ = ceil.(b.p_max .- b.p_min .+ 1f0)
