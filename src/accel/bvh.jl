@@ -196,9 +196,7 @@ function _unroll(
     end
 
     _unroll(linear_nodes, node.children[1], offset)
-    second_child_offset = _unroll(
-        linear_nodes, node.children[2], offset,
-    ) - 1
+    second_child_offset = _unroll(linear_nodes, node.children[2], offset) - 1
     linear_nodes[l_offset] = LinearBVHInterior(
         node.bounds, second_child_offset, node.split_axis,
     )
