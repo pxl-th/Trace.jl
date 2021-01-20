@@ -61,14 +61,14 @@ function render()
         ],
         6,
         [
-            Point3f0(0, 0, 0), Point3f0(0, 0, -1), Point3f0(1, 0, -1), Point3f0(1, 0, 0),
+            Point3f0(0, 0, 0), Point3f0(0, 0, -1),
+            Point3f0(1, 0, -1), Point3f0(1, 0, 0),
             Point3f0(0, 1, -1), Point3f0(1, 1, -1),
         ],
         [
-            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
-            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
-            Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
-            Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
+            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
+            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
+            Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
         ],
     )
     triangle_primitive = Trace.GeometricPrimitive(triangles[1], material_white)
