@@ -65,7 +65,7 @@ function Base.intersect(b1::B, b2::B) where B <: Union{Bounds2, Bounds3}
 end
 
 function overlaps(b1::Bounds3, b2::Bounds3)
-    map((a, b) -> a && b, b1.p_max .>= b2.p_min, b1.p_min .<= b2.p_max) |> all
+    all(b1.p_max .>= b2.p_min) && all(b1.p_min .<= b2.p_max)
 end
 
 function inside(b::Bounds3, p::Point3f0)

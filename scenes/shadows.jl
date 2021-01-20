@@ -96,7 +96,7 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(128)
+    resolution = Point2f0(1024)
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),

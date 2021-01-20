@@ -183,7 +183,6 @@ end
 function ∂n(t::Triangle, uv::Vector{Point2f0})::Tuple{Normal3f0, Normal3f0}
     t.mesh.normals isa Nothing && return Normal3f0(0), Normal3f0(0)
     t_normals = t |> normals
-    # normals = [t.mesh.normals[t.i + j] for j in 0:2]
     # Compute deltas for partial detivatives of normal.
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
     δn_13, δn_23 = t_normals[1] - t_normals[3], t_normals[2] - t_normals[3]
