@@ -61,14 +61,14 @@ function render()
         ],
         6,
         [
-            Point3f0(0, 0, 0), Point3f0(0, 0, -1), Point3f0(1, 0, -1), Point3f0(1, 0, 0),
+            Point3f0(0, 0, 0), Point3f0(0, 0, -1),
+            Point3f0(1, 0, -1), Point3f0(1, 0, 0),
             Point3f0(0, 1, -1), Point3f0(1, 1, -1),
         ],
         [
-            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
-            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
-            Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
-            Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
+            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
+            Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
+            Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
         ],
     )
     triangle_primitive = Trace.GeometricPrimitive(triangles[1], material_white)
@@ -96,7 +96,7 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(1024)
+    resolution = Point2f0(128)
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),

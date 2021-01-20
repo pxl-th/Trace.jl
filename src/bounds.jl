@@ -69,11 +69,11 @@ function overlaps(b1::Bounds3, b2::Bounds3)
 end
 
 function inside(b::Bounds3, p::Point3f0)
-    map((a, b) -> a && b, p .>= b.p_min, p .<= b.p_max) |> all
+    all(p .>= b.p_min) && all(p .<= b.p_max)
 end
 
 function inside_exclusive(b::Bounds3, p::Point3f0)
-    map((a, b) -> a && b, p .>= b.p_min, p .< b.p_max) |> all
+    all(p .>= b.p_min) && all(p .< b.p_max)
 end
 
 expand(b::Bounds3, δ::Float32) = Bounds3(b.p_min .- δ, b.p_max .+ δ)

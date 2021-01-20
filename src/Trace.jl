@@ -1,5 +1,6 @@
 module Trace
 
+import Assimp
 import FileIO
 using Parameters: @with_kw
 using LinearAlgebra

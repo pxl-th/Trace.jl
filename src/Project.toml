@@ -1,0 +1,3 @@
+[deps]
+Assimp = "079381af-6941-5802-8ad5-fb13e7f1c93a"
+assimp_win_jll = "fe2041e4-48f9-56de-9ac5-7523ba92ef05"
