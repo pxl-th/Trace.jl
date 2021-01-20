@@ -2,7 +2,7 @@ using GeometryBasics
 using Trace
 
 function render()
-    model = raw"C:\Users\tonys\projects\pbrt-v3-scenes\caustic-glass\geometry\mesh_00001.ply"
+    model = raw"./scenes/models/caustic-glass.ply"
 
     red = Trace.MatteMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 0f0, 0f0)),
