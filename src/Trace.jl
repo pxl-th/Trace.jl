@@ -2,10 +2,11 @@ module Trace
 
 import Assimp
 import FileIO
+using GeometryBasics
 using Parameters: @with_kw
 using LinearAlgebra
 using StaticArrays
-using GeometryBasics
+using ProgressMeter
 
 GeometryBasics.@fixed_vector Normal StaticVector
 const Normal3f0 = Normal{3, Float32}
