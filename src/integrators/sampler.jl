@@ -17,21 +17,28 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
     n_tiles::Point2 = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
 
     # TODO visualize tile bounds to see if they overlap
-    for y in 0:n_tiles[2] - 1, x in 0:n_tiles[1] - 1
+    width, height = n_tiles
+    total_tiles = width * height - 1
+    bar = Progress(total_tiles, 1)
+
+    @info "Utilizing $(Threads.nthreads()) threads"
+    Threads.@threads for k in 0:total_tiles
+        x, y = k % width, k ÷ width
         tile = Point2f0(x, y)
+        t_sampler = i.sampler |> deepcopy
+
         tb_min = sample_bounds.p_min .+ tile .* tile_size
         tb_max = min.(tb_min .+ tile_size, sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
 
         film_tile = FilmTile(i.camera |> get_film, tile_bounds)
         for pixel in tile_bounds
-            start_pixel!(i.sampler, pixel)
-            # TODO check if pixel is inside pixel bounds
-            while i.sampler |> has_next_sample
-                camera_sample = get_camera_sample(i.sampler, pixel)
+            start_pixel!(t_sampler, pixel)
+            while t_sampler |> has_next_sample
+                camera_sample = get_camera_sample(t_sampler, pixel)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
                 scale_differentials!(
-                    ray, 1f0 / √Float32(i.sampler.samples_per_pixel),
+                    ray, 1f0 / √Float32(t_sampler.samples_per_pixel),
                 )
 
                 l = RGBSpectrum(0f0)
@@ -40,10 +47,11 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
                 isnan(l) && (l = RGBSpectrum(0f0);)
 
                 add_sample!(film_tile, camera_sample.film, l, ω)
-                i.sampler |> start_next_sample!
+                t_sampler |> start_next_sample!
             end
         end
         merge_film_tile!(i.camera |> get_film, film_tile)
+        bar |> next!
     end
     i.camera |> get_film |> save
 end
