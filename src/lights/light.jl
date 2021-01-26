@@ -16,14 +16,7 @@ end
 
 function unoccluded(t::VisibilityTester, scene::Scene)::Bool
     ray = spawn_ray(t.p0, t.p1)
-    # @show "ray $(ray.o), $(ray.d)"
-    hit = !intersect_p(scene, ray)
-    # hito, si = intersect!(scene, ray)
-    # hito = !hito
-    # if hit != hito
-    #     @info "\t -> Occlusion point $(si.core.p)"
-    # end
-    hit
+    !intersect_p(scene, ray)
 end
 
 function trace(t::VisibilityTester, scene::Scene)::RGBSpectrum

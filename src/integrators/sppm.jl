@@ -121,6 +121,7 @@ function (i::SPPMIntegrator)(scene::Scene)
                     wo = -ray.d
                     if depth == 1 || specular_bounce
                         pixel.Ld += β * le(surface_interaction, wo)
+                    end
                     pixel.Ld += uniform_sample_one_light(
                         surface_interaction, scene, tile_sampler,
                     )
@@ -160,4 +161,57 @@ function (i::SPPMIntegrator)(scene::Scene)
         # Update pixel values from this pass's photons.
         # Periodically store SPPM image in film and save it.
     end
+end
+
+function uniform_sample_one_light(
+    i::SurfaceInteraction, scene::Scene, sampler::S,
+)::RGBSpectrum where S <: AbstractSampler
+    n_lights = scene.lights |> length
+    n_lights == 0 && return RGBSpectrum(0f0)
+
+    light_num = min(get_1d(sampler) * n_lights, n_lights)
+    light_pdf = 1f0 / n_lights
+
+    light = scene.lights[light_num]
+    u_light = sampler |> get_2d
+    u_scatter = sampler |> get_2d
+
+    estimate_direct(i, u_scatter, light, u_light, scene, sampler) / light_pdf
+end
+
+function estimate_direct(
+    interaction::SurfaceInteraction, u_scatter::Point2f0, light::L,
+    u_light::Point2f0, scene::Scene, sampler::S, specular::Bool = false,
+)::RGBSpectrum where {L <: Light, S <: AbstractSampler}
+    bsdf_flags = specular ? BSDF_ALL : (BSDF_ALL & ~BSDF_SPECULAR)
+    Ld = RGBSpectrum(0f0)
+    # Sample light source with multiple importance sampling.
+    Li, wi, light_pdf, visibility = sample_li(light, interaction.core, u_light)
+    scattering_pdf = 0
+    if light_pdf > 0 && !is_black(Li)
+        # Evaluate BSDF for light sampling strategy.
+        f = (
+            interaction.bsdf(interaction.core.wo, wi, bsdf_flags)
+            * abs(wi ⋅ interaction.shading.n)
+        )
+        # TODO implement compute_pdf for BSDF
+        scattering_pdf = compute_pdf(
+            interaction.bsdf, interaction.core.wo, wi, bsdf_flags,
+        )
+        if !is_black(f)
+            # Compute effect of visibility for light source sample.
+            !unoccluded(visibility, scene) && (Li = RGBSpectrum(0f0);)
+            if !is_black(Li)
+                if is_δ_light(light.flags) # TODO fix function
+                    Ld += f * Li / light_pdf
+                else
+                    weight = power_heuristic(1, light_pdf, 1, scattering_pdf)
+                    Ld += f * Li * weight / light_pdf
+                end
+            end
+        end
+    end
+    # TODO Sample BSDF with multiple importance sampling.
+    # This requires non-δ light sources.
+    Ld
 end

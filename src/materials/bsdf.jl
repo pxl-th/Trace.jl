@@ -79,8 +79,9 @@ function (b::BSDF)(
     wo_world::Vec3f0, wi_world::Vec3f0, flags::UInt8 = BSDF_ALL,
 )::RGBSpectrum
     # Transform world-space direction vectors to local BSDF space.
-    wi = world_to_local(b, wi_world)
     wo = world_to_local(b, wo_world)
+    wo[3] ≈ 0f0 && return RGBSpectrum(0f0)
+    wi = world_to_local(b, wi_world)
     # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
 
