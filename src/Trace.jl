@@ -10,8 +10,8 @@ using ProgressMeter
 
 GeometryBasics.@fixed_vector Normal StaticVector
 const Normal3f0 = Normal{3, Float32}
+const Maybe{T} = Union{T, Nothing}
 
-Maybe{T} = Union{T, Nothing}
 maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 abstract type AbstractRay end
@@ -21,6 +21,7 @@ abstract type Primitive end
 abstract type Light end
 abstract type Material end
 abstract type BxDF end
+abstract type Integrator end
 
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
@@ -202,6 +203,7 @@ include("lights/point.jl")
 include("lights/directional.jl")
 
 include("integrators/sampler.jl")
+include("integrators/sppm.jl")
 
 """ TODO
 - assert that t_max in intersect methods >= 0

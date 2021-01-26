@@ -8,6 +8,7 @@ struct Film
     resolution::Point2f0
     """
     Subset of the image to render, bounds are inclusive and start from 1.
+    Format: [x, y].
     """
     crop_bounds::Bounds2
     diagonal::Float32

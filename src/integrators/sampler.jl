@@ -1,4 +1,3 @@
-abstract type Integrator end
 abstract type SamplerIntegrator <: Integrator end
 
 struct WhittedIntegrator <: SamplerIntegrator
