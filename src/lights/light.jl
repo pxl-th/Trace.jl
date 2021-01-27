@@ -5,8 +5,8 @@
     LightInfinite   = 0b1000
 end
 
-@inline function is_δ_light(flag::UInt8)::Bool
-    flag & LightδPosition || flag & LightδDirection
+@inline function is_δ_light(flag::LightFlags)::Bool
+    flag == LightδPosition || flag == LightδDirection
 end
 
 struct VisibilityTester

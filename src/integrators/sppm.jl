@@ -46,7 +46,7 @@ struct SPPMIntegrator <: Integrator
     ) where C <: Camera
         photons_per_iteration = (
             photons_per_iteration > 0
-            ? photons_per_iteration : area(camera.film.crop_bounds)
+            ? photons_per_iteration : area(get_film(camera).crop_bounds)
         )
         new(
             camera, initial_search_radius, max_depth,
@@ -56,14 +56,13 @@ struct SPPMIntegrator <: Integrator
 end
 
 function (i::SPPMIntegrator)(scene::Scene)
-    pixel_bounds = i.camera.film.crop_bounds
-    n_pixels = pixel_bounds |> area
-    sides = pixel_bounds |> sides
+    pixel_bounds = get_film(i.camera).crop_bounds
+    b_sides = pixel_bounds |> inclusive_sides # TODO maybe regular sides?
     pixels = [
         SPPMPixel(radius=i.initial_search_radius)
-        for y in 1:sides[2], x in 1:sides[1]
+        for y in 1:b_sides[2], x in 1:b_sides[1]
     ]
-    inv_sqrt_spp = 1f0 / sqrt(i.n_iterations)
+    inv_sqrt_spp = 1f0 / sqrt(i.n_iterations) |> Float32
 
     pixel_extent = pixel_bounds |> diagonal
     tile_size = 16
@@ -73,7 +72,6 @@ function (i::SPPMIntegrator)(scene::Scene)
 
     width, height = n_tiles
     total_tiles = width * height - 1
-
     for iteration in 1:i.n_iterations
         # Generate visible SPPM points.
         for k in 0:total_tiles
@@ -134,7 +132,8 @@ function (i::SPPMIntegrator)(scene::Scene)
                     ) > 0
                     if is_diffuse || (is_glossy && depth == i.max_depth)
                         pixel.vp = VisiblePoint(
-                            p=surface_interaction.p, wo=wo, bsdf=bsdf, β=β,
+                            p=surface_interaction.core.p, wo=wo,
+                            bsdf=bsdf, β=β,
                         )
                         break
                     end
@@ -169,7 +168,7 @@ function uniform_sample_one_light(
     n_lights = scene.lights |> length
     n_lights == 0 && return RGBSpectrum(0f0)
 
-    light_num = min(get_1d(sampler) * n_lights, n_lights)
+    light_num = max(1, min(Int32(ceil(get_1d(sampler)) * n_lights), n_lights))
     light_pdf = 1f0 / n_lights
 
     light = scene.lights[light_num]
@@ -194,7 +193,6 @@ function estimate_direct(
             interaction.bsdf(interaction.core.wo, wi, bsdf_flags)
             * abs(wi ⋅ interaction.shading.n)
         )
-        # TODO implement compute_pdf for BSDF
         scattering_pdf = compute_pdf(
             interaction.bsdf, interaction.core.wo, wi, bsdf_flags,
         )
@@ -202,7 +200,7 @@ function estimate_direct(
             # Compute effect of visibility for light source sample.
             !unoccluded(visibility, scene) && (Li = RGBSpectrum(0f0);)
             if !is_black(Li)
-                if is_δ_light(light.flags) # TODO fix function
+                if is_δ_light(light.flags)
                     Ld += f * Li / light_pdf
                 else
                     weight = power_heuristic(1, light_pdf, 1, scattering_pdf)
@@ -214,4 +212,12 @@ function estimate_direct(
     # TODO Sample BSDF with multiple importance sampling.
     # This requires non-δ light sources.
     Ld
+end
+
+@inline function power_heuristic(
+    nf::Int64, f_pdf::Float32, ng::Int64, g_pdf::Float32,
+)
+    f = (nf * f_pdf) ^ 2
+    g = (ng * g_pdf) ^ 2
+    f / (f + g)
 end
