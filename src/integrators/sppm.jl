@@ -31,6 +31,18 @@ mutable struct SPPMPixel
     end
 end
 
+mutable struct SPPMPixelListNode
+    pixel::SPPMPixel
+    next::Maybe{SPPMPixelListNode}
+
+    function SPPMPixelListNode(
+        pixel::SPPMPixel = SPPMPixel(),
+        next::Maybe{SPPMPixelListNode} = nothing,
+    )
+        new(pixel, next)
+    end
+end
+
 struct SPPMIntegrator <: Integrator
     camera::C where C <: Camera
     initial_search_radius::Float32
@@ -58,6 +70,7 @@ end
 function (i::SPPMIntegrator)(scene::Scene)
     pixel_bounds = get_film(i.camera).crop_bounds
     b_sides = pixel_bounds |> inclusive_sides # TODO maybe regular sides?
+    n_pixels = b_sides[1] * b_sides[2]
     pixels = [
         SPPMPixel(radius=i.initial_search_radius)
         for y in 1:b_sides[2], x in 1:b_sides[1]
@@ -156,6 +169,26 @@ function (i::SPPMIntegrator)(scene::Scene)
             end
         end
         # Create grid of all SPPM visible points.
+        grid = SPPMPixelListNode[SPPMPixelListNode() for _ in 1:n_pixels]
+        grid_bounds = Bounds3()
+        # Compute grid bounds for SPPM visible points.
+        max_radius = 0f0
+        for pixel in pixels
+            is_black(pixel.vp.β) && continue
+            grid_bounds = (
+                grid_bounds ∪ expand(Bounds3(pixel.vp.p), pixel.radius)
+            )
+            max_radius = max(max_radius, pixel.radius)
+        end
+        # Compute resolution of SPPM grid in each dimension.
+        diag = grid_bounds |> diagonal
+        max_diag = diag |> maximum
+        base_grid_resolution = Int32(floor(max_diag / max_radius))
+        @assert base_grid_resolution > 0
+        grid_resolution = max.(
+            1, Int64.(floor.(base_grid_resolution .* diag ./ max_radius)),
+        )
+        # Add visible points to SPPM grid.
         # Trace photons and accumulate contributions.
         # Update pixel values from this pass's photons.
         # Periodically store SPPM image in film and save it.
