@@ -48,6 +48,15 @@ end
     Vec3f0(d[1], d[2], z)
 end
 
+@inline function uniform_sample_sphere(u::Point2f0)::Vec3f0
+    z = 1f0 - 2f0 * u[1]
+    r = √(max(0f0, 1f0 - z ^ 2))
+    ϕ = 2f0 * π * u[2]
+    Vec3f0(r * cos(ϕ), r * sin(ϕ), z)
+end
+
+@inline uniform_sphere_pdf()::Float32 = 1f0 / (4f0 * π)
+
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
 """
@@ -191,6 +200,7 @@ include("film.jl")
 include("reflection/Reflection.jl")
 
 include("camera/camera.jl")
+include("sampler/sampling.jl")
 include("sampler/sampler.jl")
 include("textures/mapping.jl")
 include("textures/basic.jl")

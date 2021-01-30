@@ -57,10 +57,19 @@ function sample_li(p::PointLight, ref::Interaction, ::Point2f0)
     radiance, wi, pdf, visibility
 end
 
+function sample_le(
+    p::PointLight, u1::Point2f0, u2::Point2f0, time::Float32,
+)::Tuple{RGBSpectrum, Ray, Normal3f0, Float32, Float32}
+    ray = Ray(o=p.position, d=uniform_sample_sphere(u1))
+    light_normal = ray.d |> Normal3f0
+    pdf_pos = 1f0
+    pdf_dir = uniform_sphere_pdf()
+    p.i, ray, light_normal, pdf_pos, pdf_dir
+end
+
 """
-The total power emitted by the light source
-over the entire sphere of directions.
+Total power emitted by the light source over the entire sphere of directions.
 """
-@inline function power(p::PointLight{S})::S where S <: Spectrum
+@inline function power(p::PointLight)
     4f0 * π * p.i
 end

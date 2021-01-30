@@ -70,12 +70,15 @@ end
 function (i::SPPMIntegrator)(scene::Scene)
     pixel_bounds = get_film(i.camera).crop_bounds
     b_sides = pixel_bounds |> inclusive_sides # TODO maybe regular sides?
-    n_pixels = b_sides[1] * b_sides[2]
+    n_pixels = Int64(b_sides[1] * b_sides[2])
     pixels = [
         SPPMPixel(radius=i.initial_search_radius)
         for y in 1:b_sides[2], x in 1:b_sides[1]
     ]
+    println("Total pixels $n_pixels, pixels size $(pixels |> size)")
     inv_sqrt_spp = 1f0 / sqrt(i.n_iterations) |> Float32
+    light_distribution = scene |> compute_light_power_distribution
+    println("Light distribution $(light_distribution.func)")
 
     pixel_extent = pixel_bounds |> diagonal
     tile_size = 16
@@ -85,7 +88,9 @@ function (i::SPPMIntegrator)(scene::Scene)
 
     width, height = n_tiles
     total_tiles = width * height - 1
+    println("Total tiles $(total_tiles + 1)")
     for iteration in 1:i.n_iterations
+        println("Iteration $iteration")
         # Generate visible SPPM points.
         for k in 0:total_tiles
             x, y = k % width, k ÷ width
@@ -165,11 +170,13 @@ function (i::SPPMIntegrator)(scene::Scene)
                         β /= continue_probability
                     end
                     ray = RayDifferentials(spawn_ray(surface_interaction, wi))
+                    depth += 1
                 end
             end
         end
         # Create grid of all SPPM visible points.
         grid = SPPMPixelListNode[SPPMPixelListNode() for _ in 1:n_pixels]
+        println("SPPM grid size $(grid |> size)")
         grid_bounds = Bounds3()
         # Compute grid bounds for SPPM visible points.
         max_radius = 0f0
@@ -188,11 +195,90 @@ function (i::SPPMIntegrator)(scene::Scene)
         grid_resolution = max.(
             1, Int64.(floor.(base_grid_resolution .* diag ./ max_radius)),
         )
+        println("Grid resolution $(grid_resolution)")
         # Add visible points to SPPM grid.
+        @showprogress for pixel in pixels
+            is_black(pixel.vp.β) && continue
+            # Add pixel's visible point to applicable grid cells.
+            shift = Point3f0(pixel.radius)
+            p_min = to_grid(pixel.vp.p - shift, grid_bounds, grid_resolution)
+            p_max = to_grid(pixel.vp.p + shift, grid_bounds, grid_resolution)
+            for z in p_min[3]:p_max[3], y in p_min[2]:p_max[2], x in p_min[1]:p_max[1]
+                # Add visible point to grid cell (x, y, z).
+                h = hash(Point3(x, y, z), n_pixels)
+                # Add `node` to the start of `grid[h]` linked list.
+                # TODO in multithreading use std::compare_exchange_weak equiv.
+                node = SPPMPixelListNode(pixel, grid[h])
+                grid[h] = node
+            end
+        end
+        println("Photons per iteration $(i.photons_per_iteration)")
         # Trace photons and accumulate contributions.
+        for photon_index in 0:i.photons_per_iteration - 1
+            # Follow photon path for `photon_index`.
+            halton_index = UInt64(
+                (iteration - 1) * i.photons_per_iteration + photon_index
+            )
+            halton_dim = 0
+            # Choose light to shoot photon from.
+            light_sample = radical_inverse(halton_dim, halton_index)
+            halton_dim += 1
+            light_num, light_pdf, _ = sample_discrete(
+                light_distribution, light_sample,
+            )
+            light = scene.lights[light_num]
+            # Compute sample values for photon ray leaving light source.
+            u_light_0 = Point2f0(
+                radical_inverse(halton_dim, halton_index),
+                radical_inverse(halton_dim + 1, halton_index),
+            )
+            u_light_1 = Point2f0(
+                radical_inverse(halton_dim + 2, halton_index),
+                radical_inverse(halton_dim + 3, halton_index),
+            )
+            u_light_time = lerp(
+                i.camera.core.core.shutter_open,
+                i.camera.core.core.shutter_close,
+                radical_inverse(halton_dim + 4, halton_index),
+            )
+            halton_dim += 5
+            # Generate `photon_ray` from light source and initialize β.
+            le, ray, light_normal, pdf_pos, pdf_dir = sample_le(
+                light, u_light_0, u_light_1, u_light_time,
+            )
+            photon_ray = ray |> RayDifferentials
+            (pdf_pos ≈ 0f0 || pdf_dir ≈ 0f0 || is_black(le)) && continue
+            β = abs(light_normal ⋅ photon_ray.d) * le / (
+                light_pdf * pdf_pos * pdf_dir
+            )
+            is_black(β) && continue
+            # Follow photon path through scene and record intersections.
+            interaction = nothing
+            for depth in 1:i.max_depth
+                hit, tmp_interaction = intersect!(scene, photon_ray)
+                !hit && break
+                interaction = tmp_interaction
+                if depth > 1
+                    # Add photon contribution to nearby visible points.
+                end
+                # Sample new photon direction.
+            end
+        end
         # Update pixel values from this pass's photons.
         # Periodically store SPPM image in film and save it.
     end
+end
+
+@inline function to_grid(
+    p::Point3f0, bounds::Bounds3, grid_resolution::Point3,
+)::Point3
+    pg = Int64.(floor.(grid_resolution .* offset(bounds, p)))
+    # in_bounds = all(map((i, b) -> 1 ≤ i ≤ b, zip(pg, grid_resolution)))
+    clamp.(pg, 1, grid_resolution)
+end
+
+@inline function hash(p::Point3, hash_size::Int64)::Int64
+    (((p[1] * 73856093) ⊻ (p[2] * 19349663) ⊻ (p[3] * 83492791)) % hash_size) + 1
 end
 
 function uniform_sample_one_light(
@@ -253,4 +339,13 @@ end
     f = (nf * f_pdf) ^ 2
     g = (ng * g_pdf) ^ 2
     f / (f + g)
+end
+
+@inline function compute_light_power_distribution(
+    scene::Scene,
+)::Maybe{Distribution1D}
+    length(scene.lights) == 0 && return nothing
+    Distribution1D(Float32[
+        (light |> power |> to_XYZ)[2] for light in scene.lights
+    ])
 end
