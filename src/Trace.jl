@@ -143,7 +143,7 @@ end
 """
 Flip normal `n` so that it lies in the same hemisphere as `v`.
 """
-face_forward(n, v) = (n ⋅ v) < 0 ? -n : n
+@inline face_forward(n, v) = (n ⋅ v) < 0 ? -n : n
 
 include("ray.jl")
 include("bounds.jl")

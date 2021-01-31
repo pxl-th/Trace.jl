@@ -14,7 +14,7 @@ end
 
 mutable struct SPPMPixel
     Ld::RGBSpectrum
-    ϕ::Vec3f0
+    ϕ::RGBSpectrum
     τ::RGBSpectrum
     radius::Float32
     M::Int64
@@ -22,7 +22,8 @@ mutable struct SPPMPixel
     vp::VisiblePoint
 
     function SPPMPixel(;
-        Ld::RGBSpectrum = RGBSpectrum(0f0), ϕ::Vec3f0 = Vec3f0(0f0),
+        Ld::RGBSpectrum = RGBSpectrum(0f0),
+        ϕ::RGBSpectrum = RGBSpectrum(0f0),
         τ::RGBSpectrum = RGBSpectrum(0f0),
         radius::Float32 = 0f0, M::Int64 = 0, N::Int64 = 0,
         vp::VisiblePoint = VisiblePoint()
@@ -115,7 +116,7 @@ function (i::SPPMIntegrator)(scene::Scene)
                 pixel = pixels[p[2], p[1]]
                 specular_bounce = false
                 depth = 1
-                while depth < i.max_depth
+                while depth ≤ i.max_depth
                     hit, surface_interaction = intersect!(scene, ray)
                     if !hit # Accumulate light contributions to the background.
                         for light in scene.lights
@@ -128,7 +129,6 @@ function (i::SPPMIntegrator)(scene::Scene)
                     compute_scattering!(surface_interaction, ray, true)
                     if surface_interaction.bsdf ≡ nothing
                         ray = spawn_ray(surface_interaction, ray.d)
-                        depth -= 1
                         continue
                     end
                     bsdf = surface_interaction.bsdf
@@ -155,7 +155,8 @@ function (i::SPPMIntegrator)(scene::Scene)
                         )
                         break
                     end
-                    depth == i.max_depth && continue
+                    # If at max depth, no need to spawn ray again.
+                    depth == i.max_depth && break
                     # Spawn ray from SPPM camera path vertex.
                     wi, f, pdf, sampled_type = sample_f(
                         bsdf, wo, tile_sampler |> get_2d, BSDF_ALL,
@@ -201,8 +202,12 @@ function (i::SPPMIntegrator)(scene::Scene)
             is_black(pixel.vp.β) && continue
             # Add pixel's visible point to applicable grid cells.
             shift = Point3f0(pixel.radius)
-            p_min = to_grid(pixel.vp.p - shift, grid_bounds, grid_resolution)
-            p_max = to_grid(pixel.vp.p + shift, grid_bounds, grid_resolution)
+            _, p_min = to_grid(
+                pixel.vp.p - shift, grid_bounds, grid_resolution,
+            )
+            _, p_max = to_grid(
+                pixel.vp.p + shift, grid_bounds, grid_resolution,
+            )
             for z in p_min[3]:p_max[3], y in p_min[2]:p_max[2], x in p_min[1]:p_max[1]
                 # Add visible point to grid cell (x, y, z).
                 h = hash(Point3(x, y, z), n_pixels)
@@ -214,7 +219,7 @@ function (i::SPPMIntegrator)(scene::Scene)
         end
         println("Photons per iteration $(i.photons_per_iteration)")
         # Trace photons and accumulate contributions.
-        for photon_index in 0:i.photons_per_iteration - 1
+        @showprogress for photon_index in 0:i.photons_per_iteration - 1
             # Follow photon path for `photon_index`.
             halton_index = UInt64(
                 (iteration - 1) * i.photons_per_iteration + photon_index
@@ -254,14 +259,68 @@ function (i::SPPMIntegrator)(scene::Scene)
             is_black(β) && continue
             # Follow photon path through scene and record intersections.
             interaction = nothing
-            for depth in 1:i.max_depth
+
+            depth = 1
+            while depth ≤ i.max_depth
                 hit, tmp_interaction = intersect!(scene, photon_ray)
                 !hit && break
                 interaction = tmp_interaction
                 if depth > 1
                     # Add photon contribution to nearby visible points.
+                    in_bounds, photon_grid_index = to_grid(
+                        interaction.core.p, grid_bounds, grid_resolution,
+                    )
+                    if in_bounds
+                        h = hash(photon_grid_index, n_pixels)
+                        # Add photon contribution
+                        # to visible points in `grid[h]`.
+                        node::Maybe{SPPMPixelListNode} = grid[h]
+                        while node ≢ nothing
+                            if distance_squared(
+                                node.pixel.vp.p, interaction.core.p,
+                            ) > (node.pixel.radius ^ 2)
+                                node = node.next
+                                continue
+                            end
+                            # Update `pixel`'s ϕ & M for nearby photon.
+                            wi = -photon_ray.d
+                            ϕ = β * node.pixel.vp.bsdf(node.pixel.vp.wo, wi)
+                            node.pixel.ϕ += ϕ
+                            node.pixel.M += 1
+                            node = node.next
+                        end
+                    end
                 end
                 # Sample new photon direction.
+                # Compute BSDF at photon intersection point.
+                compute_scattering!(interaction, photon_ray, true, Importance)
+                if interaction.bsdf ≡ nothing
+                    photon_ray = spawn_ray(interaction, photon_ray.d)
+                    continue
+                end
+                # Sample BSDF spectrum and direction `wi` for reflected photon.
+                bsdf_sample = Point2f0(
+                    radical_inverse(halton_dim, halton_index),
+                    radical_inverse(halton_dim + 1, halton_index),
+                )
+                halton_dim += 2
+                wi, fr, pdf, sampled_type = sample_f(
+                    interaction.bsdf, -photon_ray.d, bsdf_sample, BSDF_ALL,
+                )
+                (is_black(fr) || pdf ≈ 0f0) && break
+
+                β_new = β * fr * abs(wi ⋅ interaction.shading.n) / pdf
+                # Possibly terminate photon path with Russian roulette.
+                q = max(0f0, 1f0 - to_XYZ(β_new)[2] / to_XYZ(β)[2])
+                if radical_inverse(halton_dim, halton_index) < q
+                    halton_dim += 1
+                    break
+                end
+                halton_dim += 1
+                β = β_new / (1f0 - q)
+                photon_ray = spawn_ray(interaction, wi) |> RayDifferentials
+
+                depth += 1
             end
         end
         # Update pixel values from this pass's photons.
@@ -271,14 +330,16 @@ end
 
 @inline function to_grid(
     p::Point3f0, bounds::Bounds3, grid_resolution::Point3,
-)::Point3
+)::Tuple{Bool, Point3}
     pg = Int64.(floor.(grid_resolution .* offset(bounds, p)))
-    # in_bounds = all(map((i, b) -> 1 ≤ i ≤ b, zip(pg, grid_resolution)))
-    clamp.(pg, 1, grid_resolution)
+    in_bounds = all(1 .≤ pg .≤ grid_resolution)
+    in_bounds, clamp.(pg, 1, grid_resolution)
 end
 
 @inline function hash(p::Point3, hash_size::Int64)::Int64
-    (((p[1] * 73856093) ⊻ (p[2] * 19349663) ⊻ (p[3] * 83492791)) % hash_size) + 1
+    (
+        ((p[1] * 73856093) ⊻ (p[2] * 19349663) ⊻ (p[3] * 83492791)) % hash_size
+    ) + 1
 end
 
 function uniform_sample_one_light(
