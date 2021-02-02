@@ -96,7 +96,7 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(256)
+    resolution = Point2f0(1024)
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
@@ -109,9 +109,8 @@ function render()
         screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
     )
 
-    # sampler = Trace.UniformSampler(8)
-    # integrator = Trace.WhittedIntegrator(camera, sampler, 8)
-    integrator = Trace.SPPMIntegrator(camera, 0.025f0, 8, 10)
+    # integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 8)
+    integrator = Trace.SPPMIntegrator(camera, 0.075f0, 8, 20, 100_000, 1)
     scene |> integrator
 end
 

@@ -14,9 +14,8 @@ struct VisibilityTester
     p1::Interaction
 end
 
-function unoccluded(t::VisibilityTester, scene::Scene)::Bool
-    ray = spawn_ray(t.p0, t.p1)
-    !intersect_p(scene, ray)
+@inline function unoccluded(t::VisibilityTester, scene::Scene)::Bool
+    !intersect_p(scene, spawn_ray(t.p0, t.p1))
 end
 
 function trace(t::VisibilityTester, scene::Scene)::RGBSpectrum

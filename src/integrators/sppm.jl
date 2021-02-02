@@ -70,7 +70,8 @@ end
 
 function (i::SPPMIntegrator)(scene::Scene)
     pixel_bounds = get_film(i.camera).crop_bounds
-    b_sides = pixel_bounds |> inclusive_sides # TODO maybe regular sides?
+    println("Pixel bounds $pixel_bounds")
+    b_sides = pixel_bounds |> inclusive_sides
     n_pixels = Int64(b_sides[1] * b_sides[2])
     pixels = [
         SPPMPixel(radius=i.initial_search_radius)
@@ -93,13 +94,14 @@ function (i::SPPMIntegrator)(scene::Scene)
     for iteration in 1:i.n_iterations
         println("Iteration $iteration")
         # Generate visible SPPM points.
-        for k in 0:total_tiles
+        bar = Progress(total_tiles, 1)
+        Threads.@threads for k in 0:total_tiles
             x, y = k % width, k ÷ width
             tile = Point2f0(x, y)
             tile_sampler = sampler |> deepcopy
 
             tb_min = pixel_bounds.p_min .+ tile .* tile_size
-            tb_max = min.(tb_min .+ tile_size, pixel_bounds.p_max)
+            tb_max = min.(tb_min .+ (tile_size - 1), pixel_bounds.p_max)
             tile_bounds = Bounds2(tb_min, tb_max)
             for pixel_point in tile_bounds
                 start_pixel!(tile_sampler, pixel_point)
@@ -177,10 +179,9 @@ function (i::SPPMIntegrator)(scene::Scene)
                     depth += 1
                 end
             end
+            bar |> next!
         end
         # Create grid of all SPPM visible points.
-        # TODO do not allocate whole array.
-        # TODO use dict? try with it and see if its length ≈ n_pixels at the end
         grid = [SPPMPixelListNode() for _ in 1:n_pixels]
         println("SPPM grid size $(grid |> size), grid memory $(sizeof(grid))")
         grid_bounds = Bounds3()
@@ -354,7 +355,7 @@ function (i::SPPMIntegrator)(scene::Scene)
         end
         # Periodically store SPPM image in film and save it.
         if iteration % i.write_frequency == 0 || iteration == i.n_iterations
-            x0 = pixel_bounds.p_min[1] # TODO or 2?
+            x0 = pixel_bounds.p_min[1]
             x1 = pixel_bounds.p_max[1]
             Np = iteration * i.photons_per_iteration
             image = Matrix{RGBSpectrum}(undef, pixels |> size)
@@ -418,6 +419,7 @@ function estimate_direct(
         )
         if !is_black(f)
             # Compute effect of visibility for light source sample.
+            # TODO handle media (use `trace` for visibility)
             !unoccluded(visibility, scene) && (Li = RGBSpectrum(0f0);)
             if !is_black(Li)
                 if is_δ_light(light.flags)
