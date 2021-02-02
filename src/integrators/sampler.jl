@@ -1,4 +1,3 @@
-abstract type Integrator end
 abstract type SamplerIntegrator <: Integrator end
 
 struct WhittedIntegrator <: SamplerIntegrator
@@ -28,7 +27,7 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
         t_sampler = i.sampler |> deepcopy
 
         tb_min = sample_bounds.p_min .+ tile .* tile_size
-        tb_max = min.(tb_min .+ tile_size, sample_bounds.p_max)
+        tb_max = min.(tb_min .+ (tile_size - 1), sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
 
         film_tile = FilmTile(i.camera |> get_film, tile_bounds)

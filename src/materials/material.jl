@@ -1,6 +1,6 @@
 struct MatteMaterial <: Material
     """
-    Spectral diffese reflection value.
+    Spectral diffuse reflection value.
     """
     Kd::Texture  # TODO check that texture is spectral
     """

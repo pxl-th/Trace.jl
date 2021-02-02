@@ -24,17 +24,17 @@ include("spectrum_data.jl")
 Base.:(==)(c::C, i) where C <: Spectrum = all(c.c .== i)
 Base.:(==)(c1::C, c2::C) where C <: Spectrum = all(c1.c .== c2.c)
 Base.:+(c1::C, c2::C) where C <: Spectrum = C(c1.c .+ c2.c)
-Base.:+(c1::C, c::Float32) where C <: Spectrum = C(c1.c .+ c)
+Base.:+(c1::C, c::Number) where C <: Spectrum = C(c1.c .+ c)
 Base.:-(c::C) where C <: Spectrum = -c.c |> C(-c.c)
-Base.:-(c1::C, c::Float32) where C <: Spectrum = C(c1.c .- c)
+Base.:-(c1::C, c::Number) where C <: Spectrum = C(c1.c .- c)
 Base.:-(c1::C, c2::C) where C <: Spectrum = C(c1.c .- c2.c)
 Base.:*(c1::C, c2::C) where C <: Spectrum = C(c1.c .* c2.c)
-Base.:*(c1::C, f::Float32) where C <: Spectrum = C(c1.c .* f)
-Base.:*(f::Float32, c1::C) where C <: Spectrum = C(c1.c .* f)
+Base.:*(c1::C, f::Number) where C <: Spectrum = C(c1.c .* f)
+Base.:*(f::Number, c1::C) where C <: Spectrum = C(c1.c .* f)
 Base.:/(c1::C, c2::C) where C <: Spectrum = C(c1.c ./ c2.c)
-Base.:/(c1::C, f::Float32) where C <: Spectrum = C(c1.c ./ f)
+Base.:/(c1::C, f::Number) where C <: Spectrum = C(c1.c ./ f)
 Base.sqrt(c::C) where C <: Spectrum = C(c.c .|> sqrt)
-Base.:^(c::C, e::Float32) where C <: Spectrum = C(c.c .^ e)
+Base.:^(c::C, e::Number) where C <: Spectrum = C(c.c .^ e)
 Base.exp(c::C, e::Float32) where C <: Spectrum = C(c.c .|> exp)
 lerp(c1::C, c2::C, t::Float32) where C <: Spectrum = (1f0 - t) * c1 + t * c2
 
@@ -47,6 +47,13 @@ end
 function Base.isnan(c::C) where C <: Spectrum
     for v in c.c
         isnan(v) && return true
+    end
+    false
+end
+
+function Base.isinf(c::C) where C <: Spectrum
+    for v in c.c
+        isinf(v) && return true
     end
     false
 end

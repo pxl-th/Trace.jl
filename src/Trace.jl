@@ -10,8 +10,8 @@ using ProgressMeter
 
 GeometryBasics.@fixed_vector Normal StaticVector
 const Normal3f0 = Normal{3, Float32}
+const Maybe{T} = Union{T, Nothing}
 
-Maybe{T} = Union{T, Nothing}
 maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 abstract type AbstractRay end
@@ -21,6 +21,7 @@ abstract type Primitive end
 abstract type Light end
 abstract type Material end
 abstract type BxDF end
+abstract type Integrator end
 
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
@@ -46,6 +47,15 @@ end
     z = √max(0f0, 1f0 - d[1] ^ 2 - d[2] ^ 2)
     Vec3f0(d[1], d[2], z)
 end
+
+@inline function uniform_sample_sphere(u::Point2f0)::Vec3f0
+    z = 1f0 - 2f0 * u[1]
+    r = √(max(0f0, 1f0 - z ^ 2))
+    ϕ = 2f0 * π * u[2]
+    Vec3f0(r * cos(ϕ), r * sin(ϕ), z)
+end
+
+@inline uniform_sphere_pdf()::Float32 = 1f0 / (4f0 * π)
 
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
@@ -133,7 +143,7 @@ end
 """
 Flip normal `n` so that it lies in the same hemisphere as `v`.
 """
-face_forward(n, v) = (n ⋅ v) < 0 ? -n : n
+@inline face_forward(n, v) = (n ⋅ v) < 0 ? -n : n
 
 include("ray.jl")
 include("bounds.jl")
@@ -190,6 +200,7 @@ include("film.jl")
 include("reflection/Reflection.jl")
 
 include("camera/camera.jl")
+include("sampler/sampling.jl")
 include("sampler/sampler.jl")
 include("textures/mapping.jl")
 include("textures/basic.jl")
@@ -202,6 +213,7 @@ include("lights/point.jl")
 include("lights/directional.jl")
 
 include("integrators/sampler.jl")
+include("integrators/sppm.jl")
 
 """ TODO
 - assert that t_max in intersect methods >= 0

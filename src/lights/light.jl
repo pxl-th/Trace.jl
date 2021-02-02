@@ -5,8 +5,8 @@
     LightInfinite   = 0b1000
 end
 
-@inline function is_δ_light(flag::UInt8)::Bool
-    flag & LightδPosition || flag & LightδDirection
+@inline function is_δ_light(flag::LightFlags)::Bool
+    flag == LightδPosition || flag == LightδDirection
 end
 
 struct VisibilityTester
@@ -14,16 +14,8 @@ struct VisibilityTester
     p1::Interaction
 end
 
-function unoccluded(t::VisibilityTester, scene::Scene)::Bool
-    ray = spawn_ray(t.p0, t.p1)
-    # @show "ray $(ray.o), $(ray.d)"
-    hit = !intersect_p(scene, ray)
-    # hito, si = intersect!(scene, ray)
-    # hito = !hito
-    # if hit != hito
-    #     @info "\t -> Occlusion point $(si.core.p)"
-    # end
-    hit
+@inline function unoccluded(t::VisibilityTester, scene::Scene)::Bool
+    !intersect_p(scene, spawn_ray(t.p0, t.p1))
 end
 
 function trace(t::VisibilityTester, scene::Scene)::RGBSpectrum

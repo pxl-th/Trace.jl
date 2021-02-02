@@ -79,8 +79,9 @@ function (b::BSDF)(
     wo_world::Vec3f0, wi_world::Vec3f0, flags::UInt8 = BSDF_ALL,
 )::RGBSpectrum
     # Transform world-space direction vectors to local BSDF space.
-    wi = world_to_local(b, wi_world)
     wo = world_to_local(b, wo_world)
+    wo[3] ≈ 0f0 && return RGBSpectrum(0f0)
+    wi = world_to_local(b, wi_world)
     # Determine whether to use BRDFs or BTDFs.
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
 
@@ -170,6 +171,24 @@ function sample_f(
     end
 
     wi_world, f, pdf, sampled_type
+end
+
+function compute_pdf(
+    b::BSDF, wo_world::Vec3f0, wi_world::Vec3f0, flags::UInt8,
+)::Float32
+    b.n_bxdfs == 0 && return 0f0
+    wo = world_to_local(b, wo_world)
+    wo[3] ≈ 0f0 && return 0f0
+    wi = world_to_local(b, wi_world)
+    pdf = 0f0
+    matching_components = 0
+    for i in 1:b.n_bxdfs
+        if b.bxdfs[i] & flags
+            matching_components += 1
+            pdf += compute_pdf(b.bxdfs[i], wo, wi)
+        end
+    end
+    matching_components > 0 ? pdf / matching_components : 0f0
 end
 
 function num_components(b::BSDF, flags::UInt8)::Int64

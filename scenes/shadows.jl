@@ -101,7 +101,7 @@ function render()
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
         filter, 1f0, 1f0,
-        "scenes/shadows-$(Int64(resolution[1]))x$(Int64(resolution[2])).png",
+        "scenes/shadows-sppm-$(Int64(resolution[1]))x$(Int64(resolution[2])).png",
     )
     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
     camera = Trace.PerspectiveCamera(
@@ -109,8 +109,8 @@ function render()
         screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
     )
 
-    sampler = Trace.UniformSampler(8)
-    integrator = Trace.WhittedIntegrator(camera, sampler, 8)
+    # integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 8)
+    integrator = Trace.SPPMIntegrator(camera, 0.075f0, 8, 20, 100_000, 1)
     scene |> integrator
 end
 
