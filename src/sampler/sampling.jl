@@ -14,7 +14,7 @@ struct Distribution1D
             cdf[i] = cdf[i - 1] + func[i - 1] / n
         end
         # Transform step function integral into CDF.
-        func_int = cdf[n]
+        func_int = cdf[n + 1] # TODO n or n + 1
         if func_int ≈ 0f0
             @inbounds for i in 2:n + 1
                 cdf[i] = i / n

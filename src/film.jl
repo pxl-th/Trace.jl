@@ -192,10 +192,10 @@ function merge_film_tile!(f::Film, ft::FilmTile)
     end
 end
 
-function set_image(f::Film, spectrum::Matrix{S}) where S <: Spectrum
+function set_image!(f::Film, spectrum::Matrix{S}) where S <: Spectrum
     @assert size(f.pixels) == size(spectrum)
     for (i, p) in enumerate(f.pixels)
-        p.xyz = to_XYZ(spectrum[i])
+        p.xyz = spectrum[i] |> to_XYZ
         p.filter_weight_sum = 1f0
         p.splat_xyz = Point3f0(0f0)
     end

@@ -108,6 +108,7 @@ function (i::SPPMIntegrator)(scene::Scene)
                 camera_sample = get_camera_sample(tile_sampler, pixel_point)
                 ray, β = generate_ray_differential(i.camera, camera_sample)
                 β = β |> RGBSpectrum
+                @assert !isnan(β)
                 is_black(β) && continue
                 scale_differentials!(ray, inv_sqrt_spp)
                 # Follow camera ray path until a visible point is created.
@@ -164,11 +165,13 @@ function (i::SPPMIntegrator)(scene::Scene)
                     (pdf ≈ 0f0 || is_black(f)) && break
                     specular_bounce = (sampled_type & BSDF_SPECULAR) != 0
                     β *= f * abs(wi ⋅ surface_interaction.shading.n) / pdf
+                    @assert !isnan(β)
                     βy = to_XYZ(β)[2]
                     if βy < 0.25f0
                         continue_probability = min(1f0, βy)
                         get_1d(tile_sampler) > continue_probability && break
                         β /= continue_probability
+                        @assert !isnan(β) && !isinf(β)
                     end
                     ray = RayDifferentials(spawn_ray(surface_interaction, wi))
                     depth += 1
@@ -176,8 +179,10 @@ function (i::SPPMIntegrator)(scene::Scene)
             end
         end
         # Create grid of all SPPM visible points.
-        grid = SPPMPixelListNode[SPPMPixelListNode() for _ in 1:n_pixels]
-        println("SPPM grid size $(grid |> size)")
+        # TODO do not allocate whole array.
+        # TODO use dict? try with it and see if its length ≈ n_pixels at the end
+        grid = [SPPMPixelListNode() for _ in 1:n_pixels]
+        println("SPPM grid size $(grid |> size), grid memory $(sizeof(grid))")
         grid_bounds = Bounds3()
         # Compute grid bounds for SPPM visible points.
         max_radius = 0f0
@@ -188,13 +193,17 @@ function (i::SPPMIntegrator)(scene::Scene)
             )
             max_radius = max(max_radius, pixel.radius)
         end
+        println("Grid bounds $grid_bounds")
         # Compute resolution of SPPM grid in each dimension.
         diag = grid_bounds |> diagonal
         max_diag = diag |> maximum
+        println("Max diag $max_diag, Max radius $max_radius")
         base_grid_resolution = Int32(floor(max_diag / max_radius))
+        println("Base grid resolution $base_grid_resolution")
+        println("Diag $diag")
         @assert base_grid_resolution > 0
         grid_resolution = max.(
-            1, Int64.(floor.(base_grid_resolution .* diag ./ max_radius)),
+            1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
         )
         println("Grid resolution $(grid_resolution)")
         # Add visible points to SPPM grid.
@@ -285,6 +294,7 @@ function (i::SPPMIntegrator)(scene::Scene)
                             # Update `pixel`'s ϕ & M for nearby photon.
                             wi = -photon_ray.d
                             ϕ = β * node.pixel.vp.bsdf(node.pixel.vp.wo, wi)
+                            @assert !isnan(ϕ)
                             node.pixel.ϕ += ϕ
                             node.pixel.M += 1
                             node = node.next
@@ -324,7 +334,37 @@ function (i::SPPMIntegrator)(scene::Scene)
             end
         end
         # Update pixel values from this pass's photons.
+        γ = 2f0 / 3f0
+        for pixel in pixels
+            if pixel.M > 0
+                # Update pixel photon count, search radius and τ from photons.
+                N_new = pixel.N + γ * pixel.M
+                radius_new = pixel.radius * √(N_new / (pixel.N + pixel.M))
+                pixel.τ = (
+                    (pixel.τ + pixel.vp.β * pixel.ϕ) * (radius_new ^ 2)
+                    / (pixel.radius ^ 2)
+                )
+                pixel.N = N_new
+                pixel.M = 0
+                pixel.radius = radius_new
+                pixel.ϕ = RGBSpectrum(0f0)
+            end
+            pixel.vp.β = RGBSpectrum(0f0)
+            pixel.vp.bsdf = nothing
+        end
         # Periodically store SPPM image in film and save it.
+        if iteration % i.write_frequency == 0 || iteration == i.n_iterations
+            x0 = pixel_bounds.p_min[1] # TODO or 2?
+            x1 = pixel_bounds.p_max[1]
+            Np = iteration * i.photons_per_iteration
+            image = Matrix{RGBSpectrum}(undef, pixels |> size)
+            for (i, p) in enumerate(pixels)
+                image[i] = p.Ld / iteration
+                image[i] += p.τ / (Np * π * (p.radius ^ 2))
+            end
+            set_image!(i.camera |> get_film, image)
+            i.camera |> get_film |> save
+        end
     end
 end
 
