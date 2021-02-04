@@ -55,7 +55,27 @@ end
     Vec3f0(r * cos(ϕ), r * sin(ϕ), z)
 end
 
+@inline function uniform_sample_cone(u::Point2f0, cosθ_max::Float32)::Vec3f0
+    cosθ = 1f0 - u[1] + u[1] * cosθ_max
+    sinθ = √(1f0 - cosθ ^ 2)
+    ϕ = u[2] * 2 * π
+    Vec3f0(cos(ϕ) * sinθ, sin(ϕ) * sinθ, cosθ)
+end
+
+@inline function uniform_sample_cone(
+    u::Point2f0, cosθ_max::Float32, x::Vec3f0, y::Vec3f0, z::Vec3f0,
+)::Vec3f0
+    cosθ = 1f0 - u[1] + u[1] * cosθ_max
+    sinθ = √(1f0 - cosθ ^ 2)
+    ϕ = u[2] * 2 * π
+    x * cos(ϕ) * sinθ + y * sin(ϕ) * sinθ + z * cosθ
+end
+
 @inline uniform_sphere_pdf()::Float32 = 1f0 / (4f0 * π)
+
+@inline function uniform_cone_pdf(cosθ_max::Float32)::Float32
+    1f0 / (2f0 * π * (1f0 - cosθ_max))
+end
 
 @inline sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
@@ -210,6 +230,7 @@ include("materials/material.jl")
 include("lights/emission.jl")
 include("lights/light.jl")
 include("lights/point.jl")
+include("lights/spot.jl")
 include("lights/directional.jl")
 
 include("integrators/sampler.jl")

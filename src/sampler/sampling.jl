@@ -14,7 +14,7 @@ struct Distribution1D
             cdf[i] = cdf[i - 1] + func[i - 1] / n
         end
         # Transform step function integral into CDF.
-        func_int = cdf[n + 1] # TODO n or n + 1
+        func_int = cdf[n + 1]
         if func_int ≈ 0f0
             @inbounds for i in 2:n + 1
                 cdf[i] = i / n
@@ -30,7 +30,8 @@ struct Distribution1D
 end
 
 function sample_discrete(d::Distribution1D, u::Float32)
-    offset = find_interval(length(d.cdf), i -> d.cdf[i] ≤ u)
+    # offset = find_interval(length(d.cdf), i -> d.cdf[i] ≤ u)
+    offset = findlast(i -> i, d.cdf .≤ u)
     pdf = d.func_int > 0 ? d.func[offset] / (d.func_int * length(d.func)) : 0f0
     u_remapped = (u - d.cdf[offset]) / (d.cdf[offset + 1] - d.cdf[offset])
     @assert 0f0 ≤ u_remapped ≤ 1f0

@@ -114,3 +114,38 @@ function (g::GlassMaterial)(
         end
     end
 end
+
+
+struct PlasticMaterial <: Material
+    """
+    Diffuse component. Spectrum texture.
+    """
+    Kd::Texture
+    """
+    Specular component. Spectrum texture.
+    """
+    Ks::Texture
+    """
+    Float texture
+    """
+    roughness::Texture
+    remap_roughness::Bool
+end
+
+function (p::PlasticMaterial)(
+    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+) where T <: TransportMode
+    si.bsdf = BSDF(si)
+    # Initialize diffuse componen of plastic material.
+    kd = si |> p.Kd |> clamp
+    !is_black(kd) && add!(si.bsdf, LambertianReflection(kd))
+    # Initialize specular component.
+    ks = si |> p.Ks |> clamp
+    is_black(ks) && return
+    # Create microfacet distribution for plastic material.
+    fresnel = FresnelDielectric(1.5f0, 1f0)
+    rough = si |> p.roughness
+    p.remap_roughness && (rough = roughness_to_α(rough);)
+    distribution = TrowbridgeReitzDistribution(rough, rough)
+    add!(si.bsdf, MicrofacetReflection(ks, distribution, fresnel, T))
+end

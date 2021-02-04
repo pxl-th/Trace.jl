@@ -150,7 +150,7 @@ function sample_f(
     if !(bxdf.type & BSDF_SPECULAR != 0) && matching_components > 1
         for i in 1:b.n_bxdfs
             if b.bxdfs[i] != bxdf && b.bxdfs[i] & type
-                pdf += pdf(b.bxdfs[i], wo, wi)
+                pdf += compute_pdf(b.bxdfs[i], wo, wi)
             end
         end
     end

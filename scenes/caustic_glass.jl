@@ -4,6 +4,7 @@ using ProgressMeter
 using Printf
 using FileIO
 using ImageCore
+using LinearAlgebra
 
 function render()
     model = raw"./scenes/models/caustic-glass.ply"
@@ -27,15 +28,27 @@ function render()
         Trace.ConstantTexture(1.25f0),
         true,
     )
+    plastic = Trace.PlasticMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+        Trace.ConstantTexture(0.010408001f0),
+        true,
+    )
+    plastic_red = Trace.PlasticMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.1f0, 0.01f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+        Trace.ConstantTexture(0.010408001f0),
+        true,
+    )
 
     sphere_primitive1 = Trace.GeometricPrimitive(Trace.Sphere(
         Trace.ShapeCore(Trace.translate(Vec3f0(1.3, 2.2, -98.2)), false),
         0.2f0, 360f0,
-    ), red)
+    ), plastic_red)
     sphere_primitive2 = Trace.GeometricPrimitive(Trace.Sphere(
         Trace.ShapeCore(Trace.translate(Vec3f0(2, 0.26, -96)), false),
         0.25f0, 360f0,
-    ), red)
+    ), plastic_red)
 
     transformation = Trace.translate(Vec3f0(5, -1.49, -100))
     core = Trace.ShapeCore(transformation, false)
@@ -76,7 +89,7 @@ function render()
         filled += 1
     end
     for t in floor_triangles
-        primitives[filled] = Trace.GeometricPrimitive(t, white)
+        primitives[filled] = Trace.GeometricPrimitive(t, plastic)
         filled += 1
     end
     # for t in floor_triangles[3:4]
@@ -89,16 +102,40 @@ function render()
     println("BVH World bounds $(Trace.world_bound(bvh))")
 
     intensity = 150f0 * π
-    lights = [Trace.PointLight(
-        # Trace.translate(Vec3f0(-5, 10, -90)),
-        Trace.translate(Vec3f0(8, 10, -108)),
-        Trace.RGBSpectrum(intensity),
-    )]
+
+    from, to = Point3f0(9, 7, -115), Point3f0(-5, -2, -102)
+    cone_angle, cone_δ_angle = 30f0, 0.8f0
+    dir = Vec3f0(to - from) |> normalize
+    du = Vec3f0(0f0)
+    dir, du, dv = Trace.coordinate_system(dir, du)
+
+    dir_to_z = Trace.Transformation(Mat4f0(
+        du[1], du[2], du[3], 0f0,
+        dv[1], dv[2], dv[3], 0f0,
+        dir[1], dir[2], dir[3], 0f0,
+        0f0, 0f0, 0f0, 1f0,
+    ) |> transpose)
+    light_to_world = Trace.translate(Vec3f0(8, 7, -107))
+    light_to_world *= Trace.translate(Vec3f0(from)) * inv(dir_to_z)
+
+    lights = [
+        # Trace.PointLight(
+        #     Trace.translate(Vec3f0(8, 7, -107)), Trace.RGBSpectrum(intensity),
+        # ),
+        Trace.SpotLight(
+            light_to_world, Trace.RGBSpectrum(1f0),
+            cone_angle, cone_angle - cone_δ_angle,
+        ),
+        Trace.PointLight(
+            Trace.translate(Vec3f0(0, 10, -95)), Trace.RGBSpectrum(intensity / 4),
+        ),
+    ]
+
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(128)
-    # n_samples = 8
-    # ray_depth = 8
+    resolution = Point2f0(512)
+    n_samples = 8
+    ray_depth = 16
 
     # look_point = Trace.bounding_sphere(Trace.world_bound(bvh))[1]
     # look_point *= Point3f0(0, 0, 1)
@@ -123,7 +160,7 @@ function render()
     # sampler = Trace.UniformSampler(n_samples)
     # integrator = Trace.WhittedIntegrator(camera, sampler, ray_depth)
     # integrator = Trace.SPPMIntegrator(camera, 0.075f0, 8, 100, 10_000, 1)
-    integrator = Trace.SPPMIntegrator(camera, 0.025f0, 8, 100, -1, 1)
+    integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 500, 100_000, 1)
     scene |> integrator
 end
 
