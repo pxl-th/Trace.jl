@@ -196,13 +196,13 @@ function _generate_visible_sppm_points!(
                 β *= f * abs(wi ⋅ surface_interaction.shading.n) / pdf
                 @assert !isnan(β)
                 βy = to_XYZ(β)[2]
-                if βy > 0.25f0 # TODO was <
+                if βy < 0.25f0 # TODO was <
                     continue_probability = min(1f0, βy)
                     get_1d(tile_sampler) > continue_probability && break
                     β /= continue_probability
                     @assert !isnan(β) && !isinf(β)
                 end
-                ray = RayDifferentials(spawn_ray(surface_interaction, wi))
+                ray = spawn_ray(surface_interaction, wi) |> RayDifferentials
                 depth += 1
             end
         end
@@ -285,7 +285,6 @@ function _trace_photons!(
             radical_inverse(halton_dim + 4, halton_index),
         )
         halton_dim += 5
-        # TODO check that rays are correctly traced
         # Generate `photon_ray` from light source and initialize β.
         le, ray, light_normal, pdf_pos, pdf_dir = sample_le(
             light, u_light_0, u_light_1, u_light_time,
@@ -296,9 +295,10 @@ function _trace_photons!(
             light_pdf * pdf_pos * pdf_dir
         )
         is_black(β) && continue
+
+        # TODO check that rays are correctly traced
         # Follow photon path through scene and record intersections.
         interaction::Maybe{SurfaceInteraction} = nothing
-
         depth = 1
         while depth ≤ i.max_depth
             hit, tmp_interaction = intersect!(scene, photon_ray)
@@ -311,8 +311,7 @@ function _trace_photons!(
                 )
                 if in_bounds
                     h = hash(photon_grid_index, n_pixels)
-                    # Add photon contribution
-                    # to visible points in `grid[h]`.
+                    # Add photon contribution to visible points in `grid[h]`.
                     node::Maybe{SPPMPixelListNode} = grid[h]
                     while node ≢ nothing
                         if distance_squared(

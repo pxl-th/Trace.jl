@@ -6,9 +6,9 @@ const λ_end = 700f0
 
 @inline function XYZ_to_RGB(xyz::Point3f0)
     Point3f0(
-        3.240479f0 * xyz[1] - 1.537150f0 * xyz[2] - 0.498535f0 * xyz[3],
+         3.240479f0 * xyz[1] - 1.537150f0 * xyz[2] - 0.498535f0 * xyz[3],
         -0.969256f0 * xyz[1] + 1.875991f0 * xyz[2] + 0.041556f0 * xyz[3],
-        0.055648f0 * xyz[1] - 0.204043f0 * xyz[2] + 1.057311f0 * xyz[3],
+         0.055648f0 * xyz[1] - 0.204043f0 * xyz[2] + 1.057311f0 * xyz[3],
     )
 end
 @inline function RGB_to_XYZ(rgb::Point3f0)
