@@ -37,8 +37,7 @@ mutable struct SPPMPixelListNode
     next::Maybe{SPPMPixelListNode}
 
     function SPPMPixelListNode(
-        pixel::SPPMPixel = SPPMPixel(),
-        next::Maybe{SPPMPixelListNode} = nothing,
+        pixel::SPPMPixel, next::Maybe{SPPMPixelListNode} = nothing,
     )
         new(pixel, next)
     end
@@ -115,8 +114,8 @@ function (i::SPPMIntegrator)(scene::Scene)
                 scale_differentials!(ray, inv_sqrt_spp)
                 # Follow camera ray path until a visible point is created.
                 # Get SPPMPixel for current `pixel`.
-                p = Int64.(pixel_point .- pixel_bounds.p_min .+ 1)
-                pixel = pixels[p[2], p[1]]
+                pixel_point = pixel_point .|> Int64
+                pixel = pixels[pixel_point[2], pixel_point[1]]
                 specular_bounce = false
                 depth = 1
                 while depth ≤ i.max_depth
@@ -154,12 +153,12 @@ function (i::SPPMIntegrator)(scene::Scene)
                     if is_diffuse || (is_glossy && depth == i.max_depth)
                         pixel.vp = VisiblePoint(
                             p=surface_interaction.core.p, wo=wo,
-                            bsdf=bsdf, β=β,
+                            bsdf=bsdf, β=β |> deepcopy,
                         )
                         break
                     end
                     # If at max depth, no need to spawn ray again.
-                    depth == i.max_depth && break
+                    depth == i.max_depth && (depth += 1; continue)
                     # Spawn ray from SPPM camera path vertex.
                     wi, f, pdf, sampled_type = sample_f(
                         bsdf, wo, tile_sampler |> get_2d, BSDF_ALL,
@@ -169,7 +168,7 @@ function (i::SPPMIntegrator)(scene::Scene)
                     β *= f * abs(wi ⋅ surface_interaction.shading.n) / pdf
                     @assert !isnan(β)
                     βy = to_XYZ(β)[2]
-                    if βy < 0.25f0
+                    if βy > 0.25f0 # TODO was <
                         continue_probability = min(1f0, βy)
                         get_1d(tile_sampler) > continue_probability && break
                         β /= continue_probability
@@ -182,23 +181,24 @@ function (i::SPPMIntegrator)(scene::Scene)
             bar |> next!
         end
         # Create grid of all SPPM visible points.
-        grid = [SPPMPixelListNode() for _ in 1:n_pixels]
+        grid = Maybe{SPPMPixelListNode}[nothing for _ in 1:n_pixels]
         println("SPPM grid size $(grid |> size), grid memory $(sizeof(grid))")
         grid_bounds = Bounds3()
         # Compute grid bounds for SPPM visible points.
-        max_radius = 0f0
+        max_radius, min_radius = 0f0, Inf32
         for pixel in pixels
             is_black(pixel.vp.β) && continue
             grid_bounds = (
                 grid_bounds ∪ expand(Bounds3(pixel.vp.p), pixel.radius)
             )
             max_radius = max(max_radius, pixel.radius)
+            min_radius = min(min_radius, pixel.radius)
         end
         println("Grid bounds $grid_bounds")
         # Compute resolution of SPPM grid in each dimension.
         diag = grid_bounds |> diagonal
         max_diag = diag |> maximum
-        println("Max diag $max_diag, Max radius $max_radius")
+        println("Max diag $max_diag, Max radius $max_radius, Min radius $min_radius")
         base_grid_resolution = Int32(floor(max_diag / max_radius))
         println("Base grid resolution $base_grid_resolution")
         println("Diag $diag")
@@ -222,7 +222,6 @@ function (i::SPPMIntegrator)(scene::Scene)
                 # Add visible point to grid cell (x, y, z).
                 h = hash(Point3(x, y, z), n_pixels)
                 # Add `node` to the start of `grid[h]` linked list.
-                # TODO in multithreading use std::compare_exchange_weak equiv.
                 node = SPPMPixelListNode(pixel, grid[h])
                 grid[h] = node
             end
@@ -257,18 +256,19 @@ function (i::SPPMIntegrator)(scene::Scene)
                 radical_inverse(halton_dim + 4, halton_index),
             )
             halton_dim += 5
+            # TODO check that rays are correctly traced
             # Generate `photon_ray` from light source and initialize β.
             le, ray, light_normal, pdf_pos, pdf_dir = sample_le(
                 light, u_light_0, u_light_1, u_light_time,
             )
-            photon_ray = ray |> RayDifferentials
             (pdf_pos ≈ 0f0 || pdf_dir ≈ 0f0 || is_black(le)) && continue
+            photon_ray = ray |> RayDifferentials
             β = abs(light_normal ⋅ photon_ray.d) * le / (
                 light_pdf * pdf_pos * pdf_dir
             )
             is_black(β) && continue
             # Follow photon path through scene and record intersections.
-            interaction = nothing
+            interaction::Maybe{SurfaceInteraction} = nothing
 
             depth = 1
             while depth ≤ i.max_depth
@@ -355,13 +355,11 @@ function (i::SPPMIntegrator)(scene::Scene)
         end
         # Periodically store SPPM image in film and save it.
         if iteration % i.write_frequency == 0 || iteration == i.n_iterations
-            x0 = pixel_bounds.p_min[1]
-            x1 = pixel_bounds.p_max[1]
             Np = iteration * i.photons_per_iteration
-            image = Matrix{RGBSpectrum}(undef, pixels |> size)
-            for (i, p) in enumerate(pixels)
-                image[i] = p.Ld / iteration
-                image[i] += p.τ / (Np * π * (p.radius ^ 2))
+            # image = Matrix{RGBSpectrum}(undef, pixels |> size)
+            image = fill(RGBSpectrum(0f0), pixels |> size)
+            @inbounds for (i, p) in enumerate(pixels)
+                image[i] = p.Ld / iteration + p.τ / (Np * π * (p.radius ^ 2))
             end
             set_image!(i.camera |> get_film, image)
             i.camera |> get_film |> save
@@ -389,7 +387,7 @@ function uniform_sample_one_light(
     n_lights = scene.lights |> length
     n_lights == 0 && return RGBSpectrum(0f0)
 
-    light_num = max(1, min(Int32(ceil(get_1d(sampler)) * n_lights), n_lights))
+    light_num = max(1, min(Int32(ceil(get_1d(sampler) * n_lights)), n_lights))
     light_pdf = 1f0 / n_lights
 
     light = scene.lights[light_num]
@@ -407,15 +405,11 @@ function estimate_direct(
     Ld = RGBSpectrum(0f0)
     # Sample light source with multiple importance sampling.
     Li, wi, light_pdf, visibility = sample_li(light, interaction.core, u_light)
-    scattering_pdf = 0
     if light_pdf > 0 && !is_black(Li)
         # Evaluate BSDF for light sampling strategy.
         f = (
             interaction.bsdf(interaction.core.wo, wi, bsdf_flags)
             * abs(wi ⋅ interaction.shading.n)
-        )
-        scattering_pdf = compute_pdf(
-            interaction.bsdf, interaction.core.wo, wi, bsdf_flags,
         )
         if !is_black(f)
             # Compute effect of visibility for light source sample.
@@ -425,6 +419,10 @@ function estimate_direct(
                 if is_δ_light(light.flags)
                     Ld += f * Li / light_pdf
                 else
+                    @assert false # TODO no non delta lights right now
+                    scattering_pdf = compute_pdf(
+                        interaction.bsdf, interaction.core.wo, wi, bsdf_flags,
+                    )
                     weight = power_heuristic(1, light_pdf, 1, scattering_pdf)
                     Ld += f * Li * weight / light_pdf
                 end
