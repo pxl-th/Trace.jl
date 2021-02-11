@@ -32,7 +32,7 @@ end
 function falloff(s::SpotLight, w::Vec3f0)::Float32
     wl = w |> s.world_to_light |> normalize
     cosθ = wl[3]
-    cosθ > s.cos_total_width && return 0f0
+    cosθ < s.cos_total_width && return 0f0
     cosθ ≥ s.cos_falloff_start && return 1f0
     # Compute falloff inside spotlight cone.
     δ = (cosθ - s.cos_total_width) / (s.cos_falloff_start - s.cos_total_width)

@@ -50,9 +50,10 @@ function render()
         0.25f0, 360f0,
     ), plastic_red)
 
-    transformation = Trace.translate(Vec3f0(5, -1.49, -100))
-    core = Trace.ShapeCore(transformation, false)
-    triangle_meshes, triangles = Trace.load_triangle_mesh(core, model)
+    triangle_meshes, triangles = Trace.load_triangle_mesh(
+        Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
+        model,
+    )
 
     floor_triangles = Trace.create_triangle_mesh(
         Trace.ShapeCore(Trace.translate(Vec3f0(-2, 0, -87)), false),
@@ -103,11 +104,10 @@ function render()
 
     intensity = 150f0 * π
 
-    from, to = Point3f0(9, 7, -115), Point3f0(-5, -2, -102)
-    cone_angle, cone_δ_angle = 30f0, 0.8f0
+    from, to = Point3f0(1, 7, -1), Point3f0(-5, 0, 5)
+    cone_angle, cone_δ_angle = 30f0, 10f0
     dir = Vec3f0(to - from) |> normalize
-    du = Vec3f0(0f0)
-    dir, du, dv = Trace.coordinate_system(dir, du)
+    dir, du, dv = Trace.coordinate_system(dir, Vec3f0(0f0))
 
     dir_to_z = Trace.Transformation(Mat4f0(
         du[1], du[2], du[3], 0f0,
@@ -115,27 +115,31 @@ function render()
         dir[1], dir[2], dir[3], 0f0,
         0f0, 0f0, 0f0, 1f0,
     ) |> transpose)
-    light_to_world = Trace.translate(Vec3f0(8, 7, -107))
-    light_to_world *= Trace.translate(Vec3f0(from)) * inv(dir_to_z)
+    light_to_world = (
+        Trace.translate(Vec3f0(6, 0, -102))
+        * Trace.translate(Vec3f0(from))
+        * inv(dir_to_z)
+    )
 
     lights = [
         # Trace.PointLight(
         #     Trace.translate(Vec3f0(8, 7, -107)), Trace.RGBSpectrum(intensity),
         # ),
         Trace.SpotLight(
-            light_to_world, Trace.RGBSpectrum(1f0),
+            light_to_world, Trace.RGBSpectrum(intensity),
             cone_angle, cone_angle - cone_δ_angle,
         ),
-        Trace.PointLight(
-            Trace.translate(Vec3f0(0, 10, -95)), Trace.RGBSpectrum(intensity / 4),
-        ),
+        # Trace.PointLight(
+        #     Trace.translate(Vec3f0(0, 10, -95)),
+        #     Trace.RGBSpectrum(intensity / 4f0),
+        # ),
     ]
 
     scene = Trace.Scene(lights, bvh)
 
     resolution = Point2f0(512)
     n_samples = 8
-    ray_depth = 16
+    ray_depth = 8
 
     # look_point = Trace.bounding_sphere(Trace.world_bound(bvh))[1]
     # look_point *= Point3f0(0, 0, 1)
