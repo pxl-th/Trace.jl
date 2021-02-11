@@ -50,10 +50,10 @@ function render()
         0.25f0, 360f0,
     ), plastic_red)
 
-    triangle_meshes, triangles = Trace.load_triangle_mesh(
-        Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
-        model,
-    )
+    # triangle_meshes, triangles = Trace.load_triangle_mesh(
+    #     Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
+    #     model,
+    # )
 
     floor_triangles = Trace.create_triangle_mesh(
         Trace.ShapeCore(Trace.translate(Vec3f0(-2, 0, -87)), false),
@@ -61,23 +61,20 @@ function render()
         UInt32[
             1, 2, 3,
             1, 4, 3,
-            # 2, 3, 5,
-            # 6, 5, 3,
         ],
         4,
         [
             Point3f0(0, 0, 0), Point3f0(0, 0, -30),
             Point3f0(30, 0, -30), Point3f0(30, 0, 0),
-            # Point3f0(0, 6, -15), Point3f0(6, 6, -15),
         ],
         [
             Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
             Trace.Normal3f0(0, 1, 0), Trace.Normal3f0(0, 1, 0),
-            # Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
         ],
     )
 
-    n_primitives = length(triangles) + length(floor_triangles) + 2
+    # n_primitives = length(triangles) + length(floor_triangles) + 2
+    n_primitives = length(floor_triangles) + 2
     primitives = Vector{Trace.GeometricPrimitive}(undef, n_primitives)
     filled = 1
 
@@ -85,10 +82,10 @@ function render()
     filled += 1
     primitives[filled] = sphere_primitive2
     filled += 1
-    for t in triangles
-        primitives[filled] = Trace.GeometricPrimitive(t, glass)
-        filled += 1
-    end
+    # for t in triangles
+    #     primitives[filled] = Trace.GeometricPrimitive(t, glass)
+    #     filled += 1
+    # end
     for t in floor_triangles
         primitives[filled] = Trace.GeometricPrimitive(t, plastic)
         filled += 1
@@ -154,7 +151,7 @@ function render()
     ir = resolution .|> Int64
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0), Point2f0(1)),
-        filter, 1f0, 1f0, "./scenes/caustic-sppm-$(ir[1])x$(ir[2]).png",
+        filter, 1f0, 1f0, "./scenes/caustic-debug-sppm-$(ir[1])x$(ir[2]).png",
     )
     camera = Trace.PerspectiveCamera(
         Trace.look_at(Point3f0(0, 60, 100), look_point, Vec3f0(0, 1, 0)),
@@ -163,7 +160,6 @@ function render()
 
     # sampler = Trace.UniformSampler(n_samples)
     # integrator = Trace.WhittedIntegrator(camera, sampler, ray_depth)
-    # integrator = Trace.SPPMIntegrator(camera, 0.075f0, 8, 100, 10_000, 1)
     integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 500, 100_000, 1)
     scene |> integrator
 end
