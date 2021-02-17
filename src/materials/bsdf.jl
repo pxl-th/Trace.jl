@@ -128,8 +128,7 @@ function sample_f(
     @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f0(
-        min(u[1] * matching_components - component, 1f0),
-        u[2],
+        min(u[1] * matching_components - component, 1f0), u[2],
     )
     # Sample chosen BxDF.
     wo = world_to_local(b, wo_world)

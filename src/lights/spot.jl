@@ -51,6 +51,6 @@ function sample_le(
     @assert norm(ray.d) ≈ 1f0
     light_normal = ray.d |> Normal3f0
     pdf_pos = 1f0
-    pdf_dir = uniform_cone_pdf(s.cos_total_width)
+    pdf_dir = s.cos_total_width |> uniform_cone_pdf
     s.i * falloff(s, ray.d), ray, light_normal, pdf_pos, pdf_dir
 end

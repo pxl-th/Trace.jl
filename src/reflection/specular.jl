@@ -22,7 +22,7 @@ for arbitrary directions δ-funcion returns no scattering.
 """
 function (s::SpecularReflection{S, F})(
     wo::Vec3f0, wi::Vec3f0,
-) where {S <: Spectrum, F <: Fresnel}
+)::RGBSpectrum where {S <: Spectrum, F <: Fresnel}
     S(0f0)
 end
 
@@ -33,7 +33,7 @@ and return the value of BxDF for the pair of directions.
 """
 function sample_f(
     s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
-) where {S <: Spectrum, F <: Fresnel}
+)::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, F <: Fresnel}
     wi = Vec3f0(-wo[1], -wo[2], wo[3])
     wi, 1f0, s.fresnel(cos_θ(wi)) * s.r / abs(cos_θ(wi)), nothing
 end
@@ -72,7 +72,7 @@ for arbitrary directions δ-funcion returns no scattering.
 """
 function (s::SpecularTransmission{S, T})(
     wo::Vec3f0, wi::Vec3f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::RGBSpectrum where {S <: Spectrum, T <: TransportMode}
     S(0f0)
 end
 
@@ -83,7 +83,7 @@ and return the value of BxDF for the pair of directions.
 """
 function sample_f(
     s::SpecularTransmission{S, T}, wo::Vec3f0, sample::Point2f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, T <: TransportMode}
     # Figure out which η is incident and which is transmitted.
     entering = cos_θ(wo) > 0
     η_i = entering ? s.η_a : s.η_b
@@ -132,7 +132,7 @@ end
 
 @inline function (f::FresnelSpecular{S, T})(
     wo::Vec3f0, wi::Vec3f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::RGBSpectrum where {S <: Spectrum, T <: TransportMode}
     S(0f0)
 end
 
@@ -144,7 +144,7 @@ and return the value of BxDF for the pair of directions.
 """
 function sample_f(
     f::FresnelSpecular{S, T}, wo::Vec3f0, u::Point2f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, T <: TransportMode}
     fd = fresnel_dielectric(cos_θ(wo), f.η_a, f.η_b)
     if u[1] < fd # Compute perfect specular reflection direction.
         wi = Vec3f0(-wo[1], -wo[2], wo[3])

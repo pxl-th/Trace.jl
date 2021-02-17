@@ -236,11 +236,4 @@ include("lights/directional.jl")
 include("integrators/sampler.jl")
 include("integrators/sppm.jl")
 
-""" TODO
-- assert that t_max in intersect methods >= 0
-- test if bvh contains duplicates
-- AnimatedTransform, AnimatedBounds
-- Medium & add it to structs
-"""
-
 end
