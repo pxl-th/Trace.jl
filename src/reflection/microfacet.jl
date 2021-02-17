@@ -18,7 +18,7 @@ struct OrenNayar{S <: Spectrum} <: BxDF
     end
 end
 
-function (o::OrenNayar)(wo::Vec3f0, wi::Vec3f0)
+function (o::OrenNayar)(wo::Vec3f0, wi::Vec3f0)::RGBSpectrum
     sin_θi = wi |> sin_θ
     sin_θo = wo |> sin_θ
     # Compute cosine term of Oren-Nayar model.
@@ -219,7 +219,7 @@ end
 
 function (m::MicrofacetReflection{S, T})(
     wo::Vec3f0, wi::Vec3f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::RGBSpectrum where {S <: Spectrum, T <: TransportMode}
     cosθo = wo |> cos_θ |> abs
     cosθi = wi |> cos_θ |> abs
     wh = wi + wo
@@ -234,7 +234,7 @@ end
 
 function sample_f(
     m::MicrofacetReflection{S, T}, wo::Vec3f0, u::Point2f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, T <: TransportMode}
     wo[3] ≈ 0 && return Vec3f0(0f0), 0f0, S(0f0), nothing
 
     # Sample microfacet orientation `wh` and reflected direction `wi`.
@@ -278,7 +278,7 @@ end
 
 function (m::MicrofacetTransmission{S, T})(
     wo::Vec3f0, wi::Vec3f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::RGBSpectrum where {S <: Spectrum, T <: TransportMode}
     same_hemisphere(wo, wi) && return S(0f0) # Only transmission.
 
     cosθo, cosθi = wo |> cos_θ, wi |> cos_θ
@@ -304,7 +304,7 @@ end
 
 function sample_f(
     m::MicrofacetTransmission{S, T}, wo::Vec3f0, u::Point2f0,
-) where {S <: Spectrum, T <: TransportMode}
+)::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, T <: TransportMode}
     wo[3] ≈ 0 && return Vec3f0(0f0), 0f0, S(0f0), nothing
     wh = sample_wh(m.distribution, wo, u)
     (wo ⋅ wh) < 0 && return Vec3f0(0f0), 0f0, S(0f0), nothing

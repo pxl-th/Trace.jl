@@ -19,7 +19,7 @@ end
 Reflection distribution is constant and divides reflectance spectrum
 equally over the hemisphere.
 """
-function (l::LambertianReflection{S})(::Vec3f0, ::Vec3f0) where S <: Spectrum
+function (l::LambertianReflection{S})(::Vec3f0, ::Vec3f0)::RGBSpectrum where S <: Spectrum
     l.r * (1f0 / π)
 end
 
@@ -54,7 +54,7 @@ struct LambertianTransmission{S <: Spectrum} <: BxDF
     end
 end
 
-function (t::LambertianTransmission{S})(::Vec3f0, ::Vec3f0) where S <: Spectrum
+function (t::LambertianTransmission{S})(::Vec3f0, ::Vec3f0)::RGBSpectrum where S <: Spectrum
     t.t * (1f0 / π)
 end
 
@@ -72,7 +72,7 @@ end
 
 function sample_f(
     b::LambertianTransmission{S}, wo::Vec3f0, sample::Point2f0,
-) where S <: Spectrum
+)::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where S <: Spectrum
     wi = sample |> cosine_sample_hemisphere
     # Flipping the direction if necessary.
     wo[3] > 0 && (wi = Vec3f0(wi[1], wi[2], -wi[3]);)

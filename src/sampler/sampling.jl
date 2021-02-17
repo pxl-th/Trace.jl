@@ -30,11 +30,13 @@ struct Distribution1D
 end
 
 function sample_discrete(d::Distribution1D, u::Float32)
-    # offset = find_interval(length(d.cdf), i -> d.cdf[i] ≤ u)
-    offset = findlast(i -> i, d.cdf .≤ u)
+    # Find interval.
+    # TODO replace current `find_interval` function.
+    offset = findlast(i -> d.cdf[i] ≤ u, 1:length(d.cdf))
+    offset = clamp(offset, 1, length(d.cdf) - 1)
+
     pdf = d.func_int > 0 ? d.func[offset] / (d.func_int * length(d.func)) : 0f0
     u_remapped = (u - d.cdf[offset]) / (d.cdf[offset + 1] - d.cdf[offset])
-    @assert 0f0 ≤ u_remapped ≤ 1f0
     offset, pdf, u_remapped
 end
 

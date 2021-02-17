@@ -130,6 +130,7 @@ function distance_squared(p1::Point3f0, p2::Point3f0)
     p ⋅ p
 end
 
+"""Get offset of a point from the minimum point of the bounds."""
 function offset(b::Bounds3, p::Point3f0)
     o = p - b.p_min
     g = b.p_max .> b.p_min
