@@ -162,7 +162,7 @@ function sample_f(
     refracted, wi = refract(
         wo, face_forward(Normal3f0(0f0, 0f0, 1f0), wo), η_i / η_t,
     )
-    !refracted && return wi, fd, 0f0, nothing
+    !refracted && return wi, fd, RGBSpectrum(0f0), nothing
 
     pdf = 1f0 - fd
     ft = f.t * pdf

@@ -9,59 +9,59 @@ using LinearAlgebra
 function render()
     model = raw"./scenes/models/caustic-glass.ply"
 
-    red = Trace.MatteMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 0f0, 0f0)),
-        Trace.ConstantTexture(0f0),
-    )
-    white = Trace.MatteMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 1f0, 1f0)),
-        Trace.ConstantTexture(0f0),
-    )
-    mirror = Trace.MirrorMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 1f0, 1f0)),
-    )
     glass = Trace.GlassMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(0f0),
         Trace.ConstantTexture(0f0),
-        Trace.ConstantTexture(1.25f0),
+        Trace.ConstantTexture(1.2f0),
         true,
     )
+
+    # plastic_red = Trace.PlasticMaterial(
+    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.8f0, 0.235f0, 0.2f0)),
+    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+    #     Trace.ConstantTexture(0.010408001f0),
+    #     true,
+    # )
+    # plastic_green = Trace.PlasticMaterial(
+    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.219f0, 0.596f0, 0.149f0)),
+    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+    #     Trace.ConstantTexture(0.010408001f0),
+    #     true,
+    # )
+    # plastic_purple = Trace.PlasticMaterial(
+    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.584f0, 0.345f0, 0.698f0)),
+    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+    #     Trace.ConstantTexture(0.010408001f0),
+    #     true,
+    # )
     plastic = Trace.PlasticMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
         Trace.ConstantTexture(0.010408001f0),
         true,
     )
-    plastic_red = Trace.PlasticMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.1f0, 0.01f0)),
-        Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-        Trace.ConstantTexture(0.010408001f0),
-        true,
-    )
 
     # sphere_primitive1 = Trace.GeometricPrimitive(Trace.Sphere(
-    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1, 0.31, -98)), false),
+    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1.61, 0.31, -98)), false),
     #     0.3f0, 360f0,
     # ), plastic_red)
     # sphere_primitive2 = Trace.GeometricPrimitive(Trace.Sphere(
-    #     Trace.ShapeCore(Trace.translate(Vec3f0(1.5, 1.1, -100)), false),
-    #     1f0, 360f0,
-    # ), glass)
-
+    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1.3, 0.31, -98.61)), false),
+    #     0.3f0, 360f0,
+    # ), plastic_green)
+    # sphere_primitive3 = Trace.GeometricPrimitive(Trace.Sphere(
+    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1, 0.31, -98)), false),
+    #     0.3f0, 360f0,
+    # ), plastic_purple)
     triangle_meshes, triangles = Trace.load_triangle_mesh(
         Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
         model,
     )
-
     floor_triangles = Trace.create_triangle_mesh(
         Trace.ShapeCore(Trace.translate(Vec3f0(-10, 0, -87)), false),
-        2,
-        UInt32[
-            1, 2, 3,
-            1, 4, 3,
-        ],
+        2, UInt32[1, 2, 3, 1, 4, 3],
         4,
         [
             Point3f0(0, 0, 0), Point3f0(0, 0, -30),
@@ -73,29 +73,21 @@ function render()
         ],
     )
 
-    n_primitives = length(triangles) + length(floor_triangles)
-    # n_primitives = length(floor_triangles) + 2
-    primitives = Vector{Trace.GeometricPrimitive}(undef, n_primitives)
-    filled = 1
-
-    # primitives[filled] = sphere_primitive1
-    # filled += 1
-    # primitives[filled] = sphere_primitive2
-    # filled += 1
+    primitives = Vector{Trace.GeometricPrimitive}(undef, 0)
+    # push!(primitives, sphere_primitive1)
+    # push!(primitives, sphere_primitive2)
+    # push!(primitives, sphere_primitive3)
     for t in triangles
-        primitives[filled] = Trace.GeometricPrimitive(t, glass)
-        filled += 1
+        push!(primitives, Trace.GeometricPrimitive(t, glass))
     end
     for t in floor_triangles
-        primitives[filled] = Trace.GeometricPrimitive(t, plastic)
-        filled += 1
+        push!(primitives, Trace.GeometricPrimitive(t, plastic))
     end
-    @assert filled == n_primitives + 1
 
     bvh = Trace.BVHAccel(primitives, 1)
     println("BVH World bounds $(Trace.world_bound(bvh))")
 
-    from, to = Point3f0(0, 3, 0), Point3f0(-5, 0, 5)
+    from, to = Point3f0(0, 2, 0), Point3f0(-5, 0, 5)
     cone_angle, cone_δ_angle = 30f0, 10f0
     dir = Vec3f0(to - from) |> normalize
     dir, du, dv = Trace.coordinate_system(dir, Vec3f0(0f0))
