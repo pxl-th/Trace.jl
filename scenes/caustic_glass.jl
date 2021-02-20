@@ -116,7 +116,7 @@ function render()
 
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(256)
+    resolution = Point2f0(1024)
     n_samples = 8
     ray_depth = 8
 
@@ -137,7 +137,7 @@ function render()
     # sampler = Trace.UniformSampler(n_samples)
     # integrator = Trace.WhittedIntegrator(camera, sampler, ray_depth)
     integrator = Trace.SPPMIntegrator(
-        camera, 0.075f0, ray_depth, 10, -1,
+        camera, 0.075f0, ray_depth, 10_000, 1_000_000,
     )
     scene |> integrator
 end
