@@ -6,6 +6,9 @@ using FileIO
 using ImageCore
 using LinearAlgebra
 
+using StatProfilerHTML
+using BenchmarkTools
+
 function render()
     model = raw"./scenes/models/caustic-glass.ply"
 
@@ -85,7 +88,7 @@ function render()
     end
 
     bvh = Trace.BVHAccel(primitives, 1)
-    println("BVH World bounds $(Trace.world_bound(bvh))")
+    # println("BVH World bounds $(Trace.world_bound(bvh))")
 
     from, to = Point3f0(0, 2, 0), Point3f0(-5, 0, 5)
     cone_angle, cone_δ_angle = 30f0, 10f0
@@ -106,8 +109,7 @@ function render()
 
     lights = [
         Trace.SpotLight(
-            light_to_world,
-            Trace.RGBSpectrum(60f0),
+            light_to_world, Trace.RGBSpectrum(60f0),
             cone_angle, cone_angle - cone_δ_angle,
         ),
     ]
@@ -119,15 +121,13 @@ function render()
     ray_depth = 8
 
     look_point = Point3f0(-3, 0, -91)
-    println("Look point $look_point")
-
     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
     filter = Trace.LanczosSincFilter(Point2f0(1f0), 3f0)
 
     ir = resolution .|> Int64
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0), Point2f0(1)),
-        filter, 1f0, 1f0, "./scenes/caustic-debug-sppm-$(ir[1])x$(ir[2]).png",
+        filter, 1f0, 1f0, "./scenes/caustic-sppm-$(ir[1])x$(ir[2]).png",
     )
     camera = Trace.PerspectiveCamera(
         Trace.look_at(Point3f0(0, 150, 150), look_point, Vec3f0(0, 1, 0)),
