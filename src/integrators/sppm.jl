@@ -81,7 +81,6 @@ end
 
 function (i::SPPMIntegrator)(scene::Scene)
     pixel_bounds = get_film(i.camera).crop_bounds
-    println("Pixel bounds $pixel_bounds")
 
     b_sides = pixel_bounds |> inclusive_sides
     n_pixels = UInt64(b_sides[1] * b_sides[2])
@@ -89,12 +88,11 @@ function (i::SPPMIntegrator)(scene::Scene)
         SPPMPixel(radius=i.initial_search_radius)
         for y in 1:b_sides[2], x in 1:b_sides[1]
     ]
-    println("Total pixels $n_pixels, pixels size $(pixels |> size)")
+    grid = Maybe{SPPMPixelListNode}[nothing for _ in 1:n_pixels]
 
     γ = 2f0 / 3f0
     inv_sqrt_spp = 1f0 / sqrt(i.n_iterations) |> Float32
     light_distribution = scene |> compute_light_power_distribution
-    println("Light distribution $(light_distribution.func)")
 
     tile_size = 16
     pixel_extent = pixel_bounds |> diagonal
@@ -102,13 +100,13 @@ function (i::SPPMIntegrator)(scene::Scene)
 
     sampler = UniformSampler(1)
     for iteration in 1:i.n_iterations
-        println("Iteration $iteration")
         _generate_visible_sppm_points!(
             i, pixels, scene,
             n_tiles, tile_size, sampler,
             pixel_bounds, inv_sqrt_spp,
         )
-        grid, grid_bounds, grid_resolution = pixels |> _populate_grid
+        grid |> _clean_grid!
+        grid_bounds, grid_resolution = _populate_grid!(grid, pixels)
         _trace_photons!(
             i, scene, iteration, light_distribution,
             grid, grid_bounds, grid_resolution,
@@ -131,9 +129,8 @@ function _generate_visible_sppm_points!(
 ) where S <: AbstractSampler
     width, height = n_tiles
     total_tiles = width * height - 1
-    println("Total tiles $(total_tiles + 1)")
 
-    bar = Progress(total_tiles, 1)
+    bar = get_progress_bar(total_tiles, "Camera pass: ")
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f0(x, y)
@@ -143,15 +140,14 @@ function _generate_visible_sppm_points!(
         tb_max = min.(tb_min .+ (tile_size - 1), pixel_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
         for pixel_point in tile_bounds
-            # TODO can issue be in poor sampler?
             start_pixel!(tile_sampler, pixel_point)
             # set_sample_number!(tile_sampler, iteration)
 
             camera_sample = get_camera_sample(tile_sampler, pixel_point)
             ray, β = generate_ray_differential(i.camera, camera_sample)
+            β ≈ 0f0 && continue
             β = β |> RGBSpectrum
             @assert !isnan(β)
-            is_black(β) && continue
             scale_differentials!(ray, inv_sqrt_spp)
             # Follow camera ray path until a visible point is created.
             # Get SPPMPixel for current `pixel`.
@@ -193,8 +189,7 @@ function _generate_visible_sppm_points!(
                 if is_diffuse || (is_glossy && depth == i.max_depth)
                     pixel.vp = VisiblePoint(
                         p=surface_interaction.core.p, wo=wo,
-                        bsdf=surface_interaction.bsdf,
-                        β=β |> deepcopy,
+                        bsdf=surface_interaction.bsdf, β=β,
                     )
                     break
                 end
@@ -209,7 +204,7 @@ function _generate_visible_sppm_points!(
                 specular_bounce = (sampled_type & BSDF_SPECULAR) != 0
                 β *= f * abs(wi ⋅ surface_interaction.shading.n) / pdf
                 @assert !isnan(β)
-                βy = to_XYZ(β)[2]
+                βy = β |> to_Y
                 if βy < 0.25f0
                     continue_probability = min(1f0, βy)
                     get_1d(tile_sampler) > continue_probability && break
@@ -224,10 +219,17 @@ function _generate_visible_sppm_points!(
     end
 end
 
-function _populate_grid(pixels::Matrix{SPPMPixel})
+@inline function _clean_grid!(grid)
+    @inbounds for i in 1:length(grid)
+        grid[i] = nothing
+    end
+end
+
+function _populate_grid!(
+    grid::Vector{Maybe{SPPMPixelListNode}}, pixels::Matrix{SPPMPixel},
+)
     n_pixels = pixels |> length |> UInt64
     # Create grid of all SPPM visible points.
-    grid = Maybe{SPPMPixelListNode}[nothing for _ in 1:n_pixels]
     grid_bounds = Bounds3()
     # Compute grid bounds for SPPM visible points.
     max_radius, min_radius = 0f0, Inf32
@@ -245,24 +247,22 @@ function _populate_grid(pixels::Matrix{SPPMPixel})
     grid_resolution = max.(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
     )
-    println("grid resolution ", grid_resolution)
-    println("grid bounds ", grid_bounds)
     # Add visible points to SPPM grid.
-    @showprogress for pixel in pixels
+    @inbounds for pixel in pixels
         is_black(pixel.vp.β) && continue
         # Add pixel's visible point to applicable grid cells.
-        shift = Point3f0(pixel.radius)
-        _, p_min = to_grid(pixel.vp.p - shift, grid_bounds, grid_resolution)
-        _, p_max = to_grid(pixel.vp.p + shift, grid_bounds, grid_resolution)
+        shift = pixel.radius
+        _, p_min = to_grid(pixel.vp.p .- shift, grid_bounds, grid_resolution)
+        _, p_max = to_grid(pixel.vp.p .+ shift, grid_bounds, grid_resolution)
         for z in p_min[3]:p_max[3], y in p_min[2]:p_max[2], x in p_min[1]:p_max[1]
             # Add visible point to grid cell (x, y, z).
-            h = hash(Point3(x, y, z), n_pixels)
+            h = hash(x, y, z, n_pixels)
             # Add `node` to the start of `grid[h]` linked list.
             node = SPPMPixelListNode(pixel, grid[h])
             grid[h] = node
         end
     end
-    grid, grid_bounds, grid_resolution
+    grid_bounds, grid_resolution
 end
 
 function _trace_photons!(
@@ -272,11 +272,12 @@ function _trace_photons!(
     grid_bounds::Bounds3, grid_resolution::Point3,
     n_pixels::UInt64,
 )
-    println("Photons per iteration $(i.photons_per_iteration)")
     # Trace photons and accumulate contributions.
     halton_base = UInt64(iteration - 1) * UInt64(i.photons_per_iteration)
-    println("halton base $halton_base")
-    @showprogress for photon_index in 0:i.photons_per_iteration - 1
+    bar = get_progress_bar(
+        i.photons_per_iteration, "[$iteration] Photon pass: ",
+    )
+    for photon_index in 0:i.photons_per_iteration - 1
         # Follow photon path for `photon_index`.
         halton_index = halton_base + photon_index
         halton_dim = 0
@@ -312,6 +313,7 @@ function _trace_photons!(
             light_pdf * pdf_pos * pdf_dir
         )
         is_black(β) && continue
+        βy = β |> to_Y
 
         # Follow photon path through scene and record intersections.
         depth = 1
@@ -320,11 +322,11 @@ function _trace_photons!(
             !hit && break
             if depth > 1
                 # Add photon contribution to nearby visible points.
-                in_bounds, photon_grid_index = to_grid(
+                in_bounds, gi = to_grid(
                     interaction.core.p, grid_bounds, grid_resolution,
                 )
                 if in_bounds
-                    h = hash(photon_grid_index, n_pixels)
+                    h = hash(gi[1], gi[2], gi[3], n_pixels)
                     # Add photon contribution to visible points in `grid[h]`.
                     node::Maybe{SPPMPixelListNode} = grid[h]
                     while node ≢ nothing
@@ -365,7 +367,7 @@ function _trace_photons!(
 
             # Possibly terminate photon path with Russian roulette.
             β_new = β * fr * abs(wi ⋅ interaction.shading.n) / pdf
-            q = max(0f0, 1f0 - to_XYZ(β_new)[2] / to_XYZ(β)[2])
+            q = max(0f0, 1f0 - to_Y(β_new) / βy)
             if radical_inverse(halton_dim, halton_index) < q
                 halton_dim += 1
                 break
@@ -376,6 +378,7 @@ function _trace_photons!(
 
             depth += 1
         end
+        bar |> next!
     end
 end
 
@@ -386,12 +389,10 @@ function _update_pixels!(pixels::Matrix{SPPMPixel}, γ::Float32)
             # Update pixel photon count, search radius and τ from photons.
             N_new = pixel.N + γ * pixel.M
             radius_new = pixel.radius * √(N_new / (pixel.N + pixel.M))
-            pixel.τ = (
-                # TODO do not multiply by beta?
-                # (pixel.τ + pixel.vp.β * pixel.ϕ)
-                (pixel.τ + pixel.ϕ)
-                * (radius_new / pixel.radius) ^ 2
-            )
+            pixel.τ = (pixel.τ + pixel.ϕ) * (radius_new / pixel.radius) ^ 2
+            # TODO do not multiply by beta?
+            # (pixel.τ + pixel.vp.β * pixel.ϕ)
+
             pixel.ϕ = RGBSpectrum(0f0)
             pixel.radius = radius_new
             pixel.N = N_new
@@ -406,7 +407,6 @@ function _sppm_to_image(
     i::SPPMIntegrator, pixels::Matrix{SPPMPixel}, iteration::Int64,
 )
     @assert iteration > 0
-    println("ppi $(i.photons_per_iteration), it $iteration, Np $(iteration * i.photons_per_iteration)")
     Np = iteration * i.photons_per_iteration * π
     image = fill(RGBSpectrum(0f0), pixels |> size)
     @inbounds for (i, p) in enumerate(pixels)
@@ -423,16 +423,16 @@ Computed indices are in [0, resolution), which is the correct input for `hash`.
 """
 @inline function to_grid(
     p::Point3f0, bounds::Bounds3, grid_resolution::Point3,
-)::Tuple{Bool, Point3}
+)::Tuple{Bool, Point3{UInt64}}
     grid_point = Int64.(floor.(grid_resolution .* offset(bounds, p)))
     in_bounds = all(0 .≤ grid_point .< grid_resolution)
-    in_bounds, clamp.(grid_point, 0, grid_resolution .- 1)
+    in_bounds, UInt64.(clamp.(grid_point, 0, grid_resolution .- 1))
 end
 
-
-@inline function hash(p::Point3, hash_size::UInt64)::UInt64
-    p = p .|> UInt64
-    (((p[1] * 73856093) ⊻ (p[2] * 19349663) ⊻ (p[3] * 83492791)) % hash_size) + 1
+@inline function hash(
+    p1::UInt64, p2::UInt64, p3::UInt64, hash_size::UInt64,
+)::UInt64
+    (((p1 * 73856093) ⊻ (p2 * 19349663) ⊻ (p3 * 83492791)) % hash_size) + 1
 end
 
 function uniform_sample_one_light(
@@ -499,7 +499,5 @@ end
     scene::Scene,
 )::Maybe{Distribution1D}
     length(scene.lights) == 0 && return nothing
-    Distribution1D(Float32[
-        (light |> power |> to_XYZ)[2] for light in scene.lights
-    ])
+    Distribution1D([(l |> power |> to_Y) for l in scene.lights])
 end

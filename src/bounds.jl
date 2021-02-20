@@ -11,10 +11,8 @@ end
 # By default -- create bounds in invalid configuraiton.
 Bounds2() = Bounds2(Point2f0(Inf32), Point2f0(-Inf32))
 Bounds3() = Bounds3(Point3f0(Inf32), Point3f0(-Inf32))
-# Encapsulate single point.
 Bounds2(p::Point2f0) = Bounds2(p, p)
 Bounds3(p::Point3f0) = Bounds3(p, p)
-# Construct correctly from two given points.
 Bounds2c(p1::Point2f0, p2::Point2f0) = Bounds2(min.(p1, p2), max.(p1, p2))
 Bounds3c(p1::Point3f0, p2::Point3f0) = Bounds3(min.(p1, p2), max.(p1, p2))
 
@@ -38,7 +36,9 @@ function Base.length(b::Bounds2)::Int64
     Int64(δ[1] * δ[2])
 end
 
-function Base.iterate(b::Bounds2, i::Integer = 1)::Union{Nothing, Tuple{Point2f0, Integer}}
+function Base.iterate(
+    b::Bounds2, i::Integer = 1,
+)::Union{Nothing, Tuple{Point2f0, Integer}}
     i > length(b) && return nothing
 
     j = i - 1
@@ -173,7 +173,8 @@ end
 dir_is_negative: 1 -- false, 2 -- true
 """
 function intersect_p(
-    b::Bounds3, ray::AbstractRay, inv_dir::Vec3f0, dir_is_negative::Point3{UInt8},
+    b::Bounds3, ray::AbstractRay,
+    inv_dir::Vec3f0, dir_is_negative::Point3{UInt8},
 )::Bool
     tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
     tx_max = (b[3 - dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]

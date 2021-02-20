@@ -144,10 +144,11 @@ function _edge_function(vs::Vector{Point3{T}}) where T <: Union{Float32, Float64
     )
 end
 
-function _to_ray_coordinate_space(
+# TODO try using static vectors
+@inbounds function _to_ray_coordinate_space(
     vs::Vector{Point3f0}, ray::Union{Ray, RayDifferentials},
 )::Tuple{Vector{Point3f0}, Point3f0}
-    # Transform vs.
+    # Translate vs.
     t_vs = vs .- ray.o
     # Permute vs & ray direction.
     kz = ray.d .|> abs |> argmax
@@ -159,7 +160,8 @@ function _to_ray_coordinate_space(
     d = ray.d[[kx, ky, kz]]
     t_vs = [v[[kx, ky, kz]] for v in t_vs]
     # Apply shear transformation to t_vs.
-    shear = Point3f0(-d[1] / d[3], -d[2] / d[3], 1f0 / d[3])
+    denom = 1f0 / d[3]
+    shear = Point3f0(-d[1] * denom, -d[2] * denom, denom)
     [v + Point3f0(shear[1] * v[3], shear[2] * v[3], 0f0) for v in t_vs], shear
 end
 

@@ -8,11 +8,13 @@ using LinearAlgebra
 using StaticArrays
 using ProgressMeter
 
-GeometryBasics.@fixed_vector Normal StaticVector
-const Normal3f0 = Normal{3, Float32}
-const Maybe{T} = Union{T, Nothing}
-
-maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
+function get_progress_bar(n::Integer, desc::String = "Progress")
+    bar = Progress(
+        n, desc=desc,
+        dt=1, barglyphs=BarGlyphs("[=> ]"), barlen=50,
+        color=:white,
+    )
+end
 
 abstract type AbstractRay end
 abstract type Spectrum end
@@ -22,6 +24,12 @@ abstract type Light end
 abstract type Material end
 abstract type BxDF end
 abstract type Integrator end
+
+GeometryBasics.@fixed_vector Normal StaticVector
+const Normal3f0 = Normal{3, Float32}
+
+const Maybe{T} = Union{T, Nothing}
+maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
@@ -169,9 +177,6 @@ include("ray.jl")
 include("bounds.jl")
 include("transformations.jl")
 include("spectrum.jl")
-
-const TargetSpectrum = RGBSpectrum
-
 include("surface_interaction.jl")
 
 struct Scene
