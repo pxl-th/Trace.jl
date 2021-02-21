@@ -35,7 +35,7 @@ end
 
 @inline maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
-@inbounds function concentric_sample_disk(u::Point2f0)::Point2f0
+function concentric_sample_disk(u::Point2f0)::Point2f0
     # Map uniform random numbers to [-1, 1].
     offset = 2f0 * u - Vec2f0(1f0)
     # Handle degeneracy at the origin.
@@ -50,27 +50,27 @@ end
     r * Point2f0(θ |> cos, θ |> sin)
 end
 
-@inbounds function cosine_sample_hemisphere(u::Point2f0)::Vec3f0
+function cosine_sample_hemisphere(u::Point2f0)::Vec3f0
     d = u |> concentric_sample_disk
     z = √max(0f0, 1f0 - d[1] ^ 2 - d[2] ^ 2)
     Vec3f0(d[1], d[2], z)
 end
 
-@inbounds function uniform_sample_sphere(u::Point2f0)::Vec3f0
+function uniform_sample_sphere(u::Point2f0)::Vec3f0
     z = 1f0 - 2f0 * u[1]
     r = √(max(0f0, 1f0 - z ^ 2))
     ϕ = 2f0 * π * u[2]
     Vec3f0(r * cos(ϕ), r * sin(ϕ), z)
 end
 
-@inbounds function uniform_sample_cone(u::Point2f0, cosθ_max::Float32)::Vec3f0
+function uniform_sample_cone(u::Point2f0, cosθ_max::Float32)::Vec3f0
     cosθ = 1f0 - u[1] + u[1] * cosθ_max
     sinθ = √(1f0 - cosθ ^ 2)
     ϕ = u[2] * 2f0 * π
     Vec3f0(cos(ϕ) * sinθ, sin(ϕ) * sinθ, cosθ)
 end
 
-@inbounds function uniform_sample_cone(
+function uniform_sample_cone(
     u::Point2f0, cosθ_max::Float32, x::Vec3f0, y::Vec3f0, z::Vec3f0,
 )::Vec3f0
     cosθ = 1f0 - u[1] + u[1] * cosθ_max
@@ -85,7 +85,7 @@ end
     1f0 / (2f0 * π * (1f0 - cosθ_max))
 end
 
-@inbounds sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+sum_mul(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
 """
 The shading coordinate system gives a frame for expressing directions
@@ -115,7 +115,7 @@ Reflect `wo` about `n`.
 """
 @inline reflect(wo::Vec3f0, n::Vec3f0) = -wo + 2f0 * (wo ⋅ n) * n
 
-@inbounds function partition!(x::Vector, range::UnitRange, predicate::Function)
+function partition!(x::Vector, range::UnitRange, predicate::Function)
     left = range[1]
     for i in range
         if left != i && predicate(x[i])
@@ -126,11 +126,11 @@ Reflect `wo` about `n`.
     left
 end
 
-@inbounds function coordinate_system(v1::Vec3f0, v2::Vec3f0)
+function coordinate_system(v1::Vec3f0, v2::Vec3f0)
     if abs(v1[1]) > abs(v1[2])
-        v2 = typeof(v2)(-v1[3], 0, v1[1]) / sqrt(v1[1] * v1[1] + v1[3] * v1[3])
+        v2 = Vec3f0(-v1[3], 0, v1[1]) / sqrt(v1[1] * v1[1] + v1[3] * v1[3])
     else
-        v2 = typeof(v2)(0, v1[3], -v1[2]) / sqrt(v1[2] * v1[2] + v1[3] * v1[3])
+        v2 = Vec3f0(0, v1[3], -v1[2]) / sqrt(v1[2] * v1[2] + v1[3] * v1[3])
     end
     v1, v2, v1 × v2
 end
@@ -145,8 +145,8 @@ function spherical_direction(
     sin_θ * cos(ϕ) * x + sin_θ * sin(ϕ) * y + cos_θ * z
 end
 
-@inbounds spherical_θ(v::Vec3f0) = clamp(v[3], -1f0, 1f0) |> acos
-@inbounds function spherical_ϕ(v::Vec3f0)
+spherical_θ(v::Vec3f0) = clamp(v[3], -1f0, 1f0) |> acos
+function spherical_ϕ(v::Vec3f0)
     p = atan(v[2], v[1])
     p < 0 ? p + 2f0 * π : p
 end
@@ -224,5 +224,20 @@ include("lights/directional.jl")
 
 include("integrators/sampler.jl")
 include("integrators/sppm.jl")
+
+# triangles = Trace.create_triangle_mesh(
+#     ShapeCore(translate(Vec3f0(0, 0, -1)), false),
+#     1, UInt32[1, 2, 3],
+#     3, [Point3f0(0, 0, 0), Point3f0(1, 0, 0), Point3f0(1, 1, 0)],
+#     [
+#         Trace.Normal3f0(0, 0, 1),
+#         Trace.Normal3f0(0, 0, 1),
+#         Trace.Normal3f0(0, 0, 1),
+#     ],
+# )
+# ray = Ray(o=Point3f0(0), d=Vec3f0(0, 0, -1))
+# hit, t, si = intersect(triangles[1], ray)
+# @info hit, t
+# @info intersect_p(triangles[1], ray)
 
 end

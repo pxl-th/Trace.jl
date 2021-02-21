@@ -114,20 +114,32 @@ function area(t::Triangle)
     0.5f0 * norm((vs[2] - vs[1]) × (vs[3] - vs[1]))
 end
 
-function is_degenerate(t::Triangle)::Bool
-    vs = t |> vertices
+function is_degenerate(vs::AbstractVector{Point3f0})::Bool
     v = (vs[3] - vs[1]) × (vs[2] - vs[1])
-    (v ⋅ v) ≈ 0 ? true : false
+    (v ⋅ v) ≈ 0f0
 end
 
-vertices(t::Triangle) = [t.mesh.vertices[t.mesh.indices[t.i + j]] for j in 0:2]
-normals(t::Triangle) = [t.mesh.normals[t.mesh.indices[t.i + j]] for j in 0:2]
-tangents(t::Triangle) = [t.mesh.tangents[t.mesh.indices[t.i + j]] for j in 0:2]
-
+function vertices(t::Triangle)
+    @SVector Point3f0[t.mesh.vertices[t.mesh.indices[t.i + j]] for j in 0:2]
+end
+function normals(t::Triangle)
+    @SVector Normal3f0[t.mesh.normals[t.mesh.indices[t.i + j]] for j in 0:2]
+end
+function tangents(t::Triangle)
+    @SVector Vec3f0[t.mesh.tangents[t.mesh.indices[t.i + j]] for j in 0:2]
+end
 function uvs(t::Triangle)
     t.mesh.uv isa Nothing &&
-        return [Point2f0(0), Point2f0(1, 0), Point2f0(1, 1)]
-    [t.mesh.uv[t.i + j] for j in 0:2]
+        return @SVector [Point2f0(0), Point2f0(1, 0), Point2f0(1, 1)]
+    @SVector [t.mesh.uv[t.i + j] for j in 0:2]
+end
+
+function _edge_function(vs)
+    Point3f0(
+        vs[2][1] * vs[3][2] - vs[2][2] * vs[3][1],
+        vs[3][1] * vs[1][2] - vs[3][2] * vs[1][1],
+        vs[1][1] * vs[2][2] - vs[1][2] * vs[2][1],
+    )
 end
 
 object_bound(t::Triangle) = mapreduce(
@@ -136,37 +148,34 @@ object_bound(t::Triangle) = mapreduce(
 )
 world_bound(t::Triangle) = reduce(∪, Bounds3.(t |> vertices))
 
-function _edge_function(vs::Vector{Point3{T}}) where T <: Union{Float32, Float64}
-    Point3f0(
-        vs[2][1] * vs[3][2] - vs[2][2] * vs[3][1],
-        vs[3][1] * vs[1][2] - vs[3][2] * vs[1][1],
-        vs[1][1] * vs[2][2] - vs[1][2] * vs[2][1],
-    )
-end
-
-# TODO try using static vectors
-@inbounds function _to_ray_coordinate_space(
-    vs::Vector{Point3f0}, ray::Union{Ray, RayDifferentials},
-)::Tuple{Vector{Point3f0}, Point3f0}
-    # Translate vs.
-    t_vs = vs .- ray.o
-    # Permute vs & ray direction.
+function _to_ray_coordinate_space(
+    vertices::AbstractVector{Point3f0}, ray::Union{Ray, RayDifferentials}
+)
+    # Compute permutation.
     kz = ray.d .|> abs |> argmax
     kx = kz + 1
     kx == 4 && (kx = 1)
     ky = kx + 1
     ky == 4 && (ky = 1)
-
-    d = ray.d[[kx, ky, kz]]
-    t_vs = [v[[kx, ky, kz]] for v in t_vs]
-    # Apply shear transformation to t_vs.
+    permutation = @SVector [kx, ky, kz]
+    # Permute ray direction.
+    d = ray.d[permutation]
+    # Compute shear.
     denom = 1f0 / d[3]
     shear = Point3f0(-d[1] * denom, -d[2] * denom, denom)
-    [v + Point3f0(shear[1] * v[3], shear[2] * v[3], 0f0) for v in t_vs], shear
+    # Translate, apply permutation and shear to vertices.
+    tvs = @SVector Point3f0[
+        (vertices[i] - ray.o)[permutation] + Point3f0(
+            shear[1] * (vertices[i][kz] - ray.o[kz]),
+            shear[2] * (vertices[i][kz] - ray.o[kz]),
+            0f0,
+        ) for i in 1:3
+    ]
+    tvs, shear
 end
 
 function ∂p(
-    t::Triangle, vs::Vector{Point3f0}, uv::Vector{Point2f0},
+    t::Triangle, vs::AbstractVector{Point3f0}, uv::AbstractVector{Point2f0},
 )::Tuple{Vec3f0, Vec3f0, Vec3f0, Vec3f0}
     # Compute deltas for partial derivative matrix.
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
@@ -174,7 +183,8 @@ function ∂p(
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
     if det ≈ 0
         v = normalize((vs[3] - vs[1]) × (vs[2] - vs[1]))
-        return coordinate_system(v, Vec3f0(0))[2:3], δp_13, δp_23
+        _, ∂p∂u, ∂p∂v = coordinate_system(v, Vec3f0(0f0))
+        return ∂p∂u, ∂p∂v, δp_13, δp_23
     end
     inv_det = 1f0 / det
     ∂p∂u = Vec3f0( δuv_23[2] * δp_13 - δuv_13[2] * δp_23) * inv_det
@@ -182,7 +192,9 @@ function ∂p(
     ∂p∂u, ∂p∂v, δp_13, δp_23
 end
 
-function ∂n(t::Triangle, uv::Vector{Point2f0})::Tuple{Normal3f0, Normal3f0}
+function ∂n(
+    t::Triangle, uv::AbstractVector{Point2f0},
+)::Tuple{Normal3f0, Normal3f0}
     t.mesh.normals isa Nothing && return Normal3f0(0), Normal3f0(0)
     t_normals = t |> normals
     # Compute deltas for partial detivatives of normal.
@@ -199,43 +211,41 @@ end
 
 function _init_triangle_shading_geometry!(
     t::Triangle, interaction::SurfaceInteraction{Triangle},
-    barycentric::Point3f0, uv::Vector{Point2f0},
+    barycentric::Point3f0, uv::AbstractVector{Point2f0},
 )
     !(t.mesh.normals ≢ nothing || t.mesh.tangents ≢ nothing) && return
     # Initialize triangle shading geometry.
     # Compute shading normal, tangent & bitangent.
     ns = interaction.core.n
     if t.mesh.normals ≢ nothing
-        ns = normalize(sum_mul(barycentric, normals(t)))
+        ns = sum_mul(barycentric, normals(t)) |> normalize
     end
     if t.mesh.tangents ≢ nothing
-        ss = normalize(sum_mul(barycentric, tangents(t)))
+        ss = sum_mul(barycentric, tangents(t)) |> normalize
     else
         ss = interaction.∂p∂u |> normalize
     end
     ts = ns × ss
     if (ts ⋅ ts) > 0
-        ts = ts |> normalize
-        ss = ts × ns
+        ts = ts |> normalize |> Vec3f0
+        ss = Vec3f0(ts × ns)
     else
-        ss, ts = coordinate_system(ns, ss)[2:3]
+        _, ss, ts = coordinate_system(ns, ss)
     end
     ∂n∂u, ∂n∂v = ∂n(t, uv)
-    set_shading_geometry!(
-        interaction, Vec3f0(ss), Vec3f0(ts), ∂n∂u, ∂n∂v, true,
-    )
+    set_shading_geometry!(interaction, ss, ts, ∂n∂u, ∂n∂v, true)
 end
 
 function intersect(
     t::Triangle, ray::Union{Ray, RayDifferentials},
     test_alpha_texture::Bool = false,
 )::Tuple{Bool, Maybe{Float32}, Maybe{SurfaceInteraction}}
-    is_degenerate(t) && return false, nothing, nothing
     vs = t |> vertices
+    is_degenerate(vs) && return false, nothing, nothing
     t_vs, shear = _to_ray_coordinate_space(vs, ray)
     # Compute edge function coefficients.
     edges = t_vs |> _edge_function
-    if all(edges .≈ 0) # Fall-back to double precision.
+    if iszero(edges) # Fall-back to double precision.
         edges = t_vs .|> (x -> x .|> Float64) |> _edge_function
     end
     # Perform triangle edge & determinant tests.
@@ -244,11 +254,11 @@ function intersect(
     det = edges |> sum
     det ≈ 0 && return false, nothing, nothing
     # Compute scaled hit distance to triangle.
-    t_vs .*= Point3f0(1f0, 1f0, shear[3])
+    shear_z = shear[3]
     t_scaled = (
-        edges[1] * t_vs[1][3]
-        + edges[2] * t_vs[2][3]
-        + edges[3] * t_vs[3][3]
+        edges[1] * t_vs[1][3] * shear_z
+        + edges[2] * t_vs[2][3] * shear_z
+        + edges[3] * t_vs[3][3] * shear_z
     )
     # Test against t_max range.
     det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) &&
@@ -289,12 +299,12 @@ function intersect_p(
     t::Triangle, ray::Union{Ray, RayDifferentials},
     test_alpha_texture::Bool = false,
 )::Bool
-    is_degenerate(t) && return false
     vs = t |> vertices
+    is_degenerate(vs) && return false, nothing, nothing
     t_vs, shear = _to_ray_coordinate_space(vs, ray)
     # Compute edge function coefficients.
     edges = t_vs |> _edge_function
-    if all(edges .≈ 0) # Fall-back to double precision.
+    if iszero(edges) # Fall-back to double precision.
         edges = t_vs .|> (x -> x .|> Float64) |> _edge_function
     end
     # Perform triangle edge & determinant tests.
@@ -303,11 +313,11 @@ function intersect_p(
     det = edges |> sum
     det ≈ 0 && return false
     # Compute scaled hit distance to triangle.
-    t_vs .*= Point3f0(1f0, 1f0, shear[3])
+    shear_z = shear[3]
     t_scaled = (
-        edges[1] * t_vs[1][3]
-        + edges[2] * t_vs[2][3]
-        + edges[3] * t_vs[3][3]
+        edges[1] * t_vs[1][3] * shear_z
+        + edges[2] * t_vs[2][3] * shear_z
+        + edges[3] * t_vs[3][3] * shear_z
     )
     # Test against t_max range.
     det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) && return false

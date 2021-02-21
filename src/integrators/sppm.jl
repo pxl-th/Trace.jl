@@ -220,7 +220,7 @@ function _generate_visible_sppm_points!(
 end
 
 @inline function _clean_grid!(grid)
-    @inbounds for i in 1:length(grid)
+    for i in 1:length(grid)
         grid[i] = nothing
     end
 end
@@ -243,6 +243,8 @@ function _populate_grid!(
     diag = grid_bounds |> diagonal
     max_diag = diag |> maximum
     # TODO can be inf if no visible points
+    @assert max_diag > 0
+    @assert !isinf(max_radius)
     base_grid_resolution = Int64(floor(max_diag / max_radius))
     grid_resolution = max.(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
@@ -424,9 +426,19 @@ Computed indices are in [0, resolution), which is the correct input for `hash`.
 @inline function to_grid(
     p::Point3f0, bounds::Bounds3, grid_resolution::Point3,
 )::Tuple{Bool, Point3{UInt64}}
-    grid_point = Int64.(floor.(grid_resolution .* offset(bounds, p)))
+    p_offset = offset(bounds, p)
+    grid_point = Point3{Int64}(
+        floor(grid_resolution[1] * p_offset[1]),
+        floor(grid_resolution[2] * p_offset[2]),
+        floor(grid_resolution[3] * p_offset[3]),
+    )
     in_bounds = all(0 .≤ grid_point .< grid_resolution)
-    in_bounds, UInt64.(clamp.(grid_point, 0, grid_resolution .- 1))
+    grid_point = Point3{UInt64}(
+        clamp(grid_point[1], 0, grid_resolution[1] - 1),
+        clamp(grid_point[2], 0, grid_resolution[2] - 1),
+        clamp(grid_point[3], 0, grid_resolution[3] - 1),
+    )
+    in_bounds, grid_point
 end
 
 @inline function hash(

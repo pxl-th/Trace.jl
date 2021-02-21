@@ -135,10 +135,11 @@ function offset(b::Bounds3, p::Point3f0)
     o = p - b.p_min
     g = b.p_max .> b.p_min
     !any(g) && return o
-    o ./ Point3f0([
-        gi ? b.p_max[i] - b.p_min[i] : 1f0
-        for (i, gi) in enumerate(g)
-    ])
+    Point3f0(
+        o[1] / (g[1] ? b.p_max[1] - b.p_min[1] : 1f0),
+        o[2] / (g[2] ? b.p_max[2] - b.p_min[2] : 1f0),
+        o[3] / (g[3] ? b.p_max[3] - b.p_min[3] : 1f0),
+    )
 end
 
 function bounding_sphere(b::Bounds3)::Tuple{Point3f0, Float32}
@@ -166,7 +167,11 @@ function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
 end
 
 @inline function is_dir_negative(dir::Vec3f0)
-    Point3{UInt8}([d < 0 ? 2 : 1 for d in dir])
+    @inbounds Point3{UInt8}(
+        dir[1] < 0 ? 2 : 1,
+        dir[2] < 0 ? 2 : 1,
+        dir[3] < 0 ? 2 : 1,
+    )
 end
 
 """
