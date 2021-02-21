@@ -40,6 +40,33 @@ BenchmarkTools.Trial:
   samples:          2
   evals/sample:     1
 
+# After triangle optimization.
+
+BenchmarkTools.Trial:
+  memory estimate:  1.41 GiB
+  allocs estimate:  38067980
+  --------------
+  minimum time:     2.850 s (8.64% GC)
+  median time:      2.958 s (12.03% GC)
+  mean time:        2.958 s (12.03% GC)
+  maximum time:     3.067 s (15.18% GC)
+  --------------
+  samples:          2
+  evals/sample:     1
+
+# After to_grid optimization.
+
+BenchmarkTools.Trial:
+  memory estimate:  1.40 GiB
+  allocs estimate:  37743836
+  --------------
+  minimum time:     2.957 s (8.74% GC)
+  median time:      2.967 s (13.21% GC)
+  mean time:        2.967 s (13.21% GC)
+  maximum time:     2.977 s (17.64% GC)
+  --------------
+  samples:          2
+  evals/sample:     1
 
 # TRIANGLES
 

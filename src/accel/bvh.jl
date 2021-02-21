@@ -236,7 +236,6 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
                 to_visit_offset == 1 && break
                 to_visit_offset -= 1
                 current_node_i = nodes_to_visit[to_visit_offset]
-                @assert current_node_i != 0
             else
                 if dir_is_neg[ln.split_axis] == 2
                     nodes_to_visit[to_visit_offset] = current_node_i + 1
@@ -251,7 +250,6 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
             to_visit_offset == 1 && break
             to_visit_offset -= 1
             current_node_i = nodes_to_visit[to_visit_offset]
-            @assert current_node_i != 0
         end
     end
     hit, interaction
@@ -279,7 +277,6 @@ function intersect_p(bvh::BVHAccel, ray::AbstractRay)
                 to_visit_offset == 1 && break
                 to_visit_offset -= 1
                 current_node_i = nodes_to_visit[to_visit_offset]
-                @assert current_node_i != 0
             else
                 if dir_is_neg[ln.split_axis] == 2
                     nodes_to_visit[to_visit_offset] = current_node_i + 1
@@ -294,7 +291,6 @@ function intersect_p(bvh::BVHAccel, ray::AbstractRay)
             to_visit_offset == 1 && break
             to_visit_offset -= 1
             current_node_i = nodes_to_visit[to_visit_offset]
-            @assert current_node_i != 0
         end
     end
     false

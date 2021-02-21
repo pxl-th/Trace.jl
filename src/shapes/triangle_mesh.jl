@@ -183,7 +183,8 @@ function ∂p(
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
     if det ≈ 0
         v = normalize((vs[3] - vs[1]) × (vs[2] - vs[1]))
-        return coordinate_system(v, Vec3f0(0))[[2, 3]], δp_13, δp_23
+        _, ∂p∂u, ∂p∂v = coordinate_system(v, Vec3f0(0f0))
+        return ∂p∂u, ∂p∂v, δp_13, δp_23
     end
     inv_det = 1f0 / det
     ∂p∂u = Vec3f0( δuv_23[2] * δp_13 - δuv_13[2] * δp_23) * inv_det
@@ -229,7 +230,7 @@ function _init_triangle_shading_geometry!(
         ts = ts |> normalize |> Vec3f0
         ss = Vec3f0(ts × ns)
     else
-        ss, ts = coordinate_system(ns, ss)[[2, 3]]
+        _, ss, ts = coordinate_system(ns, ss)
     end
     ∂n∂u, ∂n∂v = ∂n(t, uv)
     set_shading_geometry!(interaction, ss, ts, ∂n∂u, ∂n∂v, true)

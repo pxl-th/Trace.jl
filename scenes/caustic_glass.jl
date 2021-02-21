@@ -18,7 +18,7 @@ function render()
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(0f0),
         Trace.ConstantTexture(0f0),
-        Trace.ConstantTexture(1.2f0),
+        Trace.ConstantTexture(1.25f0),
         true,
     )
 
@@ -137,16 +137,8 @@ function render()
 
     # sampler = Trace.UniformSampler(n_samples)
     # integrator = Trace.WhittedIntegrator(camera, sampler, ray_depth)
-    # try
-    integrator = Trace.SPPMIntegrator(
-        camera, 0.075f0, ray_depth, 10_000, -1, #1_000_000,
-    )
+    integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 1, -1)
     scene |> integrator
-    # catch e
-    #     bt = backtrace()
-    #     @info e
-    #     @info bt
-    # end
 end
 
 render()
