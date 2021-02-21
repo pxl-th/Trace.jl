@@ -164,9 +164,9 @@ function _to_ray_coordinate_space(
     denom = 1f0 / d[3]
     shear = Point3f0(-d[1] * denom, -d[2] * denom, denom)
     # Translate, apply permutation and shear to vertices.
+    tvs = @SVector Point3f0[(vertices[i] - ray.o)[permutation] for i in 1:3]
     tvs = @SVector Point3f0[
-        (vertices[i] - ray.o)[permutation] +
-        Point3f0(shear[1] * vertices[i][3], shear[2] * vertices[i][3], 0f0)
+        tvs[i] + Point3f0(shear[1] * tvs[i][3], shear[2] * tvs[i][3], 0f0)
         for i in 1:3
     ]
     tvs, shear
@@ -237,7 +237,6 @@ function intersect(
     t::Triangle, ray::Union{Ray, RayDifferentials},
     test_alpha_texture::Bool = false,
 )::Tuple{Bool, Maybe{Float32}, Maybe{SurfaceInteraction}}
-    # is_degenerate(t) && return false, nothing, nothing
     vs = t |> vertices
     is_degenerate(vs) && return false, nothing, nothing
     t_vs, shear = _to_ray_coordinate_space(vs, ray)

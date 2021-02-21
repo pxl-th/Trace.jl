@@ -220,7 +220,7 @@ function _generate_visible_sppm_points!(
 end
 
 @inline function _clean_grid!(grid)
-    @inbounds for i in 1:length(grid)
+    for i in 1:length(grid)
         grid[i] = nothing
     end
 end
@@ -243,6 +243,7 @@ function _populate_grid!(
     diag = grid_bounds |> diagonal
     max_diag = diag |> maximum
     # TODO can be inf if no visible points
+    println(max_radius, " | ", max_diag)
     base_grid_resolution = Int64(floor(max_diag / max_radius))
     grid_resolution = max.(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
