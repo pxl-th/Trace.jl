@@ -16,7 +16,7 @@ end
 Base.:(==)(c::C, i) where C <: Spectrum = all(c.c .== i)
 Base.:(==)(c1::C, c2::C) where C <: Spectrum = all(c1.c .== c2.c)
 Base.:+(c1::C, c2::C) where C <: Spectrum = C(c1.c .+ c2.c)
-Base.:+(c1::C, c::Number) where C <: Spectrum = C(c1.c .+ c)
+Base.:+(c1::C, c) where C <: Spectrum = C(c1.c .+ c)
 Base.:-(c::C) where C <: Spectrum = -c.c |> C(-c.c)
 Base.:-(c1::C, c::Number) where C <: Spectrum = C(c1.c .- c)
 Base.:-(c1::C, c2::C) where C <: Spectrum = C(c1.c .- c2.c)

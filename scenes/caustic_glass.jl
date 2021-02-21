@@ -137,7 +137,7 @@ function render()
 
     # sampler = Trace.UniformSampler(n_samples)
     # integrator = Trace.WhittedIntegrator(camera, sampler, ray_depth)
-    integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 1, -1)
+    integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 100, -1)
     scene |> integrator
 end
 

@@ -1,3 +1,53 @@
+mutable struct AtomicVec3f0
+    x::Threads.Atomic{Float32}
+    y::Threads.Atomic{Float32}
+    z::Threads.Atomic{Float32}
+end
+
+function AtomicVec3f0(x::Float32 = 0f0)
+    AtomicVec3f0(
+        Threads.Atomic{Float32}(x),
+        Threads.Atomic{Float32}(x),
+        Threads.Atomic{Float32}(x),
+    )
+end
+
+function AtomicVec3f0(p::Point3f0)
+    AtomicVec3f0(
+        Threads.Atomic{Float32}(p[1]),
+        Threads.Atomic{Float32}(p[2]),
+        Threads.Atomic{Float32}(p[3]),
+    )
+end
+
+function set!(a::AtomicVec3f0, v::Float32)
+    a.x[] = v
+    a.y[] = v
+    a.z[] = v
+end
+
+function set!(a::AtomicVec3f0, p::Point3f0)
+    a.x[] = p[1]
+    a.y[] = p[2]
+    a.z[] = p[3]
+end
+
+function Threads.atomic_add!(a::AtomicVec3f0, p::Point3f0)
+    Threads.atomic_add!(a.x, p[1])
+    Threads.atomic_add!(a.y, p[2])
+    Threads.atomic_add!(a.z, p[3])
+end
+
+function Threads.atomic_add!(a::AtomicVec3f0, s::RGBSpectrum)
+    Threads.atomic_add!(a.x, s.c[1])
+    Threads.atomic_add!(a.y, s.c[2])
+    Threads.atomic_add!(a.z, s.c[3])
+end
+
+function Base.convert(::Type{Point3f0}, a::AtomicVec3f0)
+    Point3f0(a.x[], a.y[], a.z[])
+end
+
 mutable struct VisiblePoint
     p::Point3f0
     wo::Vec3f0
@@ -14,7 +64,7 @@ end
 
 mutable struct SPPMPixel
     Ld::RGBSpectrum
-    ϕ::RGBSpectrum
+    ϕ::AtomicVec3f0
     """
     Maintains the sum of products of photons with BSDF values.
     Aka. sum of ϕ from all of the iterations, weighted by radius ratio.
@@ -28,19 +78,19 @@ mutable struct SPPMPixel
     """
     radius::Float32
     """Number of photons that contributed during the ith iteration."""
-    M::Int64
+    M::Threads.Atomic{Int64}
     """Total number of photons that contributed up to the ith iteration."""
     N::Float64
     vp::VisiblePoint
 
     function SPPMPixel(;
         Ld::RGBSpectrum = RGBSpectrum(0f0),
-        ϕ::RGBSpectrum = RGBSpectrum(0f0),
+        ϕ::AtomicVec3f0 = AtomicVec3f0(0f0),
         τ::RGBSpectrum = RGBSpectrum(0f0),
         radius::Float32 = 0f0, M::Int64 = 0, N::Int64 = 0,
         vp::VisiblePoint = VisiblePoint()
     )
-        new(Ld, ϕ, τ, radius, M, N, vp)
+        new(Ld, ϕ, τ, radius, Threads.Atomic{Int64}(M), N, vp)
     end
 end
 
@@ -279,7 +329,7 @@ function _trace_photons!(
     bar = get_progress_bar(
         i.photons_per_iteration, "[$iteration] Photon pass: ",
     )
-    for photon_index in 0:i.photons_per_iteration - 1
+    Threads.@threads for photon_index in 0:i.photons_per_iteration - 1
         # Follow photon path for `photon_index`.
         halton_index = halton_base + photon_index
         halton_dim = 0
@@ -343,8 +393,10 @@ function _trace_photons!(
                             node.pixel.vp.wo, -photon_ray.d,
                         )
                         @assert !isnan(ϕ)
-                        node.pixel.ϕ += ϕ
-                        node.pixel.M += 1
+                        Threads.atomic_add!(node.pixel.ϕ, ϕ)
+                        Threads.atomic_add!(node.pixel.M, 1)
+                        # node.pixel.ϕ += ϕ
+                        # node.pixel.M += 1
                         node = node.next
                     end
                 end
@@ -387,18 +439,21 @@ end
 function _update_pixels!(pixels::Matrix{SPPMPixel}, γ::Float32)
     # Update pixel values from this pass's photons.
     for pixel in pixels
-        if pixel.M > 0
+        M = pixel.M[]
+        if M > 0
+            ϕ = convert(Point3f0, pixel.ϕ)
             # Update pixel photon count, search radius and τ from photons.
-            N_new = pixel.N + γ * pixel.M
-            radius_new = pixel.radius * √(N_new / (pixel.N + pixel.M))
-            pixel.τ = (pixel.τ + pixel.ϕ) * (radius_new / pixel.radius) ^ 2
+            N_new = pixel.N + γ * M
+            radius_new = pixel.radius * √(N_new / (pixel.N + M))
+            pixel.τ = (pixel.τ + ϕ) * (radius_new / pixel.radius) ^ 2
             # TODO do not multiply by beta?
             # (pixel.τ + pixel.vp.β * pixel.ϕ)
 
-            pixel.ϕ = RGBSpectrum(0f0)
             pixel.radius = radius_new
             pixel.N = N_new
-            pixel.M = 0
+            # pixel.ϕ = RGBSpectrum(0f0)
+            set!(pixel.ϕ, 0f0)
+            pixel.M[] = 0
         end
         pixel.vp.β = RGBSpectrum(0f0)
         pixel.vp.bsdf = nothing
