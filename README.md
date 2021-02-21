@@ -39,3 +39,77 @@ BenchmarkTools.Trial:
   --------------
   samples:          2
   evals/sample:     1
+
+
+# TRIANGLES
+
+## Initial
+
+BenchmarkTools.Trial:
+  memory estimate:  3.27 KiB
+  allocs estimate:  51
+  --------------
+  minimum time:     5.122 μs (0.00% GC)
+  median time:      5.322 μs (0.00% GC)
+  mean time:        6.162 μs (5.28% GC)
+  maximum time:     564.556 μs (97.99% GC)
+  --------------
+  samples:          10000
+  evals/sample:     9
+
+## Rewrote _to_ray_CS
+
+BenchmarkTools.Trial:
+  memory estimate:  1.91 KiB
+  allocs estimate:  20
+  --------------
+  minimum time:     970.000 ns (0.00% GC)
+  median time:      1.100 μs (0.00% GC)
+  mean time:        1.398 μs (8.06% GC)
+  maximum time:     291.540 μs (99.28% GC)
+  --------------
+  samples:          10000
+  evals/sample:     10
+
+## Rewrote t_scaled
+
+BenchmarkTools.Trial:
+  memory estimate:  1.78 KiB
+  allocs estimate:  19
+  --------------
+  minimum time:     960.000 ns (0.00% GC)
+  median time:      1.060 μs (0.00% GC)
+  mean time:        1.320 μs (8.60% GC)
+  maximum time:     294.820 μs (99.42% GC)
+  --------------
+  samples:          10000
+  evals/sample:     10
+
+
+## Put vertices on a stack instead of a heap
+
+BenchmarkTools.Trial:
+  memory estimate:  1.53 KiB
+  allocs estimate:  17
+  --------------
+  minimum time:     738.400 ns (0.00% GC)
+  median time:      850.400 ns (0.00% GC)
+  mean time:        1.183 μs (9.43% GC)
+  maximum time:     38.427 μs (95.92% GC)
+  --------------
+  samples:          10000
+  evals/sample:     125
+
+## Put all triangle attributes on a stack
+
+BenchmarkTools.Trial:
+  memory estimate:  1.17 KiB
+  allocs estimate:  14
+  --------------
+  minimum time:     775.758 ns (0.00% GC)
+  median time:      805.051 ns (0.00% GC)
+  mean time:        927.754 ns (7.55% GC)
+  maximum time:     30.790 μs (96.28% GC)
+  --------------
+  samples:          10000
+  evals/sample:     99

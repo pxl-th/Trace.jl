@@ -8,6 +8,7 @@ using LinearAlgebra
 
 using StatProfilerHTML
 using BenchmarkTools
+using Profile
 
 function render()
     model = raw"./scenes/models/caustic-glass.ply"
