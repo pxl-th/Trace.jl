@@ -89,7 +89,6 @@ function render()
     end
 
     bvh = Trace.BVHAccel(primitives, 1)
-    # println("BVH World bounds $(Trace.world_bound(bvh))")
 
     from, to = Point3f0(0, 2, 0), Point3f0(-5, 0, 5)
     cone_angle, cone_δ_angle = 30f0, 10f0
