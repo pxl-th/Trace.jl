@@ -53,7 +53,7 @@ function render()
 
     bvh = Trace.BVHAccel(primitives, 1)
 
-    resolution = Point2f0(128)
+    resolution = Point2f0(1024)
     n_samples = 8
     ray_depth = 5
 
@@ -104,7 +104,7 @@ function render()
             Trace.look_at(Point3f0(0, 150, 150), look_point, Vec3f0(0, 1, 0)),
             screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
         )
-        integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 5, -1)
+        integrator = Trace.SPPMIntegrator(camera, 0.055f0, ray_depth, 25, 1_250_000)
         scene |> integrator
     end
 end
