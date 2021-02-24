@@ -63,7 +63,9 @@ function render()
 
     ir = resolution .|> Int64
 
-    for (i, shift) in enumerate(0:0.1:5)
+    for (i, shift) in enumerate(2.6:0.1:5)
+        i = 27 + i - 1
+        @info "Shift $shift"
         from = Point3f0(0, 0.5 + shift, 0)
         to = Point3f0(-5, 0, 5)
 
