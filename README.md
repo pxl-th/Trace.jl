@@ -1,4 +1,6 @@
-# Trace
+# Trace.jl
+
+Ray tracing.
 
 ## Install
 
