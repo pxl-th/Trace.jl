@@ -4,8 +4,6 @@ Ray tracing.
 
 ## Install
 
-To install, execute
-
 ```
 ] add https://github.com/pxl-th/Trace.jl.git
 ```
@@ -14,7 +12,7 @@ To install, execute
 
 All of the examples are available in `scenes/` directory.
 
-Example of running caustic glass scene (note that it supports multithreading):
+Example of running caustic glass scene (note that it supports multithreading).
 
 ```bash
 julia -t 4 --project=. scenes/caustic_glass.jl
