@@ -1,6 +1,5 @@
 module Trace
 
-import Assimp
 import FileIO
 using GeometryBasics
 using Parameters: @with_kw
