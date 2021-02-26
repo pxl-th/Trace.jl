@@ -4,15 +4,10 @@ Ray tracing.
 
 ## Install
 
-Right now it is Windows only due to custom version of [Assimp](https://github.com/pxl-th/Assimp.jl) library.
-Hovewer this will be fixed.
-
-Super hacky way to install.
+To install, execute
 
 ```
-] rm Assimp assimp_win_jll
-] add https://github.com/pxl-th/assimp_win_jll.jl.git
-] add https://github.com/pxl-th/Assimp.jl.git
+] add https://github.com/pxl-th/Trace.jl.git
 ```
 
 ## Examples
