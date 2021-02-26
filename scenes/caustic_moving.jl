@@ -1,13 +1,10 @@
 using GeometryBasics
-using Trace
-using ProgressMeter
-using Printf
-using FileIO
-using ImageCore
 using LinearAlgebra
 
+using Trace
+using TraceLoader
+
 function render()
-    model = raw"./scenes/models/caustic-glass.ply"
 
     glass = Trace.GlassMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
@@ -17,7 +14,6 @@ function render()
         Trace.ConstantTexture(1.2f0),
         true,
     )
-
     plastic = Trace.PlasticMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
@@ -25,9 +21,9 @@ function render()
         true,
     )
 
-    triangle_meshes, triangles = Trace.load_triangle_mesh(
-        Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
-        model,
+    model = "./models/caustic-glass.ply"
+    triangle_meshes, triangles = load_triangle_mesh(
+        model, Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
     )
     floor_triangles = Trace.create_triangle_mesh(
         Trace.ShapeCore(Trace.translate(Vec3f0(-10, 0, -87)), false),
@@ -54,7 +50,6 @@ function render()
     bvh = Trace.BVHAccel(primitives, 1)
 
     resolution = Point2f0(1024)
-    n_samples = 8
     ray_depth = 5
 
     look_point = Point3f0(-3, 0, -91)
@@ -63,8 +58,7 @@ function render()
 
     ir = resolution .|> Int64
 
-    for (i, shift) in enumerate(2.6:0.1:5)
-        i = 27 + i - 1
+    for (i, shift) in enumerate(0:0.1:5)
         @info "Shift $shift"
         from = Point3f0(0, 0.5 + shift, 0)
         to = Point3f0(-5, 0, 5)

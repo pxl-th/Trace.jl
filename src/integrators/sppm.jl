@@ -167,6 +167,7 @@ function (i::SPPMIntegrator)(scene::Scene)
         if iteration % i.write_frequency == 0 || iteration == i.n_iterations
             image = _sppm_to_image(i, pixels, iteration)
             set_image!(i.camera |> get_film, image)
+            println("save $iteration")
             i.camera |> get_film |> save
         end
     end
@@ -395,8 +396,6 @@ function _trace_photons!(
                         @assert !isnan(ϕ)
                         Threads.atomic_add!(node.pixel.ϕ, ϕ)
                         Threads.atomic_add!(node.pixel.M, 1)
-                        # node.pixel.ϕ += ϕ
-                        # node.pixel.M += 1
                         node = node.next
                     end
                 end
@@ -429,7 +428,6 @@ function _trace_photons!(
             halton_dim += 1
             # β = β_new / (1f0 - q)
             photon_ray = spawn_ray(interaction, wi) |> RayDifferentials
-
             depth += 1
         end
         bar |> next!
@@ -451,7 +449,6 @@ function _update_pixels!(pixels::Matrix{SPPMPixel}, γ::Float32)
 
             pixel.radius = radius_new
             pixel.N = N_new
-            # pixel.ϕ = RGBSpectrum(0f0)
             set!(pixel.ϕ, 0f0)
             pixel.M[] = 0
         end

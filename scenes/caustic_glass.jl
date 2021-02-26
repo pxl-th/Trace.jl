@@ -1,18 +1,10 @@
 using GeometryBasics
-using Trace
-using ProgressMeter
-using Printf
-using FileIO
-using ImageCore
 using LinearAlgebra
 
-using StatProfilerHTML
-using BenchmarkTools
-using Profile
+using Trace
+using TraceLoader
 
 function render()
-    model = raw"./scenes/models/caustic-glass.ply"
-
     glass = Trace.GlassMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
@@ -21,25 +13,6 @@ function render()
         Trace.ConstantTexture(1.25f0),
         true,
     )
-
-    # plastic_red = Trace.PlasticMaterial(
-    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.8f0, 0.235f0, 0.2f0)),
-    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-    #     Trace.ConstantTexture(0.010408001f0),
-    #     true,
-    # )
-    # plastic_green = Trace.PlasticMaterial(
-    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.219f0, 0.596f0, 0.149f0)),
-    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-    #     Trace.ConstantTexture(0.010408001f0),
-    #     true,
-    # )
-    # plastic_purple = Trace.PlasticMaterial(
-    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.584f0, 0.345f0, 0.698f0)),
-    #     Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-    #     Trace.ConstantTexture(0.010408001f0),
-    #     true,
-    # )
     plastic = Trace.PlasticMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
@@ -47,21 +20,9 @@ function render()
         true,
     )
 
-    # sphere_primitive1 = Trace.GeometricPrimitive(Trace.Sphere(
-    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1.61, 0.31, -98)), false),
-    #     0.3f0, 360f0,
-    # ), plastic_red)
-    # sphere_primitive2 = Trace.GeometricPrimitive(Trace.Sphere(
-    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1.3, 0.31, -98.61)), false),
-    #     0.3f0, 360f0,
-    # ), plastic_green)
-    # sphere_primitive3 = Trace.GeometricPrimitive(Trace.Sphere(
-    #     Trace.ShapeCore(Trace.translate(Vec3f0(-1, 0.31, -98)), false),
-    #     0.3f0, 360f0,
-    # ), plastic_purple)
-    triangle_meshes, triangles = Trace.load_triangle_mesh(
-        Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
-        model,
+    model = "./models/caustic-glass.ply"
+    triangle_meshes, triangles = load_triangle_mesh(
+        model, Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
     )
     floor_triangles = Trace.create_triangle_mesh(
         Trace.ShapeCore(Trace.translate(Vec3f0(-10, 0, -87)), false),
@@ -78,9 +39,6 @@ function render()
     )
 
     primitives = Vector{Trace.GeometricPrimitive}(undef, 0)
-    # push!(primitives, sphere_primitive1)
-    # push!(primitives, sphere_primitive2)
-    # push!(primitives, sphere_primitive3)
     for t in triangles
         push!(primitives, Trace.GeometricPrimitive(t, glass))
     end
@@ -116,9 +74,9 @@ function render()
 
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f0(1024)
+    resolution = Point2f0(256)
     n_samples = 8
-    ray_depth = 8
+    ray_depth = 5
 
     look_point = Point3f0(-3, 0, -91)
     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
@@ -127,15 +85,14 @@ function render()
     ir = resolution .|> Int64
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0), Point2f0(1)),
-        filter, 1f0, 1f0, "./scenes/caustic-sppm-$(ir[1])x$(ir[2]).png",
+        filter, 1f0, 1f0,
+        "./caustics-sppm-$(ir[1])x$(ir[2]).png",
     )
     camera = Trace.PerspectiveCamera(
         Trace.look_at(Point3f0(0, 150, 150), look_point, Vec3f0(0, 1, 0)),
         screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
     )
 
-    # sampler = Trace.UniformSampler(n_samples)
-    # integrator = Trace.WhittedIntegrator(camera, sampler, ray_depth)
     integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 100, -1)
     scene |> integrator
 end
