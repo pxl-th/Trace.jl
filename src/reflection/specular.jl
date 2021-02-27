@@ -21,7 +21,7 @@ For specular reflection, no scattering is returned, since
 for arbitrary directions δ-funcion returns no scattering.
 """
 function (s::SpecularReflection{S, F})(
-    wo::Vec3f0, wi::Vec3f0,
+    ::Vec3f0, ::Vec3f0,
 )::RGBSpectrum where {S <: Spectrum, F <: Fresnel}
     S(0f0)
 end
@@ -32,7 +32,7 @@ and return the value of BxDF for the pair of directions.
 `sample` parameter isn't needed for the δ-distribution.
 """
 function sample_f(
-    s::SpecularReflection{S, F}, wo::Vec3f0, sample::Point2f0,
+    s::SpecularReflection{S, F}, wo::Vec3f0, ::Point2f0,
 )::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, F <: Fresnel}
     wi = Vec3f0(-wo[1], -wo[2], wo[3])
     wi, 1f0, s.fresnel(cos_θ(wi)) * s.r / abs(cos_θ(wi)), nothing
@@ -71,7 +71,7 @@ For specular transmission, no scattering is returned, since
 for arbitrary directions δ-funcion returns no scattering.
 """
 function (s::SpecularTransmission{S, T})(
-    wo::Vec3f0, wi::Vec3f0,
+    ::Vec3f0, ::Vec3f0,
 )::RGBSpectrum where {S <: Spectrum, T <: TransportMode}
     S(0f0)
 end
@@ -82,7 +82,7 @@ and return the value of BxDF for the pair of directions.
 `sample` parameter isn't needed for the δ-distribution.
 """
 function sample_f(
-    s::SpecularTransmission{S, T}, wo::Vec3f0, sample::Point2f0,
+    s::SpecularTransmission{S, T}, wo::Vec3f0, ::Point2f0,
 )::Tuple{Vec3f0, Float32, RGBSpectrum, Maybe{UInt8}} where {S <: Spectrum, T <: TransportMode}
     # Figure out which η is incident and which is transmitted.
     entering = cos_θ(wo) > 0
@@ -131,7 +131,7 @@ struct FresnelSpecular{S <: Spectrum, T <: TransportMode} <: BxDF
 end
 
 @inline function (f::FresnelSpecular{S, T})(
-    wo::Vec3f0, wi::Vec3f0,
+    ::Vec3f0, ::Vec3f0,
 )::RGBSpectrum where {S <: Spectrum, T <: TransportMode}
     S(0f0)
 end

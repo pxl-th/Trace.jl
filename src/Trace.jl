@@ -25,10 +25,9 @@ const Normal3f0 = Normal{3, Float32}
 const Maybe{T} = Union{T, Nothing}
 
 function get_progress_bar(n::Integer, desc::String = "Progress")
-    bar = Progress(
-        n, desc=desc,
-        dt=1, barglyphs=BarGlyphs("[=> ]"), barlen=50,
-        color=:white,
+    Progress(
+        n, desc=desc, dt=1,
+        barglyphs=BarGlyphs("[=> ]"), barlen=50, color=:white,
     )
 end
 
@@ -125,7 +124,7 @@ function partition!(x::Vector, range::UnitRange, predicate::Function)
     left
 end
 
-function coordinate_system(v1::Vec3f0, v2::Vec3f0)
+function coordinate_system(v1::Vec3f0)
     if abs(v1[1]) > abs(v1[2])
         v2 = Vec3f0(-v1[3], 0, v1[1]) / sqrt(v1[1] * v1[1] + v1[3] * v1[3])
     else

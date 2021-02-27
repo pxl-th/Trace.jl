@@ -44,11 +44,10 @@ end
 end
 
 function sample_le(
-    s::SpotLight, u1::Point2f0, u2::Point2f0, time::Float32,
+    s::SpotLight, u1::Point2f0, ::Point2f0, ::Float32,
 )::Tuple{RGBSpectrum, Ray, Normal3f0, Float32, Float32}
     w = uniform_sample_cone(u1, s.cos_total_width) |> s.light_to_world
     ray = Ray(o=s.position, d=w)
-    @assert norm(ray.d) ≈ 1f0
     light_normal = ray.d |> Normal3f0
     pdf_pos = 1f0
     pdf_dir = s.cos_total_width |> uniform_cone_pdf

@@ -1,7 +1,0 @@
-[deps]
-Assimp = "079381af-6941-5802-8ad5-fb13e7f1c93a"
-GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-Trace = "afc56b53-c9a9-482a-a956-d1d800e05558"
-TraceLoader = "4875adec-830b-4a0d-b253-d0ec2ae43367"
-assimp_win_jll = "fe2041e4-48f9-56de-9ac5-7523ba92ef05"

@@ -65,7 +65,7 @@ function render()
 
         cone_angle, cone_δ_angle = 30f0, 10f0
         dir = Vec3f0(to - from) |> normalize
-        dir, du, dv = Trace.coordinate_system(dir, Vec3f0(0f0))
+        dir, du, dv = Trace.coordinate_system(dir)
 
         dir_to_z = Trace.Transformation(Mat4f0(
             du[1], du[2], du[3], 0f0,

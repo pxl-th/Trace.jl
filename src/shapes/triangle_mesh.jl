@@ -123,7 +123,7 @@ function _to_ray_coordinate_space(
 end
 
 function ∂p(
-    t::Triangle, vs::AbstractVector{Point3f0}, uv::AbstractVector{Point2f0},
+    ::Triangle, vs::AbstractVector{Point3f0}, uv::AbstractVector{Point2f0},
 )::Tuple{Vec3f0, Vec3f0, Vec3f0, Vec3f0}
     # Compute deltas for partial derivative matrix.
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
@@ -131,7 +131,7 @@ function ∂p(
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
     if det ≈ 0
         v = normalize((vs[3] - vs[1]) × (vs[2] - vs[1]))
-        _, ∂p∂u, ∂p∂v = coordinate_system(v, Vec3f0(0f0))
+        _, ∂p∂u, ∂p∂v = coordinate_system(v)
         return ∂p∂u, ∂p∂v, δp_13, δp_23
     end
     inv_det = 1f0 / det
@@ -178,15 +178,14 @@ function _init_triangle_shading_geometry!(
         ts = ts |> normalize |> Vec3f0
         ss = Vec3f0(ts × ns)
     else
-        _, ss, ts = coordinate_system(ns, ss)
+        _, ss, ts = coordinate_system(ns)
     end
     ∂n∂u, ∂n∂v = ∂n(t, uv)
     set_shading_geometry!(interaction, ss, ts, ∂n∂u, ∂n∂v, true)
 end
 
 function intersect(
-    t::Triangle, ray::Union{Ray, RayDifferentials},
-    test_alpha_texture::Bool = false,
+    t::Triangle, ray::Union{Ray, RayDifferentials}, ::Bool = false,
 )::Tuple{Bool, Maybe{Float32}, Maybe{SurfaceInteraction}}
     vs = t |> vertices
     is_degenerate(vs) && return false, nothing, nothing
@@ -244,8 +243,7 @@ function intersect(
 end
 
 function intersect_p(
-    t::Triangle, ray::Union{Ray, RayDifferentials},
-    test_alpha_texture::Bool = false,
+    t::Triangle, ray::Union{Ray, RayDifferentials}, ::Bool = false,
 )::Bool
     vs = t |> vertices
     is_degenerate(vs) && return false, nothing, nothing

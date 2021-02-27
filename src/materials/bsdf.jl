@@ -68,6 +68,7 @@ Since it is an orthonormal matrix, its inverse is its transpose.
 @inline function world_to_local(b::BSDF, v::Vec3f0)
     Vec3f0(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
 end
+# TODO benchmark
 @inline function local_to_world(b::BSDF, v::Vec3f0)
     Mat3f0(b.ss..., b.ts..., b.ns...) * v
 end

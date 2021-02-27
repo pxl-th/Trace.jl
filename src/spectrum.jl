@@ -27,7 +27,7 @@ Base.:/(c1::C, c2::C) where C <: Spectrum = C(c1.c ./ c2.c)
 Base.:/(c1::C, f::Number) where C <: Spectrum = C(c1.c ./ f)
 Base.sqrt(c::C) where C <: Spectrum = C(c.c .|> sqrt)
 Base.:^(c::C, e::Number) where C <: Spectrum = C(c.c .^ e)
-Base.exp(c::C, e::Float32) where C <: Spectrum = C(c.c .|> exp)
+Base.exp(c::C) where C <: Spectrum = C(c.c .|> exp)
 lerp(c1::C, c2::C, t::Float32) where C <: Spectrum = (1f0 - t) * c1 + t * c2
 
 Base.getindex(c::C, i) where C <: Spectrum = c.c[i]

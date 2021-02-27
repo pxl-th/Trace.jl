@@ -58,7 +58,7 @@ function sample_li(p::PointLight, ref::Interaction, ::Point2f0)
 end
 
 function sample_le(
-    p::PointLight, u1::Point2f0, u2::Point2f0, time::Float32,
+    p::PointLight, u1::Point2f0, ::Point2f0, ::Float32,
 )::Tuple{RGBSpectrum, Ray, Normal3f0, Float32, Float32}
     ray = Ray(o=p.position, d=uniform_sample_sphere(u1))
     @assert norm(ray.d) ≈ 1f0

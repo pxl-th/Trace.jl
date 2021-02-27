@@ -20,7 +20,7 @@ In comparison, `sample_f` computes PDF value for the incident directions *it*
 chooses given the outgoing direction, while this returns a value of PDF
 for the given pair of directions.
 """
-@inline function compute_pdf(b::B, wo::Vec3f0, wi::Vec3f0)::Float32 where B <: BxDF
+@inline function compute_pdf(::B, wo::Vec3f0, wi::Vec3f0)::Float32 where B <: BxDF
     same_hemisphere(wo, wi) ? abs(cos_θ(wi)) * (1f0 / π) : 0f0
 end
 

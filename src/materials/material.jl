@@ -14,7 +14,7 @@ end
 Compute scattering function.
 """
 function (m::MatteMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+    si::SurfaceInteraction, ::Bool, ::Type{T},
 ) where T <: TransportMode
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
@@ -37,7 +37,7 @@ struct MirrorMaterial <: Material
 end
 
 function (m::MirrorMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+    si::SurfaceInteraction, ::Bool, ::Type{T},
 ) where T <: TransportMode
     si.bsdf = si |> BSDF
     r = si |> m.Kr |> clamp
@@ -133,7 +133,7 @@ struct PlasticMaterial <: Material
 end
 
 function (p::PlasticMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
+    si::SurfaceInteraction, ::Bool, ::Type{T},
 ) where T <: TransportMode
     si.bsdf = BSDF(si)
     # Initialize diffuse componen of plastic material.

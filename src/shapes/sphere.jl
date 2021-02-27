@@ -123,8 +123,7 @@ function ∂n(
 end
 
 function intersect(
-    s::Sphere, ray::Union{Ray, RayDifferentials},
-    test_alpha_texture::Bool = false,
+    s::Sphere, ray::Union{Ray, RayDifferentials}, ::Bool = false,
 )
     # Transform ray to object space.
     or = ray |> s.core.world_to_object
@@ -165,8 +164,7 @@ function intersect(
 end
 
 function intersect_p(
-    s::Sphere, ray::Union{Ray, RayDifferentials},
-    test_alpha_texture::Bool = false,
+    s::Sphere, ray::Union{Ray, RayDifferentials}, ::Bool = false,
 )::Bool
     # Transform ray to object space.
     or = ray |> s.core.world_to_object

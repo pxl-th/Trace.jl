@@ -146,7 +146,7 @@ function compute_scattering!(
     compute_scattering!(si.primitive, si, allow_multiple_lobes, T)
 end
 
-@inline function le(si::SurfaceInteraction, w::Vec3f0)::RGBSpectrum
+@inline function le(::SurfaceInteraction, ::Vec3f0)::RGBSpectrum
     # TODO right now return 0, since there is no area lights implemented.
     RGBSpectrum(0f0)
 end
