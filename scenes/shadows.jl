@@ -11,12 +11,10 @@ function render()
         Trace.ConstantTexture(0f0),
     )
     material_white = Trace.MatteMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 1f0, 1f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(0f0),
     )
-    mirror = Trace.MirrorMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 1f0, 1f0)),
-    )
+    mirror = Trace.MirrorMaterial(Trace.ConstantTexture(Trace.RGBSpectrum(1f0)))
     glass = Trace.GlassMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
@@ -71,8 +69,8 @@ function render()
             Trace.Normal3f0(0, 0, 1), Trace.Normal3f0(0, 0, 1),
         ],
     )
-    triangle_primitive = Trace.GeometricPrimitive(triangles[1], material_white)
-    triangle_primitive2 = Trace.GeometricPrimitive(triangles[2], material_white)
+    triangle_primitive = Trace.GeometricPrimitive(triangles[1], mirror)
+    triangle_primitive2 = Trace.GeometricPrimitive(triangles[2], mirror)
     triangle_primitive3 = Trace.GeometricPrimitive(triangles[3], material_white)
     triangle_primitive4 = Trace.GeometricPrimitive(triangles[4], material_white)
 
@@ -83,7 +81,7 @@ function render()
     ], 1)
 
     lights = [Trace.PointLight(
-        Trace.translate(Vec3f0(-1, 1, 0)), Trace.RGBSpectrum(30f0),
+        Trace.translate(Vec3f0(-1, 1, 0)), Trace.RGBSpectrum(25f0),
     )]
     scene = Trace.Scene(lights, bvh)
 
