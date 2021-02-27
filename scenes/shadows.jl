@@ -3,11 +3,11 @@ using Trace
 
 function render()
     material_red = Trace.MatteMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1f0, 0f0, 0f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.796f0, 0.235f0, 0.2f0)),
         Trace.ConstantTexture(0f0),
     )
     material_blue = Trace.MatteMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(0.2f0, 0.1f0, 1f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.251f0, 0.388f0, 0.847f0)),
         Trace.ConstantTexture(0f0),
     )
     material_white = Trace.MatteMaterial(
@@ -77,22 +77,13 @@ function render()
     triangle_primitive4 = Trace.GeometricPrimitive(triangles[4], material_white)
 
     bvh = Trace.BVHAccel([
-        primitive,
-        primitive2,
-        primitive3,
-        primitive4,
-        triangle_primitive,
-        triangle_primitive2,
-        triangle_primitive3,
-        triangle_primitive4,
+        primitive, primitive2, primitive3, primitive4,
+        triangle_primitive, triangle_primitive2,
+        triangle_primitive3, triangle_primitive4,
     ], 1)
-    for n in bvh.nodes
-        display(n); println()
-    end
 
     lights = [Trace.PointLight(
-        Trace.translate(Vec3f0(-1, 1, 0)),
-        Trace.RGBSpectrum(Float32(10 * π)),
+        Trace.translate(Vec3f0(-1, 1, 0)), Trace.RGBSpectrum(30f0),
     )]
     scene = Trace.Scene(lights, bvh)
 
@@ -110,7 +101,7 @@ function render()
     )
 
     # integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 8)
-    integrator = Trace.SPPMIntegrator(camera, 0.075f0, 8, 20, 100_000, 1)
+    integrator = Trace.SPPMIntegrator(camera, 0.025f0, 5, 100)
     scene |> integrator
 end
 

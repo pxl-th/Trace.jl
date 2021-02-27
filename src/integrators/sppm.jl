@@ -167,7 +167,6 @@ function (i::SPPMIntegrator)(scene::Scene)
         if iteration % i.write_frequency == 0 || iteration == i.n_iterations
             image = _sppm_to_image(i, pixels, iteration)
             set_image!(i.camera |> get_film, image)
-            println("save $iteration")
             i.camera |> get_film |> save
         end
     end
