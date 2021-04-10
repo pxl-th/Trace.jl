@@ -1,11 +1,8 @@
 using GeometryBasics
 using LinearAlgebra
-
 using Trace
-using TraceLoader
 
 function render()
-
     glass = Trace.GlassMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
@@ -21,8 +18,8 @@ function render()
         true,
     )
 
-    model = "./models/caustic-glass.ply"
-    triangle_meshes, triangles = load_triangle_mesh(
+    model = "./scenes/models/caustic-glass.ply"
+    triangle_meshes, triangles = Trace.load_triangle_mesh(
         model, Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
     )
     floor_triangles = Trace.create_triangle_mesh(

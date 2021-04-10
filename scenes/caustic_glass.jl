@@ -1,8 +1,6 @@
 using GeometryBasics
 using LinearAlgebra
-
 using Trace
-using TraceLoader
 
 function render()
     glass = Trace.GlassMaterial(
@@ -20,8 +18,8 @@ function render()
         true,
     )
 
-    model = "./models/caustic-glass.ply"
-    triangle_meshes, triangles = load_triangle_mesh(
+    model = "./scenes/models/caustic-glass.ply"
+    triangle_meshes, triangles = Trace.load_triangle_mesh(
         model, Trace.ShapeCore(Trace.translate(Vec3f0(5, -1.49, -100)), false),
     )
     floor_triangles = Trace.create_triangle_mesh(
@@ -86,7 +84,7 @@ function render()
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0), Point2f0(1)),
         filter, 1f0, 1f0,
-        "./caustics-sppm-$(ir[1])x$(ir[2]).png",
+        "./scenes/caustics-sppm-$(ir[1])x$(ir[2]).png",
     )
     camera = Trace.PerspectiveCamera(
         Trace.look_at(Point3f0(0, 150, 150), look_point, Vec3f0(0, 1, 0)),

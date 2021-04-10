@@ -1,5 +1,6 @@
 module Trace
 
+using Assimp
 import FileIO
 using GeometryBasics
 using Parameters: @with_kw
@@ -223,19 +224,6 @@ include("lights/directional.jl")
 include("integrators/sampler.jl")
 include("integrators/sppm.jl")
 
-# triangles = Trace.create_triangle_mesh(
-#     ShapeCore(translate(Vec3f0(0, 0, -1)), false),
-#     1, UInt32[1, 2, 3],
-#     3, [Point3f0(0, 0, 0), Point3f0(1, 0, 0), Point3f0(1, 1, 0)],
-#     [
-#         Trace.Normal3f0(0, 0, 1),
-#         Trace.Normal3f0(0, 0, 1),
-#         Trace.Normal3f0(0, 0, 1),
-#     ],
-# )
-# ray = Ray(o=Point3f0(0), d=Vec3f0(0, 0, -1))
-# hit, t, si = intersect(triangles[1], ray)
-# @info hit, t
-# @info intersect_p(triangles[1], ray)
+include("model_loader.jl")
 
 end

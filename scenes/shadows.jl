@@ -90,7 +90,7 @@ function render()
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f0(0f0), Point2f0(1f0)),
         filter, 1f0, 1f0,
-        "scenes/shadows-sppm-$(Int64(resolution[1]))x$(Int64(resolution[2])).png",
+        "./scenes/shadows-sppm-$(Int64(resolution[1]))x$(Int64(resolution[2])).png",
     )
     screen = Trace.Bounds2(Point2f0(-1f0), Point2f0(1f0))
     camera = Trace.PerspectiveCamera(
