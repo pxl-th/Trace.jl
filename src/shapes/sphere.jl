@@ -31,8 +31,8 @@ end
 
 function object_bound(s::Sphere)
     Bounds3(
-        Point3f0(-s.radius, -s.radius, s.z_min),
-        Point3f0(s.radius, s.radius, s.z_max),
+        Point3f(-s.radius, -s.radius, s.z_min),
+        Point3f(s.radius, s.radius, s.z_max),
     )
 end
 
@@ -54,27 +54,27 @@ function solve_quadratic(a::Float32, b::Float32, c::Float32)
 end
 
 function refine_intersection(p::Point, s::Sphere)
-    p *= s.radius ./ distance(Point3f0(0), p)
-    p[1] ≈ 0 && p[2] ≈ 0 && (p = Point3f0(1f-6 * s.radius, p[2], p[3]))
+    p *= s.radius ./ distance(Point3f(0), p)
+    p[1] ≈ 0 && p[2] ≈ 0 && (p = Point3f(1f-6 * s.radius, p[2], p[3]))
     p
 end
 
 """
 Test if hit point exceeds clipping parameters of the sphere.
 """
-function test_clipping(s::Sphere, p::Point3f0, ϕ::Float32)::Bool
+function test_clipping(s::Sphere, p::Point3f, ϕ::Float32)::Bool
     (s.z_min > -s.radius && p[3] < s.z_min) ||
     (s.z_max < s.radius && p[3] > s.z_max) ||
     ϕ > s.ϕ_max
 end
 
-function compute_ϕ(p::Point3f0)::Float32
+function compute_ϕ(p::Point3f)::Float32
     ϕ = atan(p[2], p[1])
     ϕ < 0f0 && (ϕ += 2f0 * π)
     ϕ
 end
 
-function precompute_ϕ(p::Point3f0)
+function precompute_ϕ(p::Point3f)
     z_radius = sqrt(p[1] * p[1] + p[2] * p[2])
     inv_z_radius = 1f0 / z_radius
     cos_ϕ = p[1] * inv_z_radius
@@ -85,21 +85,21 @@ end
 """
 Compute partial derivatives of intersection point in parametric form.
 """
-function ∂p(s::Sphere, p::Point3f0, θ::Float32, sin_ϕ::Float32, cos_ϕ::Float32)
-    ∂p∂u = Vec3f0(-s.ϕ_max * p[2], s.ϕ_max * p[1], 0f0)
-    ∂p∂v = (s.θ_max - s.θ_min) * Vec3f0(
+function ∂p(s::Sphere, p::Point3f, θ::Float32, sin_ϕ::Float32, cos_ϕ::Float32)
+    ∂p∂u = Vec3f(-s.ϕ_max * p[2], s.ϕ_max * p[1], 0f0)
+    ∂p∂v = (s.θ_max - s.θ_min) * Vec3f(
         p[3] * cos_ϕ, p[3] * sin_ϕ, -s.radius * sin(θ),
     )
     ∂p∂u, ∂p∂v, sin_ϕ, cos_ϕ
 end
 
 function ∂n(
-    s::Sphere, p::Point3f0,
+    s::Sphere, p::Point3f,
     sin_ϕ::Float32, cos_ϕ::Float32,
-    ∂p∂u::Vec3f0, ∂p∂v::Vec3f0,
+    ∂p∂u::Vec3f, ∂p∂v::Vec3f,
 )
-    ∂2p∂u2 = -s.ϕ_max * s.ϕ_max * Vec3f0(p[1], p[2], 0f0)
-    ∂2p∂u∂v = (s.θ_max - s.θ_min) * p[3] * s.ϕ_max * Vec3f0(-sin_ϕ, cos_ϕ, 0f0)
+    ∂2p∂u2 = -s.ϕ_max * s.ϕ_max * Vec3f(p[1], p[2], 0f0)
+    ∂2p∂u∂v = (s.θ_max - s.θ_min) * p[3] * s.ϕ_max * Vec3f(-sin_ϕ, cos_ϕ, 0f0)
     ∂2p∂v2 = (s.θ_max - s.θ_min) ^ 2 * -p
     # Compute coefficients for fundamental forms.
     E = ∂p∂u ⋅ ∂p∂u
@@ -111,11 +111,11 @@ function ∂n(
     g = n ⋅ ∂2p∂v2
     # Compute derivatives from fundamental form coefficients.
     inv_egf = 1f0 / (E * G - F * F)
-    ∂n∂u = Normal3f0(
+    ∂n∂u = Normal3f(
         (f * F - e * G) * inv_egf * ∂p∂u +
         (e * F - f * E) * inv_egf * ∂p∂v
     )
-    ∂n∂v = Normal3f0(
+    ∂n∂v = Normal3f(
         (g * F - f * G) * inv_egf * ∂p∂u +
         (f * F - g * E) * inv_egf * ∂p∂v
     )
@@ -157,7 +157,7 @@ function intersect(
     ∂n∂u, ∂n∂v = ∂n(s, hit_point, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
 
     interaction = SurfaceInteraction(
-        hit_point, ray.time, -ray.d, Point2f0(u, v),
+        hit_point, ray.time, -ray.d, Point2f(u, v),
         ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, s,
     ) |> s.core.object_to_world
     true, shape_hit, interaction

@@ -16,18 +16,18 @@ mutable struct DirectionalLight{S <: Spectrum} <: Light
     world_to_light::Transformation
 
     i::S
-    direction::Vec3f0
+    direction::Vec3f
 
     world_radius::Float32
-    world_center::Point3f0
+    world_center::Point3f
 
     function DirectionalLight(
-        light_to_world::Transformation, l::S, direction::Vec3f0,
+        light_to_world::Transformation, l::S, direction::Vec3f,
     ) where S <: Spectrum
         new{S}(
             LightδDirection, light_to_world, light_to_world |> inv,
             l, direction |> light_to_world |> normalize,
-            0f0, Point3f0(0f0), # To be computed in preprocessing stage.
+            0f0, Point3f(0f0), # To be computed in preprocessing stage.
         )
     end
 end
@@ -37,11 +37,11 @@ end
 end
 
 function sample_li(
-    d::DirectionalLight{S}, ref::Interaction, u::Point2f0,
-)::Tuple{S, Vec3f0, Float32, VisibilityTester} where S <: Spectrum
+    d::DirectionalLight{S}, ref::Interaction, u::Point2f,
+)::Tuple{S, Vec3f, Float32, VisibilityTester} where S <: Spectrum
     outside_point = ref.p .+ d.direction .* (2 * d.world_radius)
     tester = VisibilityTester(
-        ref, Interaction(outside_point, ref.time, Vec3f0(0f0), Normal3f0(0f0)),
+        ref, Interaction(outside_point, ref.time, Vec3f(0f0), Normal3f(0f0)),
     )
     d.i, d.direction, 1f0, tester
 end

@@ -1,20 +1,20 @@
 struct Bounds2
-    p_min::Point2f0
-    p_max::Point2f0
+    p_min::Point2f
+    p_max::Point2f
 end
 
 struct Bounds3
-    p_min::Point3f0
-    p_max::Point3f0
+    p_min::Point3f
+    p_max::Point3f
 end
 
 # By default -- create bounds in invalid configuraiton.
-Bounds2() = Bounds2(Point2f0(Inf32), Point2f0(-Inf32))
-Bounds3() = Bounds3(Point3f0(Inf32), Point3f0(-Inf32))
-Bounds2(p::Point2f0) = Bounds2(p, p)
-Bounds3(p::Point3f0) = Bounds3(p, p)
-Bounds2c(p1::Point2f0, p2::Point2f0) = Bounds2(min.(p1, p2), max.(p1, p2))
-Bounds3c(p1::Point3f0, p2::Point3f0) = Bounds3(min.(p1, p2), max.(p1, p2))
+Bounds2() = Bounds2(Point2f(Inf32), Point2f(-Inf32))
+Bounds3() = Bounds3(Point3f(Inf32), Point3f(-Inf32))
+Bounds2(p::Point2f) = Bounds2(p, p)
+Bounds3(p::Point3f) = Bounds3(p, p)
+Bounds2c(p1::Point2f, p2::Point2f) = Bounds2(min.(p1, p2), max.(p1, p2))
+Bounds3c(p1::Point3f, p2::Point3f) = Bounds3(min.(p1, p2), max.(p1, p2))
 
 function Base.:(==)(b1::Union{Bounds2, Bounds3}, b2::Union{Bounds2, Bounds3})
     b1.p_min == b2.p_min && b1.p_max == b2.p_max
@@ -38,18 +38,18 @@ end
 
 function Base.iterate(
     b::Bounds2, i::Integer = 1,
-)::Union{Nothing, Tuple{Point2f0, Integer}}
+)::Union{Nothing, Tuple{Point2f, Integer}}
     i > length(b) && return nothing
 
     j = i - 1
     δ = b.p_max .- b.p_min .+ 1f0
-    b.p_min .+ Point2f0(j % δ[1], j ÷ δ[1]), i + 1
+    b.p_min .+ Point2f(j % δ[1], j ÷ δ[1]), i + 1
 end
 
 # Index through 8 corners.
 function corner(b::Bounds3, c::Integer)
     c -= 1
-    Point3f0(
+    Point3f(
         b[(c & 1) + 1][1],
         b[(c & 2) != 0 ? 2 : 1][2],
         b[(c & 4) != 0 ? 2 : 1][3],
@@ -68,11 +68,11 @@ function overlaps(b1::Bounds3, b2::Bounds3)
     all(b1.p_max .>= b2.p_min) && all(b1.p_min .<= b2.p_max)
 end
 
-function inside(b::Bounds3, p::Point3f0)
+function inside(b::Bounds3, p::Point3f)
     all(p .>= b.p_min) && all(p .<= b.p_max)
 end
 
-function inside_exclusive(b::Bounds3, p::Point3f0)
+function inside_exclusive(b::Bounds3, p::Point3f)
     all(p .>= b.p_min) && all(p .< b.p_max)
 end
 
@@ -120,29 +120,29 @@ function maximum_extent(b::Bounds3)
 end
 
 lerp(v1::Float32, v2::Float32, t::Float32) = (1 - t) * v1 + t * v2
-lerp(p0::Point3f0, p1::Point3f0, t::Float32) = (1 - t) .* p0 .+ t .* p1
+lerp(p0::Point3f, p1::Point3f, t::Float32) = (1 - t) .* p0 .+ t .* p1
 # Linearly interpolate point between the corners of the bounds.
-lerp(b::Bounds3, p::Point3f0) = lerp.(p, b.p_min, b.p_max)
+lerp(b::Bounds3, p::Point3f) = lerp.(p, b.p_min, b.p_max)
 
-distance(p1::Point3f0, p2::Point3f0) = norm(p1 - p2)
-function distance_squared(p1::Point3f0, p2::Point3f0)
+distance(p1::Point3f, p2::Point3f) = norm(p1 - p2)
+function distance_squared(p1::Point3f, p2::Point3f)
     p = p1 - p2
     p ⋅ p
 end
 
 """Get offset of a point from the minimum point of the bounds."""
-function offset(b::Bounds3, p::Point3f0)
+function offset(b::Bounds3, p::Point3f)
     o = p - b.p_min
     g = b.p_max .> b.p_min
     !any(g) && return o
-    Point3f0(
+    Point3f(
         o[1] / (g[1] ? b.p_max[1] - b.p_min[1] : 1f0),
         o[2] / (g[2] ? b.p_max[2] - b.p_min[2] : 1f0),
         o[3] / (g[3] ? b.p_max[3] - b.p_min[3] : 1f0),
     )
 end
 
-function bounding_sphere(b::Bounds3)::Tuple{Point3f0, Float32}
+function bounding_sphere(b::Bounds3)::Tuple{Point3f, Float32}
     center = (b.p_min + b.p_max) / 2f0
     radius = inside(b, center) ? distance(center, b.p_max) : 0f0
     center, radius
@@ -166,7 +166,7 @@ function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
     true, t0, t1
 end
 
-@inline function is_dir_negative(dir::Vec3f0)
+@inline function is_dir_negative(dir::Vec3f)
     @inbounds Point3{UInt8}(
         dir[1] < 0 ? 2 : 1,
         dir[2] < 0 ? 2 : 1,
@@ -179,7 +179,7 @@ dir_is_negative: 1 -- false, 2 -- true
 """
 function intersect_p(
     b::Bounds3, ray::AbstractRay,
-    inv_dir::Vec3f0, dir_is_negative::Point3{UInt8},
+    inv_dir::Vec3f, dir_is_negative::Point3{UInt8},
 )::Bool
     tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
     tx_max = (b[3 - dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]

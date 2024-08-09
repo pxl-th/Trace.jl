@@ -25,14 +25,14 @@ pixel `x` & `y` coordinates.
 
 # Returns:
 
-    `Tuple{Point2f0, Vec2f0, Vec2f0}`:
+    `Tuple{Point2f, Vec2f, Vec2f}`:
         Texture coordinates at the shading point, estimated changes
         in `(s, t)` w.r.t. pixel `x` & `y` coordinates.
 """
-function map(m::UVMapping2D, si::SurfaceInteraction)::Tuple{Point2f0, Vec2f0, Vec2f0}
-    ∂st∂x = Vec2f0(m.su * si.∂u∂x, m.sv * si.∂v∂x)
-    ∂st∂y = Vec2f0(m.su * si.∂u∂y, m.sv * si.∂v∂y)
-    t = Point2f0(m.su * si.uv[1] + m.du, m.sv * si.uv[2] + m.dv)
+function map(m::UVMapping2D, si::SurfaceInteraction)::Tuple{Point2f, Vec2f, Vec2f}
+    ∂st∂x = Vec2f(m.su * si.∂u∂x, m.sv * si.∂v∂x)
+    ∂st∂y = Vec2f(m.su * si.∂u∂y, m.sv * si.∂v∂y)
+    t = Point2f(m.su * si.uv[1] + m.du, m.sv * si.uv[2] + m.dv)
     t, ∂st∂x, ∂st∂y
 end
 
@@ -50,7 +50,7 @@ struct TransformMapping3D <: Mapping3D
     world_to_texture::Transformation
 end
 
-function map(m::TransformMapping3D, si::SurfaceInteraction)::Tuple{Point3f0, Vec3f0, Vec3f0}
+function map(m::TransformMapping3D, si::SurfaceInteraction)::Tuple{Point3f, Vec3f, Vec3f}
     ∂p∂x = si.∂p∂x |> m.world_to_texture
     ∂p∂y = si.∂p∂y |> m.world_to_texture
     t = si.core.p |> m.world_to_texture

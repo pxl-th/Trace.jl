@@ -14,4 +14,4 @@ function StratifiedSampler(
     )
 end
 
-function start_pixel(ss::StratifiedSampler, p::Point2f0) end
+function start_pixel(ss::StratifiedSampler, p::Point2f) end

@@ -1,61 +1,61 @@
-mutable struct AtomicVec3f0
+mutable struct AtomicVec3f
     x::Threads.Atomic{Float32}
     y::Threads.Atomic{Float32}
     z::Threads.Atomic{Float32}
 end
 
-function AtomicVec3f0(x::Float32 = 0f0)
-    AtomicVec3f0(
+function AtomicVec3f(x::Float32 = 0f0)
+    AtomicVec3f(
         Threads.Atomic{Float32}(x),
         Threads.Atomic{Float32}(x),
         Threads.Atomic{Float32}(x),
     )
 end
 
-function AtomicVec3f0(p::Point3f0)
-    AtomicVec3f0(
+function AtomicVec3f(p::Point3f)
+    AtomicVec3f(
         Threads.Atomic{Float32}(p[1]),
         Threads.Atomic{Float32}(p[2]),
         Threads.Atomic{Float32}(p[3]),
     )
 end
 
-function set!(a::AtomicVec3f0, v::Float32)
+function set!(a::AtomicVec3f, v::Float32)
     a.x[] = v
     a.y[] = v
     a.z[] = v
 end
 
-function set!(a::AtomicVec3f0, p::Point3f0)
+function set!(a::AtomicVec3f, p::Point3f)
     a.x[] = p[1]
     a.y[] = p[2]
     a.z[] = p[3]
 end
 
-function Threads.atomic_add!(a::AtomicVec3f0, p::Point3f0)
+function Threads.atomic_add!(a::AtomicVec3f, p::Point3f)
     Threads.atomic_add!(a.x, p[1])
     Threads.atomic_add!(a.y, p[2])
     Threads.atomic_add!(a.z, p[3])
 end
 
-function Threads.atomic_add!(a::AtomicVec3f0, s::RGBSpectrum)
+function Threads.atomic_add!(a::AtomicVec3f, s::RGBSpectrum)
     Threads.atomic_add!(a.x, s.c[1])
     Threads.atomic_add!(a.y, s.c[2])
     Threads.atomic_add!(a.z, s.c[3])
 end
 
-function Base.convert(::Type{Point3f0}, a::AtomicVec3f0)
-    Point3f0(a.x[], a.y[], a.z[])
+function Base.convert(::Type{Point3f}, a::AtomicVec3f)
+    Point3f(a.x[], a.y[], a.z[])
 end
 
 mutable struct VisiblePoint
-    p::Point3f0
-    wo::Vec3f0
+    p::Point3f
+    wo::Vec3f
     bsdf::Maybe{BSDF}
     β::RGBSpectrum
 
     function VisiblePoint(;
-        p::Point3f0 = Point3f0(0f0), wo::Vec3f0 = Vec3f0(0f0),
+        p::Point3f = Point3f(0f0), wo::Vec3f = Vec3f(0f0),
         bsdf::Maybe{BSDF} = nothing, β::RGBSpectrum = RGBSpectrum(0f0),
     )
         new(p, wo, bsdf, β)
@@ -64,7 +64,7 @@ end
 
 mutable struct SPPMPixel
     Ld::RGBSpectrum
-    ϕ::AtomicVec3f0
+    ϕ::AtomicVec3f
     """
     Maintains the sum of products of photons with BSDF values.
     Aka. sum of ϕ from all of the iterations, weighted by radius ratio.
@@ -85,7 +85,7 @@ mutable struct SPPMPixel
 
     function SPPMPixel(;
         Ld::RGBSpectrum = RGBSpectrum(0f0),
-        ϕ::AtomicVec3f0 = AtomicVec3f0(0f0),
+        ϕ::AtomicVec3f = AtomicVec3f(0f0),
         τ::RGBSpectrum = RGBSpectrum(0f0),
         radius::Float32 = 0f0, M::Int64 = 0, N::Int64 = 0,
         vp::VisiblePoint = VisiblePoint()
@@ -183,7 +183,7 @@ function _generate_visible_sppm_points!(
     bar = get_progress_bar(total_tiles, "Camera pass: ")
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
-        tile = Point2f0(x, y)
+        tile = Point2f(x, y)
         tile_sampler = sampler |> deepcopy
 
         tb_min = pixel_bounds.p_min .+ tile .* tile_size
@@ -341,11 +341,11 @@ function _trace_photons!(
         )
         light = scene.lights[light_num]
         # Compute sample values for photon ray leaving light source.
-        u_light_0 = Point2f0(
+        u_light_0 = Point2f(
             radical_inverse(halton_dim, halton_index),
             radical_inverse(halton_dim + 1, halton_index),
         )
-        u_light_1 = Point2f0(
+        u_light_1 = Point2f(
             radical_inverse(halton_dim + 2, halton_index),
             radical_inverse(halton_dim + 3, halton_index),
         )
@@ -407,7 +407,7 @@ function _trace_photons!(
                 continue
             end
             # Sample BSDF spectrum and direction `wi` for reflected photon.
-            bsdf_sample = Point2f0(
+            bsdf_sample = Point2f(
                 radical_inverse(halton_dim, halton_index),
                 radical_inverse(halton_dim + 1, halton_index),
             )
@@ -438,7 +438,7 @@ function _update_pixels!(pixels::Matrix{SPPMPixel}, γ::Float32)
     for pixel in pixels
         M = pixel.M[]
         if M > 0
-            ϕ = convert(Point3f0, pixel.ϕ)
+            ϕ = convert(Point3f, pixel.ϕ)
             # Update pixel photon count, search radius and τ from photons.
             N_new = pixel.N + γ * M
             radius_new = pixel.radius * √(N_new / (pixel.N + M))
@@ -475,7 +475,7 @@ Calculate indices of a point `p` in grid constrained by `bounds`.
 Computed indices are in [0, resolution), which is the correct input for `hash`.
 """
 @inline function to_grid(
-    p::Point3f0, bounds::Bounds3, grid_resolution::Point3,
+    p::Point3f, bounds::Bounds3, grid_resolution::Point3,
 )::Tuple{Bool, Point3{UInt64}}
     p_offset = offset(bounds, p)
     grid_point = Point3{Int64}(
@@ -515,8 +515,8 @@ function uniform_sample_one_light(
 end
 
 function estimate_direct(
-    interaction::SurfaceInteraction, u_scatter::Point2f0, light::L,
-    u_light::Point2f0, scene::Scene, sampler::S, specular::Bool = false,
+    interaction::SurfaceInteraction, u_scatter::Point2f, light::L,
+    u_light::Point2f, scene::Scene, sampler::S, specular::Bool = false,
 )::RGBSpectrum where {L <: Light, S <: AbstractSampler}
     bsdf_flags = specular ? BSDF_ALL : (BSDF_ALL & ~BSDF_SPECULAR)
     Ld = RGBSpectrum(0f0)

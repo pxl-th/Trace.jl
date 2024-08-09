@@ -12,11 +12,11 @@ struct CameraSample
     """
     Point on the film the ray passes through.
     """
-    film::Point2f0
+    film::Point2f
     """
     Point on the lens the ray passes through.
     """
-    lens::Point2f0
+    lens::Point2f
     """
     Time at which the ray should sample the scene.
     Implementations should use this value to linearly interpolate between
@@ -50,10 +50,10 @@ function generate_ray_differential(
 )::Tuple{RayDifferentials, Float32} where C <: Camera
     ray, wt = generate_ray(camera, sample)
     shifted_x = CameraSample(
-        sample.film + Point2f0(1f0, 0f0), sample.lens, sample.time,
+        sample.film + Point2f(1f0, 0f0), sample.lens, sample.time,
     )
     shifted_y = CameraSample(
-        sample.film + Point2f0(0f0, 1f0), sample.lens, sample.time,
+        sample.film + Point2f(0f0, 1f0), sample.lens, sample.time,
     )
     ray_x, wt_x = generate_ray(camera, shifted_x)
     ray_y, wt_y = generate_ray(camera, shifted_y)

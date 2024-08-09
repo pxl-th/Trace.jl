@@ -23,7 +23,7 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
     @info "Utilizing $(Threads.nthreads()) threads"
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
-        tile = Point2f0(x, y)
+        tile = Point2f(x, y)
         t_sampler = i.sampler |> deepcopy
 
         tb_min = sample_bounds.p_min .+ tile .* tile_size

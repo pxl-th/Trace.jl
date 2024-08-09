@@ -31,8 +31,8 @@ end
     )
     @test f & (Trace.BSDF_SPECULAR | Trace.BSDF_REFLECTION | Trace.BSDF_TRANSMISSION)
 
-    wo = Vec3f0(0, 0, 1)
-    u = Point2f0(0, 0)
+    wo = Vec3f(0, 0, 1)
+    u = Point2f(0, 0)
     wi, pdf, bxdf_value, sampled_type = Trace.sample_f(f, wo, u)
     @test wi ≈ -wo
     @test pdf ≈ 1f0
@@ -47,10 +47,10 @@ end
         Trace.Radiance,
     )
     @test m & (Trace.BSDF_REFLECTION | Trace.BSDF_GLOSSY)
-    wo = Vec3f0(0, 0, 1)
-    u = Point2f0(0, 0)
+    wo = Vec3f(0, 0, 1)
+    u = Point2f(0, 0)
     wi, pdf, bxdf_value, sampled_type = Trace.sample_f(m, wo, u)
-    @test wi ≈ Vec3f0(0, 0, 1)
+    @test wi ≈ Vec3f(0, 0, 1)
 end
 
 @testset "MicrofacetTransmission" begin
@@ -61,8 +61,8 @@ end
         Trace.Radiance,
     )
     @test m & (Trace.BSDF_TRANSMISSION | Trace.BSDF_GLOSSY)
-    wo = Vec3f0(0, 0, 1)
-    u = Point2f0(0, 0)
+    wo = Vec3f(0, 0, 1)
+    u = Point2f(0, 0)
     wi, pdf, bxdf_value, sampled_type = Trace.sample_f(m, wo, u)
-    @test wi ≈ Vec3f0(0, 0, -1)
+    @test wi ≈ Vec3f(0, 0, -1)
 end

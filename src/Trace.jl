@@ -1,6 +1,6 @@
 module Trace
 
-using Assimp
+# using Assimp
 import FileIO
 using GeometryBasics
 using Parameters: @with_kw
@@ -21,8 +21,24 @@ const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
 const TransportMode = Union{Radiance, Importance}
 
-GeometryBasics.@fixed_vector Normal StaticVector
-const Normal3f0 = Normal{3, Float32}
+# GeometryBasics.@fixed_vector Normal StaticVector
+# const Normal3f = Normal{3, Float32}
+# Normal3f(1,1,1)
+
+struct Normal3f
+    vector::Vec3f
+end
+
+# Constructor that takes three Real values
+Normal3f(x::Real, y::Real, z::Real) = Normal3f(Vec3f(Float32(x), Float32(y), Float32(z)))
+Normal3f(v::Real) = Normal3f(Float32(v), Float32(v), Float32(v))
+Normal3f() = Normal3f(0)
+
+Base.getindex(n::Normal3f, i::Int) = getindex(n.vector, i)
+Base.setindex!(n::Normal3f, v, i::Int) = setindex!(n.vector, v, i)
+Base.convert(::Type{Normal{Vec3f}}, n::Normal3f) = Normal{Vec3f}()
+
+
 const Maybe{T} = Union{T, Nothing}
 
 function get_progress_bar(n::Integer, desc::String = "Progress")
@@ -34,11 +50,11 @@ end
 
 @inline maybe_copy(v::Maybe)::Maybe = v isa Nothing ? v : copy(v)
 
-function concentric_sample_disk(u::Point2f0)::Point2f0
+function concentric_sample_disk(u::Point2f)::Point2f
     # Map uniform random numbers to [-1, 1].
-    offset = 2f0 * u - Vec2f0(1f0)
+    offset = 2f0 * u - Vec2f(1f0)
     # Handle degeneracy at the origin.
-    offset[1] ≈ 0 && offset[2] ≈ 0 && return Point2f0(0)
+    offset[1] ≈ 0 && offset[2] ≈ 0 && return Point2f(0)
     if abs(offset[1]) > abs(offset[2])
         r = offset[1]
         θ = (offset[2] / offset[1]) * π / 4f0
@@ -46,32 +62,32 @@ function concentric_sample_disk(u::Point2f0)::Point2f0
         r = offset[2]
         θ = π / 2f0 - (offset[1] / offset[2]) * π / 4f0
     end
-    r * Point2f0(θ |> cos, θ |> sin)
+    r * Point2f(θ |> cos, θ |> sin)
 end
 
-function cosine_sample_hemisphere(u::Point2f0)::Vec3f0
+function cosine_sample_hemisphere(u::Point2f)::Vec3f
     d = u |> concentric_sample_disk
     z = √max(0f0, 1f0 - d[1] ^ 2 - d[2] ^ 2)
-    Vec3f0(d[1], d[2], z)
+    Vec3f(d[1], d[2], z)
 end
 
-function uniform_sample_sphere(u::Point2f0)::Vec3f0
+function uniform_sample_sphere(u::Point2f)::Vec3f
     z = 1f0 - 2f0 * u[1]
     r = √(max(0f0, 1f0 - z ^ 2))
     ϕ = 2f0 * π * u[2]
-    Vec3f0(r * cos(ϕ), r * sin(ϕ), z)
+    Vec3f(r * cos(ϕ), r * sin(ϕ), z)
 end
 
-function uniform_sample_cone(u::Point2f0, cosθ_max::Float32)::Vec3f0
+function uniform_sample_cone(u::Point2f, cosθ_max::Float32)::Vec3f
     cosθ = 1f0 - u[1] + u[1] * cosθ_max
     sinθ = √(1f0 - cosθ ^ 2)
     ϕ = u[2] * 2f0 * π
-    Vec3f0(cos(ϕ) * sinθ, sin(ϕ) * sinθ, cosθ)
+    Vec3f(cos(ϕ) * sinθ, sin(ϕ) * sinθ, cosθ)
 end
 
 function uniform_sample_cone(
-    u::Point2f0, cosθ_max::Float32, x::Vec3f0, y::Vec3f0, z::Vec3f0,
-)::Vec3f0
+    u::Point2f, cosθ_max::Float32, x::Vec3f, y::Vec3f, z::Vec3f,
+)::Vec3f
     cosθ = 1f0 - u[1] + u[1] * cosθ_max
     sinθ = √(1f0 - cosθ ^ 2)
     ϕ = u[2] * 2f0 * π
@@ -95,16 +111,16 @@ of the direction onto xy-plane.
 
 Since normal is `(0, 0, 1) → cos_θ = n · w = (0, 0, 1) ⋅ w = w.z`.
 """
-@inline cos_θ(w::Vec3f0) = w[3]
-@inline sin_θ2(w::Vec3f0) = max(0f0, 1f0 - cos_θ(w) * cos_θ(w))
-@inline sin_θ(w::Vec3f0) = w |> sin_θ2 |> √
-@inline tan_θ(w::Vec3f0) = sin_θ(w) / cos_θ(w)
+@inline cos_θ(w::Vec3f) = w[3]
+@inline sin_θ2(w::Vec3f) = max(0f0, 1f0 - cos_θ(w) * cos_θ(w))
+@inline sin_θ(w::Vec3f) = w |> sin_θ2 |> √
+@inline tan_θ(w::Vec3f) = sin_θ(w) / cos_θ(w)
 
-@inline function cos_ϕ(w::Vec3f0)
+@inline function cos_ϕ(w::Vec3f)
     sinθ = w |> sin_θ
     sinθ ≈ 0f0 ? 1f0 : clamp(w[1] / sinθ, -1f0, 1f0)
 end
-@inline function sin_ϕ(w::Vec3f0)
+@inline function sin_ϕ(w::Vec3f)
     sinθ = w |> sin_θ
     sinθ ≈ 0f0 ? 1f0 : clamp(w[2] / sinθ, -1f0, 1f0)
 end
@@ -112,7 +128,7 @@ end
 """
 Reflect `wo` about `n`.
 """
-@inline reflect(wo::Vec3f0, n::Vec3f0) = -wo + 2f0 * (wo ⋅ n) * n
+@inline reflect(wo::Vec3f, n::Vec3f) = -wo + 2f0 * (wo ⋅ n) * n
 
 function partition!(x::Vector, range::UnitRange, predicate::Function)
     left = range[1]
@@ -125,27 +141,27 @@ function partition!(x::Vector, range::UnitRange, predicate::Function)
     left
 end
 
-function coordinate_system(v1::Vec3f0)
+function coordinate_system(v1::Vec3f)
     if abs(v1[1]) > abs(v1[2])
-        v2 = Vec3f0(-v1[3], 0, v1[1]) / sqrt(v1[1] * v1[1] + v1[3] * v1[3])
+        v2 = Vec3f(-v1[3], 0, v1[1]) / sqrt(v1[1] * v1[1] + v1[3] * v1[3])
     else
-        v2 = Vec3f0(0, v1[3], -v1[2]) / sqrt(v1[2] * v1[2] + v1[3] * v1[3])
+        v2 = Vec3f(0, v1[3], -v1[2]) / sqrt(v1[2] * v1[2] + v1[3] * v1[3])
     end
     v1, v2, v1 × v2
 end
 
 function spherical_direction(sin_θ::Float32, cos_θ::Float32, ϕ::Float32)
-    Vec3f0(sin_θ * cos(ϕ), sin_θ * sin(ϕ), cos_θ)
+    Vec3f(sin_θ * cos(ϕ), sin_θ * sin(ϕ), cos_θ)
 end
 function spherical_direction(
     sin_θ::Float32, cos_θ::Float32, ϕ::Float32,
-    x::Vec3f0, y::Vec3f0, z::Vec3f0,
+    x::Vec3f, y::Vec3f, z::Vec3f,
 )
     sin_θ * cos(ϕ) * x + sin_θ * sin(ϕ) * y + cos_θ * z
 end
 
-spherical_θ(v::Vec3f0) = clamp(v[3], -1f0, 1f0) |> acos
-function spherical_ϕ(v::Vec3f0)
+spherical_θ(v::Vec3f) = clamp(v[3], -1f0, 1f0) |> acos
+function spherical_ϕ(v::Vec3f)
     p = atan(v[2], v[1])
     p < 0 ? p + 2f0 * π : p
 end
@@ -193,7 +209,7 @@ end
     spawn_ray(p0.core, p1)
 end
 @inline function spawn_ray(
-    si::SurfaceInteraction, direction::Vec3f0, δ::Float32 = 1f-6,
+    si::SurfaceInteraction, direction::Vec3f, δ::Float32 = 1f-6,
 )::Ray
     origin = si.core.p .+ δ .* direction
     Ray(o=origin, d=direction, time=si.core.time)
@@ -224,6 +240,6 @@ include("lights/directional.jl")
 include("integrators/sampler.jl")
 include("integrators/sppm.jl")
 
-include("model_loader.jl")
+# include("model_loader.jl")
 
 end

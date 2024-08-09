@@ -1,11 +1,11 @@
 abstract type Filter end
 
 struct LanczosSincFilter <: Filter
-    radius::Point2f0
+    radius::Point2f
     τ::Float32
 end
 
-function (f::LanczosSincFilter)(p::Point2f0)::Float32
+function (f::LanczosSincFilter)(p::Point2f)::Float32
     windowed_sinc(p[1], f.radius[1], f.τ) * windowed_sinc(p[2], f.radius[2], f.τ)
 end
 

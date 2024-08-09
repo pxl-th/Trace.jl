@@ -3,7 +3,7 @@ abstract type AccelPrimitive <: Primitive end
 struct BVHPrimitiveInfo
     primitive_number::UInt32
     bounds::Bounds3
-    centroid::Point3f0
+    centroid::Point3f
 
     function BVHPrimitiveInfo(primitive_number::Integer, bounds::Bounds3)
         new(
@@ -126,7 +126,7 @@ function _init(
         )
     else # Perform Surface-Area-Heuristic partitioning.
         n_buckets = 12
-        buckets = [BucketInfo(0, Bounds3(Point3f0(0f0))) for _ in 1:n_buckets]
+        buckets = [BucketInfo(0, Bounds3(Point3f(0f0))) for _ in 1:n_buckets]
         # Initialize buckets.
         for i in from:to
             b = Int32(floor(n_buckets * offset(

@@ -23,7 +23,7 @@ function _node_to_triangle_mesh!(
     for mmesh in node.meshes
         mesh = mmesh.mesh
         m_vertices = mesh.position
-        m_normals = convert(Vector{Trace.Normal3f0}, mesh.normals)
+        m_normals = convert(Vector{Trace.Normal3f}, mesh.normals)
         m_faces = mesh |> faces
         @assert length(eltype(m_faces)) == 3 "Only triangles supported."
         @assert length(m_vertices) == length(m_normals) "Number of normals is different from the number of vertices"
