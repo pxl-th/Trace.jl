@@ -1,5 +1,7 @@
 using GeometryBasics
 using Trace
+using FileIO
+using ImageCore
 
 function render()
     material_red = Trace.MatteMaterial(
@@ -90,7 +92,7 @@ function render()
     film = Trace.Film(
         resolution, Trace.Bounds2(Point2f(0f0), Point2f(1f0)),
         filter, 1f0, 1f0,
-        "./scenes/shadows-sppm-$(Int64(resolution[1]))x$(Int64(resolution[2])).png",
+        "./scenes/shadows-sppm-$(Int64(resolution[1]))x$(Int64(resolution[2]))_mio.png",
     )
     screen = Trace.Bounds2(Point2f(-1f0), Point2f(1f0))
     camera = Trace.PerspectiveCamera(

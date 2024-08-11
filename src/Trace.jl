@@ -2,6 +2,8 @@ module Trace
 
 # using Assimp
 import FileIO
+using ImageCore
+using ImageIO
 using GeometryBasics
 using Parameters: @with_kw
 using LinearAlgebra
@@ -22,22 +24,7 @@ const Importance = Val{:Importance}
 const TransportMode = Union{Radiance, Importance}
 
 # GeometryBasics.@fixed_vector Normal StaticVector
-# const Normal3f = Normal{3, Float32}
-# Normal3f(1,1,1)
-
-struct Normal3f
-    vector::Vec3f
-end
-
-# Constructor that takes three Real values
-Normal3f(x::Real, y::Real, z::Real) = Normal3f(Vec3f(Float32(x), Float32(y), Float32(z)))
-Normal3f(v::Real) = Normal3f(Float32(v), Float32(v), Float32(v))
-Normal3f() = Normal3f(0)
-
-Base.getindex(n::Normal3f, i::Int) = getindex(n.vector, i)
-Base.setindex!(n::Normal3f, v, i::Int) = setindex!(n.vector, v, i)
-Base.convert(::Type{Normal{Vec3f}}, n::Normal3f) = Normal{Vec3f}()
-
+include("typeNormal3f.jl")
 
 const Maybe{T} = Union{T, Nothing}
 
