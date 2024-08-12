@@ -2,6 +2,11 @@
 
 Ray tracing.
 
+
+<img src="./assets/shadows-sppm-1024x1024_mio.png">
+
+Output from `/scenes/shadows.jl`.
+
 ## Install
 
 ```

@@ -2,14 +2,14 @@ abstract type AbstractSampler end
 
 mutable struct Sampler <: AbstractSampler
     samples_per_pixel::Int64
-    current_pixel::Point2f0
+    current_pixel::Point2f
     current_pixel_sample_id::Int64
 
     samples_1d_array_sizes::Vector{Int32}
     samples_2d_array_sizes::Vector{Int32}
 
     sample_array_1d::Vector{Vector{Float32}}
-    sample_array_2d::Vector{Vector{Point2f0}}
+    sample_array_2d::Vector{Vector{Point2f}}
 
     array_1d_offset::UInt64
     array_2d_offset::UInt64
@@ -17,15 +17,15 @@ end
 
 function Sampler(samples_per_pixel::Integer)
     Sampler(
-        samples_per_pixel, Point2f0(-1), 1,
+        samples_per_pixel, Point2f(-1), 1,
         Int32[], Int32[],
         Vector{Vector{Float32}}(undef, 0),
-        Vector{Vector{Point2f0}}(undef, 0),
+        Vector{Vector{Point2f}}(undef, 0),
         1, 1,
     )
 end
 
-function get_camera_sample(sampler::AbstractSampler, p_raster::Point2f0)
+function get_camera_sample(sampler::AbstractSampler, p_raster::Point2f)
     p_film = p_raster .+ get_2d(sampler)
     time = sampler |> get_1d
     p_lens = sampler |> get_2d
@@ -38,7 +38,7 @@ end
 Other samplers are required to explicitly call this,
 in their respective implementations.
 """
-function start_pixel(sampler::Sampler, p::Point2f0)
+function start_pixel(sampler::Sampler, p::Point2f)
     sampler.array_1d_offset = sampler.array_2d_offset = 1
     sampler.current_pixel_sample_id = 1
     sampler.current_pixel = p
@@ -63,7 +63,7 @@ end
 
 function request_2d_array(sampler::Sampler, n::Integer)
     push!(sampler.samples_2d_array_sizes, n)
-    push!(sampler.sample_array_2d, Vector{Point2f0}(undef, n * sampler.samples_per_pixel))
+    push!(sampler.sample_array_2d, Vector{Point2f}(undef, n * sampler.samples_per_pixel))
 end
 
 function get_1d_array(sampler::Sampler, n::Integer)
@@ -84,22 +84,22 @@ end
 mutable struct PixelSampler <: AbstractSampler
     sampler::Sampler
     samples_1d::Vector{Vector{Float32}}
-    samples_2d::Vector{Vector{Point2f0}}
+    samples_2d::Vector{Vector{Point2f}}
     current_1d_dimension::Int64
     current_2d_dimension::Int64
 end
 
 function PixelSampler(samples_per_pixel::Integer, n_sampled_dimensions::Integer)
     samples_1d = Vector{Vector{Float32}}(undef, n_sampled_dimensions)
-    samples_2d = Vector{Vector{Point2f0}}(undef, n_sampled_dimensions)
+    samples_2d = Vector{Vector{Point2f}}(undef, n_sampled_dimensions)
     for i in 1:n_sampled_dimensions
         samples_1d[i] = Vector{Float32}(undef, samples_per_pixel)
-        samples_2d[i] = Vector{Point2f0}(undef, samples_per_pixel)
+        samples_2d[i] = Vector{Point2f}(undef, samples_per_pixel)
     end
     PixelSampler(Sampler(samples_per_pixel), samples_1d, samples_2d, 1, 1)
 end
 
-start_pixel(p::PixelSampler, point::Point2f0) = start_pixel(p.sampler, point)
+start_pixel(p::PixelSampler, point::Point2f) = start_pixel(p.sampler, point)
 
 function start_next_sample(ps::PixelSampler)
     ps.current_1d_dimension = ps.current_2d_dimension = 1
@@ -118,8 +118,8 @@ function get_1d(ps::PixelSampler)
     v
 end
 
-function get_2d(ps::PixelSampler)::Point2f0
-    ps.current_2d_dimension > length(ps.samples_2d) && return rand(Point2f0)
+function get_2d(ps::PixelSampler)::Point2f
+    ps.current_2d_dimension > length(ps.samples_2d) && return rand(Point2f)
     v = ps.samples_2d[ps.current_2d_dimension][ps.sampler.current_pixel_sample_id]
     ps.current_2d_dimension += 1
     v
@@ -132,9 +132,9 @@ mutable struct UniformSampler <: AbstractSampler
     UniformSampler(samples_per_pixel::Integer) = new(1, samples_per_pixel)
 end
 
-function get_camera_sample(sampler::UniformSampler, p_raster::Point2f0)
-    p_film = p_raster .+ rand(Point2f0)
-    p_lens = rand(Point2f0)
+function get_camera_sample(sampler::UniformSampler, p_raster::Point2f)
+    p_film = p_raster .+ rand(Point2f)
+    p_lens = rand(Point2f)
     CameraSample(p_film, p_lens, rand())
 end
 
@@ -144,10 +144,10 @@ end
 @inline function start_next_sample!(u::UniformSampler)
     u.current_sample += 1
 end
-@inline function start_pixel!(u::UniformSampler, ::Point2f0)
+@inline function start_pixel!(u::UniformSampler, ::Point2f)
     u.current_sample = 1
 end
 @inline get_1d(u::UniformSampler)::Float32 = rand(Float32)
-@inline get_2d(u::UniformSampler)::Point2f0 = rand(Point2f0)
+@inline get_2d(u::UniformSampler)::Point2f = rand(Point2f)
 
 # include("stratified.jl")

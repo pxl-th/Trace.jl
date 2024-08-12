@@ -24,7 +24,7 @@ struct ProjectiveCamera <: Camera
                 1f0 / (screen_window.p_max[2] - screen_window.p_min[2]),
                 1,
             )
-            * translate(Vec3f0(
+            * translate(Vec3f(
                 -screen_window.p_min[1], -screen_window.p_max[2], 0f0,
             ))
         )
@@ -45,11 +45,11 @@ struct PerspectiveCamera <: Camera
     """
     Precomputed change of rays as we shift pixels on the plane in x-direction.
     """
-    dx_camera::Vec3f0
+    dx_camera::Vec3f
     """
     Precomputed change of rays as we shift pixels on the plane in y-direction.
     """
-    dy_camera::Vec3f0
+    dy_camera::Vec3f
     A::Float32
 
     """
@@ -67,12 +67,12 @@ struct PerspectiveCamera <: Camera
             lens_radius, focal_distance, film,
         )
 
-        p_min = pc.raster_to_camera(Point3f0(0))
-        p_max = pc.raster_to_camera(Point3f0(
+        p_min = pc.raster_to_camera(Point3f(0))
+        p_max = pc.raster_to_camera(Point3f(
             film.resolution[1], film.resolution[2], 0f0,
         ))
-        dx_camera = pc.raster_to_camera(Point3f0(1, 0, 0)) - p_min
-        dy_camera = pc.raster_to_camera(Point3f0(0, 1, 0)) - p_min
+        dx_camera = pc.raster_to_camera(Point3f(1, 0, 0)) - p_min
+        dy_camera = pc.raster_to_camera(Point3f(0, 1, 0)) - p_min
         p = (p_min[1:2] ./ p_min[3]) - (p_max[1:2] ./ p_max[3])
         A = abs(p[1] * p[2])
 
@@ -86,10 +86,10 @@ function generate_ray(
     camera::PerspectiveCamera, sample::CameraSample,
 )::Tuple{Ray, Float32}
     # Compute raster & camera sample positions.
-    p_film = Point3f0(sample.film[1], sample.film[2], 0f0)
+    p_film = Point3f(sample.film[1], sample.film[2], 0f0)
     p_camera = p_film |> camera.core.raster_to_camera
 
-    ray = Ray(o=Point3f0(0), d=p_camera |> Vec3f0 |> normalize)
+    ray = Ray(o=Point3f(0), d=p_camera |> Vec3f |> normalize)
     # Modify ray for depth of field.
     if camera.core.lens_radius > 0
         # Sample points on lens.
@@ -98,8 +98,8 @@ function generate_ray(
         t = camera.core.focal_distance / ray.d[3]
         p_focus = t |> ray
         # Update ray for effects of lens.
-        ray.o = Point3f0(p_lens[1], p_lens[2], 0f0)
-        ray.d = normalize(Vec3f0(p_focus - ray.o))
+        ray.o = Point3f(p_lens[1], p_lens[2], 0f0)
+        ray.d = normalize(Vec3f(p_focus - ray.o))
     end
 
     ray.time = lerp(

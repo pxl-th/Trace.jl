@@ -12,23 +12,23 @@ mutable struct BSDF
     """
     Geometric normal defined by the surface geometry.
     """
-    ng::Normal3f0
+    ng::Normal3f
     """
     Shading normal defined by per-vertex normals and/or bump-mapping.
     These normals will generally define different hemispheres for
     integrating incident illumination to computer surface reflection.
     """
-    ns::Normal3f0
+    ns::Normal3f
     """
     Component of the orhonormal coordinates system with the
     shading normal as one of the axes.
     """
-    ss::Vec3f0
+    ss::Vec3f
     """
     Component of the orhonormal coordinates system with the
     shading normal as one of the axes.
     """
-    ts::Vec3f0
+    ts::Vec3f
     """
     Current number of BxDFs (≤ 8).
     """
@@ -65,11 +65,11 @@ that transforms vectors in world space to local reflection space is:
 
 Since it is an orthonormal matrix, its inverse is its transpose.
 """
-@inline function world_to_local(b::BSDF, v::Vec3f0)
-    Vec3f0(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
+@inline function world_to_local(b::BSDF, v::Vec3f)
+    Vec3f(v ⋅ b.ss, v ⋅ b.ts, v ⋅ b.ns)
 end
 # TODO benchmark
-@inline function local_to_world(b::BSDF, v::Vec3f0)
+@inline function local_to_world(b::BSDF, v::Vec3f)
     Mat3f0(b.ss..., b.ts..., b.ns...) * v
 end
 
@@ -77,7 +77,7 @@ end
 Evaluate BSDF function given incident and outgoind directions.
 """
 function (b::BSDF)(
-    wo_world::Vec3f0, wi_world::Vec3f0, flags::UInt8 = BSDF_ALL,
+    wo_world::Vec3f, wi_world::Vec3f, flags::UInt8 = BSDF_ALL,
 )::RGBSpectrum
     # Transform world-space direction vectors to local BSDF space.
     wo = world_to_local(b, wo_world)
@@ -105,12 +105,12 @@ a given mode of light scattering corresponding
 to perfect specular reflection or refraction.
 """
 function sample_f(
-    b::BSDF, wo_world::Vec3f0, u::Point2f0, type::UInt8,
-)::Tuple{Vec3f0, RGBSpectrum, Float32, UInt8}
+    b::BSDF, wo_world::Vec3f, u::Point2f, type::UInt8,
+)::Tuple{Vec3f, RGBSpectrum, Float32, UInt8}
     # Choose which BxDF to sample.
     matching_components = num_components(b, type)
     matching_components == 0 && return (
-        Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
+        Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
     component = min(
         max(1, Int64(ceil(u[1] * matching_components))),
@@ -128,13 +128,13 @@ function sample_f(
     end
     @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
-    u_remapped = Point2f0(
+    u_remapped = Point2f(
         min(u[1] * matching_components - component, 1f0), u[2],
     )
     # Sample chosen BxDF.
     wo = world_to_local(b, wo_world)
     wo[3] ≈ 0f0 && return (
-        Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
+        Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
 
     # TODO when to update sampled type
@@ -143,7 +143,7 @@ function sample_f(
     sampled_type_tmp ≢ nothing && (sampled_type = sampled_type_tmp;)
 
     pdf ≈ 0f0 && return (
-        Vec3f0(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
+        Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
     wi_world = local_to_world(b, wi)
     # Compute overall PDF with all matching BxDFs.
@@ -174,7 +174,7 @@ function sample_f(
 end
 
 function compute_pdf(
-    b::BSDF, wo_world::Vec3f0, wi_world::Vec3f0, flags::UInt8,
+    b::BSDF, wo_world::Vec3f, wi_world::Vec3f, flags::UInt8,
 )::Float32
     b.n_bxdfs == 0 && return 0f0
     wo = world_to_local(b, wo_world)

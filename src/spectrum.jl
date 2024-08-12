@@ -1,12 +1,12 @@
-@inline function XYZ_to_RGB(xyz::Point3f0)
-    Point3f0(
+@inline function XYZ_to_RGB(xyz::Point3f)
+    Point3f(
          3.240479f0 * xyz[1] - 1.537150f0 * xyz[2] - 0.498535f0 * xyz[3],
         -0.969256f0 * xyz[1] + 1.875991f0 * xyz[2] + 0.041556f0 * xyz[3],
          0.055648f0 * xyz[1] - 0.204043f0 * xyz[2] + 1.057311f0 * xyz[3],
     )
 end
-@inline function RGB_to_XYZ(rgb::Point3f0)
-    Point3f0(
+@inline function RGB_to_XYZ(rgb::Point3f)
+    Point3f(
         0.412453f0 * rgb[1] + 0.357580f0 * rgb[2] + 0.180423f0 * rgb[3],
         0.212671f0 * rgb[1] + 0.715160f0 * rgb[2] + 0.072169f0 * rgb[3],
         0.019334f0 * rgb[1] + 0.119193f0 * rgb[2] + 0.950227f0 * rgb[3],
@@ -55,15 +55,15 @@ end
 is_black(c::C) where C <: Spectrum = c.c |> iszero
 
 struct RGBSpectrum <: Spectrum
-    c::Point3f0
+    c::Point3f
 end
-RGBSpectrum(v::Float32 = 0f0) = RGBSpectrum(Point3f0(v))
-RGBSpectrum(r, g, b) = RGBSpectrum(Point3f0(r, g, b))
+RGBSpectrum(v::Float32 = 0f0) = RGBSpectrum(Point3f(v))
+RGBSpectrum(r, g, b) = RGBSpectrum(Point3f(r, g, b))
 
 to_XYZ(s::RGBSpectrum) = s.c |> RGB_to_XYZ
 @inbounds function to_Y(s::RGBSpectrum)::Float32
     0.212671f0 * s.c[1] + 0.715160f0 * s.c[2] + 0.072169f0 * s.c[3]
 end
-function from_XYZ(::Type{RGBSpectrum}, xyz::Point3f0)
+function from_XYZ(::Type{RGBSpectrum}, xyz::Point3f)
     xyz |> XYZ_to_RGB |> RGBSpectrum
 end

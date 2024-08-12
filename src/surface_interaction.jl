@@ -2,7 +2,7 @@ mutable struct Interaction
     """
     Intersection point in world coordinates.
     """
-    p::Point3f0
+    p::Point3f
     """
     Time of intersection.
     """
@@ -11,30 +11,30 @@ mutable struct Interaction
     Negative direction of ray (for ray-shape interactions)
     in world coordinates.
     """
-    wo::Vec3f0
+    wo::Vec3f
     """
     Surface normal at the point in world coordinates.
     """
-    n::Normal3f0
+    n::Normal3f
 end
 
 mutable struct ShadingInteraction
-    n::Normal3f0
-    ∂p∂u::Vec3f0
-    ∂p∂v::Vec3f0
-    ∂n∂u::Normal3f0
-    ∂n∂v::Normal3f0
+    n::Normal3f
+    ∂p∂u::Vec3f
+    ∂p∂v::Vec3f
+    ∂n∂u::Normal3f
+    ∂n∂v::Normal3f
 end
 
 mutable struct SurfaceInteraction{S <: AbstractShape}
     core::Interaction
     shading::ShadingInteraction
-    uv::Point2f0
+    uv::Point2f
 
-    ∂p∂u::Vec3f0
-    ∂p∂v::Vec3f0
-    ∂n∂u::Normal3f0
-    ∂n∂v::Normal3f0
+    ∂p∂u::Vec3f
+    ∂p∂v::Vec3f
+    ∂n∂u::Normal3f
+    ∂n∂v::Normal3f
 
     shape::Maybe{S}
     primitive::Maybe{P} where P <: Primitive
@@ -44,13 +44,13 @@ mutable struct SurfaceInteraction{S <: AbstractShape}
     ∂u∂y::Float32
     ∂v∂x::Float32
     ∂v∂y::Float32
-    ∂p∂x::Vec3f0
-    ∂p∂y::Vec3f0
+    ∂p∂x::Vec3f
+    ∂p∂y::Vec3f
 end
 
 function SurfaceInteraction(
-    p::Point3f0, time::Float32, wo::Vec3f0, uv::Point2f0,
-    ∂p∂u::Vec3f0, ∂p∂v::Vec3f0, ∂n∂u::Normal3f0, ∂n∂v::Normal3f0,
+    p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
+    ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f,
     shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
 ) where S <: AbstractShape where P <: Primitive
     n = (∂p∂u × ∂p∂v) |> normalize
@@ -63,13 +63,13 @@ function SurfaceInteraction(
     SurfaceInteraction{typeof(shape)}(
         core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
         shape, primitive, nothing,
-        0f0, 0f0, 0f0, 0f0, Vec3f0(0f0), Vec3f0(0f0),
+        0f0, 0f0, 0f0, 0f0, Vec3f(0f0), Vec3f(0f0),
     )
 end
 
 function set_shading_geometry!(
-    i::SurfaceInteraction, tangent::Vec3f0, bitangent::Vec3f0,
-    ∂n∂u::Normal3f0, ∂n∂v::Normal3f0, orientation_is_authoritative::Bool,
+    i::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
+    ∂n∂u::Normal3f, ∂n∂v::Normal3f, orientation_is_authoritative::Bool,
 )
     i.shading.n = normalize(tangent × bitangent)
     if !(i.shape isa Nothing) && (i.shape.core.reverse_orientation ⊻ i.shape.core.transform_swaps_handedness)
@@ -87,7 +87,7 @@ function set_shading_geometry!(
     i.shading.∂n∂v = ∂n∂v
 end
 
-is_surface_interaction(i::Interaction) = i.n != Normal3f0(0)
+is_surface_interaction(i::Interaction) = i.n != Normal3f(0)
 
 """
 Compute partial derivatives needed for computing sampling rates
@@ -97,7 +97,7 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
     if !ray.has_differentials
         si.∂u∂x = si.∂v∂x = 0f0
         si.∂u∂y = si.∂v∂y = 0f0
-        si.∂p∂x = si.∂p∂y = Vec3f0(0f0)
+        si.∂p∂x = si.∂p∂y = Vec3f(0f0)
         return
     end
     # Estimate screen change in p and (u, v).
@@ -122,8 +122,8 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
     end
     # Initialization for offset computation.
     a = Mat2f0(dim[1], dim[1], dim[2], dim[2])
-    bx = Point2f0(px[dim[1]] - si.core.p[dim[1]], px[dim[2]] - si.core.p[dim[2]])
-    by = Point2f0(py[dim[1]] - si.core.p[dim[1]], py[dim[2]] - si.core.p[dim[2]])
+    bx = Point2f(px[dim[1]] - si.core.p[dim[1]], px[dim[2]] - si.core.p[dim[2]])
+    by = Point2f(py[dim[1]] - si.core.p[dim[1]], py[dim[2]] - si.core.p[dim[2]])
     sx = a \ bx
     sy = a \ by
 
@@ -146,7 +146,7 @@ function compute_scattering!(
     compute_scattering!(si.primitive, si, allow_multiple_lobes, T)
 end
 
-@inline function le(::SurfaceInteraction, ::Vec3f0)::RGBSpectrum
+@inline function le(::SurfaceInteraction, ::Vec3f)::RGBSpectrum
     # TODO right now return 0, since there is no area lights implemented.
     RGBSpectrum(0f0)
 end
