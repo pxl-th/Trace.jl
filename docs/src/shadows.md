@@ -1,3 +1,6 @@
+## shadows
+
+```@example
 using GeometryBasics
 using Trace
 using FileIO
@@ -87,22 +90,24 @@ function render()
     )]
     scene = Trace.Scene(lights, bvh)
 
-    resolution = Point2f(1024)
+    resolution = Point2f(1024 ÷ 3)
     filter = Trace.LanczosSincFilter(Point2f(1f0), 3f0)
-    film = Trace.Film(
-        resolution, Trace.Bounds2(Point2f(0f0), Point2f(1f0)),
+    film = Trace.Film(resolution,
+        Trace.Bounds2(Point2f(0f0), Point2f(1f0)),
         filter, 1f0, 1f0,
-        "./scenes/shadows-sppm-$(Int64(resolution[1]))x$(Int64(resolution[2]))_mio.png",
+        "shadows_sppm_res.png",
     )
     screen = Trace.Bounds2(Point2f(-1f0), Point2f(1f0))
     camera = Trace.PerspectiveCamera(
         Trace.look_at(Point3f(0, 15, 50), Point3f(0, 0, -2), Vec3f(0, 1, 0)),
         screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
     )
-
     # integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 8)
-    integrator = Trace.SPPMIntegrator(camera, 0.025f0, 5, 100)
+    integrator = Trace.SPPMIntegrator(camera, 0.025f0, 5, 10)
     scene |> integrator
 end
 
 render()
+```
+
+![](shadows_sppm_res.png)
