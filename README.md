@@ -1,9 +1,12 @@
 # Trace.jl
+[![][docs-dev-img]][docs-dev-url]
 
-Ray tracing.
+Physically-based ray tracing on CPU / ?
 
+[docs-dev-img]: https://img.shields.io/badge/docs-dev-blue.svg
+[docs-dev-url]: https://pxl-th.github.io/Trace.jl/dev/
 
-<img src="./assets/shadows-sppm-1024x1024_mio.png">
+<img src="./docs/src/assets/shadows-sppm-1024x1024_mio.png">
 
 Output from `/scenes/shadows.jl`.
 
