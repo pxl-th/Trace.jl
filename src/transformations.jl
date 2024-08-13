@@ -132,12 +132,12 @@ end
 function (t::Transformation)(p::Point3f)::Point3f
     ph = Point4f(p..., 1f0)
     pt = t.m * ph
-    pr = Point3f(pt[1:3])
+    pr = Point3f(pt[Vec(1, 2, 3)])
     pt[4] == 1 && return pr
     pr ./ pt[4]
 end
-(t::Transformation)(v::Vec3f)::Vec3f = t.m[1:3, 1:3] * v
-(t::Transformation)(n::Normal3f)::Normal3f = transpose(t.inv_m[1:3, 1:3]) * n
+(t::Transformation)(v::Vec3f)::Vec3f = t.m[Vec(1, 2, 3), Vec(1, 2, 3)] * v
+(t::Transformation)(n::Normal3f)::Normal3f = transpose(t.inv_m[Vec(1, 2, 3), Vec(1, 2, 3)]) * n
 function (t::Transformation)(b::Bounds3)
     mapreduce(i -> corner(b, i) |> t |> Bounds3, ∪, 1:8)
 end
@@ -161,7 +161,7 @@ function has_scale(t::Transformation)
 end
 
 function swaps_handedness(t::Transformation)
-    det(t.m[1:3, 1:3]) < 0
+    det(t.m[Vec(1, 2, 3), Vec(1, 2, 3)]) < 0
 end
 
 struct Quaternion
@@ -171,7 +171,7 @@ end
 
 Quaternion() = Quaternion(Vec3f(0f0), 1f0)
 function Quaternion(t::Transformation)
-    trace = t.m[1:3, 1:3] |> tr
+    trace = t.m[Vec(1, 2, 3), Vec(1, 2, 3)] |> tr
     if trace > 0f0
         # Compute w from matrix trace, then xyz.
         # 4w^2 = m[0, 0] + m[1, 1] + m[2, 2] + m[3, 3] => (m[3, 3] == 1)
