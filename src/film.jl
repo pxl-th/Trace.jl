@@ -83,13 +83,13 @@ function get_physical_extension(f::Film)
     Bounds2(Point2f(-x / 2f0, -y / 2f0), Point2f(x / 2f0, y / 2f0))
 end
 
-mutable struct FilmTilePixel
-    contrib_sum::S where S<:Spectrum
+mutable struct FilmTilePixel{S<:Spectrum}
+    contrib_sum::S
     filter_weight_sum::Float32
 end
 FilmTilePixel() = FilmTilePixel(RGBSpectrum(), 0f0)
 
-struct FilmTile
+struct FilmTile{S<:Spectrum}
     """
     Bounds should start from 1 not 0.
     """
@@ -98,7 +98,7 @@ struct FilmTile
     inv_filter_radius::Point2f
     filter_table::Matrix{Float32}
     filter_table_width::Int32
-    pixels::Matrix{FilmTilePixel}
+    pixels::Matrix{FilmTilePixel{S}}
 
     function FilmTile(
         bounds::Bounds2, filter_radius::Point2f,
@@ -106,7 +106,7 @@ struct FilmTile
     )
         tile_res = (Int32.(inclusive_sides(bounds)))
         pixels = [FilmTilePixel() for _ in 1:tile_res[2], __ in 1:tile_res[1]]
-        new(
+        new{RGBSpectrum}(
             bounds, filter_radius, 1f0 ./ filter_radius,
             filter_table, filter_table_width,
             pixels,
