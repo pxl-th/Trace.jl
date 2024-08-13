@@ -1,4 +1,4 @@
-import{_ as s,c as i,o as a,a7 as n}from"./chunks/framework.CAime7m4.js";const h="/Trace.jl/dev/assets/shadows_sppm_res.DBA9UePK.png",C=JSON.parse('{"title":"","description":"","frontmatter":{},"headers":[],"relativePath":"shadows.md","filePath":"shadows.md","lastUpdated":null}'),k={name:"shadows.md"},p=n(`<h2 id="shadows" tabindex="-1">shadows <a class="header-anchor" href="#shadows" aria-label="Permalink to &quot;shadows&quot;">​</a></h2><div class="language-julia vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">julia</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583;">using</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;"> GeometryBasics</span></span>
+import{_ as s,c as i,o as a,a7 as n}from"./chunks/framework.CAime7m4.js";const h="/Trace.jl/dev/assets/shadows_sppm_res.BwSksDHV.png",C=JSON.parse('{"title":"","description":"","frontmatter":{},"headers":[],"relativePath":"shadows.md","filePath":"shadows.md","lastUpdated":null}'),k={name:"shadows.md"},p=n(`<h2 id="shadows" tabindex="-1">shadows <a class="header-anchor" href="#shadows" aria-label="Permalink to &quot;shadows&quot;">​</a></h2><div class="language-julia vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">julia</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583;">using</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;"> GeometryBasics</span></span>
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583;">using</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;"> Trace</span></span>
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583;">using</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;"> FileIO</span></span>
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583;">using</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;"> ImageCore</span></span>
@@ -105,36 +105,36 @@ import{_ as s,c as i,o as a,a7 as n}from"./chunks/framework.CAime7m4.js";const h
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583;">end</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;">render</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">()</span></span></code></pre></div><div class="language- vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang"></span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span></span></span>
-<span class="line"><span>Camera pass:   0%[&gt;                                                 ]  ETA: 0:15:58\x1B[K</span></span>
-<span class="line"><span>Camera pass:  65%[================================&gt;                 ]  ETA: 0:00:03\x1B[K</span></span>
+<span class="line"><span>Camera pass:   0%[&gt;                                                 ]  ETA: 0:15:45\x1B[K</span></span>
+<span class="line"><span>Camera pass:  67%[=================================&gt;                ]  ETA: 0:00:03\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:06\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>[1] Photon pass:  33%[================&gt;                                 ]  ETA: 0:00:02\x1B[K</span></span>
+<span class="line"><span>[1] Photon pass:  21%[==========&gt;                                       ]  ETA: 0:00:04\x1B[K</span></span>
 <span class="line"><span>[1] Photon pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  49%[========================&gt;                         ]  ETA: 0:00:01\x1B[K</span></span>
-<span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
-<span class="line"><span></span></span>
 <span class="line"><span>Camera pass:  51%[=========================&gt;                        ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  52%[==========================&gt;                       ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  55%[===========================&gt;                      ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  52%[==========================&gt;                       ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  54%[==========================&gt;                       ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  52%[==========================&gt;                       ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  55%[===========================&gt;                      ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  52%[=========================&gt;                        ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  54%[==========================&gt;                       ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  51%[=========================&gt;                        ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  54%[===========================&gt;                      ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  51%[=========================&gt;                        ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  57%[============================&gt;                     ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
 <span class="line"><span></span></span>
-<span class="line"><span>Camera pass:  52%[=========================&gt;                        ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass:  55%[===========================&gt;                      ]  ETA: 0:00:01\x1B[K</span></span>
+<span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span>Camera pass:  55%[===========================&gt;                      ]  ETA: 0:00:01\x1B[K</span></span>
 <span class="line"><span>Camera pass: 100%[==================================================] Time: 0:00:01\x1B[K</span></span></code></pre></div><p><img src="`+h+'" alt=""></p>',4),l=[p];function t(E,e,r,g,d,y){return a(),i("div",null,l)}const c=s(k,[["render",t]]);export{C as __pageData,c as default};
