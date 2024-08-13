@@ -329,6 +329,8 @@ function _trace_photons!(
     bar = get_progress_bar(
         i.photons_per_iteration, "[$iteration] Photon pass: ",
     )
+    shutter_open = i.camera.core.core.shutter_open
+    shutter_close = i.camera.core.core.shutter_close
     Threads.@threads for photon_index in 0:i.photons_per_iteration - 1
         # Follow photon path for `photon_index`.
         halton_index = halton_base + photon_index
@@ -350,8 +352,8 @@ function _trace_photons!(
             radical_inverse(halton_dim + 3, halton_index),
         )
         u_light_time = lerp(
-            i.camera.core.core.shutter_open,
-            i.camera.core.core.shutter_close,
+            shutter_open,
+            shutter_close,
             radical_inverse(halton_dim + 4, halton_index),
         )
         halton_dim += 5
