@@ -1,6 +1,6 @@
 name = "Trace"
 uuid = "afc56b53-c9a9-482a-a956-d1d800e05558"
-authors = ["Anton Smirnov <17990405+pxl-th@users.noreply.github.com>"]
+authors = ["Anton Smirnov <tonysmn97@gmail.com>"]
 version = "0.1.0"
 
 [deps]
@@ -12,3 +12,12 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+FileIO = "1.16"
+GeometryBasics = "0.4"
+ImageCore = "0.10"
+ImageIO = "0.6"
+Parameters = "0.12"
+ProgressMeter = "1.10"
+StaticArrays = "1.9"

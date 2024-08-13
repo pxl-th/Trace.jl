@@ -6,3 +6,11 @@ GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 ImageCore = "a09fc81d-aa75-5fe9-8630-4744c3626534"
 Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
 Trace = "afc56b53-c9a9-482a-a956-d1d800e05558"
+
+[compat]
+Documenter = "1.5"
+DocumenterVitepress = "0.1"
+FileIO = "1.16"
+GeometryBasics = "0.4"
+ImageCore = "0.10"
+Literate = "2.19"

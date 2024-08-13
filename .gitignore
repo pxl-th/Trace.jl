@@ -3,3 +3,5 @@ settings.json
 package-lock.json
 node_modules
 docs/build
+
+Manifest*.toml
