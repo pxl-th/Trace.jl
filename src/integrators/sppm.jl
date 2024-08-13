@@ -197,7 +197,7 @@ function _generate_visible_sppm_points!(
             ray, β = generate_ray_differential(i.camera, camera_sample)
             β ≈ 0f0 && continue
             β = RGBSpectrum(β)
-            @assert !isnan(β)
+            @real_assert !isnan(β)
             scale_differentials!(ray, inv_sqrt_spp)
             # Follow camera ray path until a visible point is created.
             # Get SPPMPixel for current `pixel`.
@@ -253,13 +253,13 @@ function _generate_visible_sppm_points!(
                 (pdf ≈ 0f0 || is_black(f)) && break
                 specular_bounce = (sampled_type & BSDF_SPECULAR) != 0
                 β *= f * abs(wi ⋅ surface_interaction.shading.n) / pdf
-                @assert !isnan(β)
+                @real_assert !isnan(β)
                 βy = to_Y(β)
                 if βy < 0.25f0
                     continue_probability = min(1f0, βy)
                     get_1d(tile_sampler) > continue_probability && break
                     β /= continue_probability
-                    @assert !isnan(β) && !isinf(β)
+                    @real_assert !isnan(β) && !isinf(β)
                 end
                 ray = RayDifferentials(spawn_ray(surface_interaction, wi))
                 depth += 1
@@ -293,8 +293,8 @@ function _populate_grid!(
     diag = diagonal(grid_bounds)
     max_diag = maximum(diag)
     # TODO can be inf if no visible points
-    @assert max_diag > 0
-    @assert !isinf(max_radius)
+    @real_assert max_diag > 0
+    @real_assert !isinf(max_radius)
     base_grid_resolution = Int64(floor(max_diag / max_radius))
     grid_resolution = max.(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
@@ -394,7 +394,7 @@ function _trace_photons!(
                         ϕ = β * node.pixel.vp.bsdf(
                             node.pixel.vp.wo, -photon_ray.d,
                         )
-                        @assert !isnan(ϕ)
+                        @real_assert !isnan(ϕ)
                         Threads.atomic_add!(node.pixel.ϕ, ϕ)
                         Threads.atomic_add!(node.pixel.M, 1)
                         node = node.next
@@ -461,7 +461,7 @@ end
 function _sppm_to_image(
     i::SPPMIntegrator, pixels::Matrix{SPPMPixel}, iteration::Int64,
 )
-    @assert iteration > 0
+    @real_assert iteration > 0
     Np = iteration * i.photons_per_iteration * π
     image = fill(RGBSpectrum(0f0), size(pixels))
     @inbounds for (i, p) in enumerate(pixels)
@@ -538,7 +538,7 @@ function estimate_direct(
                 if is_δ_light(light.flags)
                     Ld += f * Li / light_pdf
                 else
-                    @assert false # TODO no non delta lights right now
+                    @real_assert false # TODO no non delta lights right now
                     scattering_pdf = compute_pdf(
                         interaction.bsdf, interaction.core.wo, wi, bsdf_flags,
                     )

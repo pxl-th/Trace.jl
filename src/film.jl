@@ -156,8 +156,8 @@ function add_sample!(
     for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
         w = t.filter_table[offsets_y[j], offsets_x[i]]
         pixel = get_pixel(t, Point2f(x, y))
-        @assert sample_weight <= 1
-        @assert w <= 1
+        @real_assert sample_weight <= 1
+        @real_assert w <= 1
         pixel.contrib_sum += spectrum * sample_weight * w
         pixel.filter_weight_sum += w
     end
@@ -193,7 +193,7 @@ function merge_film_tile!(f::Film, ft::FilmTile)
 end
 
 function set_image!(f::Film, spectrum::Matrix{S}) where S<:Spectrum
-    @assert size(f.pixels) == size(spectrum)
+    @real_assert size(f.pixels) == size(spectrum)
     for (i, p) in enumerate(f.pixels)
         p.xyz = to_XYZ(spectrum[i])
         p.filter_weight_sum = 1f0

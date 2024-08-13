@@ -70,7 +70,7 @@ function ρ(
     t.t
 end
 
-function sample_f(
+@inline function sample_f(
     b::LambertianTransmission{S}, wo::Vec3f, sample::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where S<:Spectrum
     wi = cosine_sample_hemisphere(sample)

@@ -31,7 +31,7 @@ and return the value of BxDF for the pair of directions.
 **Note** all BxDFs that implement this method,
 have to implement `compute_pdf` as well.
 """
-function sample_f(
+@inline function sample_f(
     b::B, wo::Vec3f, sample::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where B<:BxDF
     wi::Vec3f = cosine_sample_hemisphere(sample)

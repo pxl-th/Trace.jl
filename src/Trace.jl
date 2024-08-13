@@ -22,6 +22,15 @@ const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
 const TransportMode = Union{Radiance,Importance}
 
+const DO_ASSERTS = false
+macro real_assert(expr, msg="")
+    if DO_ASSERTS
+        esc(:(@assert $expr $msg))
+    else
+        return :()
+    end
+end
+
 # GeometryBasics.@fixed_vector Normal StaticVector
 include("typeNormal3f.jl")
 

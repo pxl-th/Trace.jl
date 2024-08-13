@@ -41,7 +41,7 @@ function sample_discrete(d::Distribution1D, u::Float32)
 end
 
 function radical_inverse(base_index::Int64, a::UInt64)::Float32
-    @assert base_index < 1024 "Limit for radical inverse is 1023"
+    @real_assert base_index < 1024 "Limit for radical inverse is 1023"
     base_index == 0 && return reverse_bits(a) * 5.4210108624275222e-20
 
     base = PRIMES[base_index]

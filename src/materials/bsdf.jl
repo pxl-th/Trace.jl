@@ -51,7 +51,7 @@ mutable struct BSDF
 end
 
 function add!(b::BSDF, x::B) where B<:BxDF
-    @assert b.n_bxdfs < MAX_BxDF
+    @real_assert b.n_bxdfs < MAX_BxDF
     b.n_bxdfs += 1
     b.bxdfs[b.n_bxdfs] = x
 end
@@ -126,7 +126,7 @@ function sample_f(
             count -= 1
         end
     end
-    @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
+    @real_assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f(
         min(u[1] * matching_components - component, 1f0), u[2],
@@ -139,7 +139,8 @@ function sample_f(
 
     # TODO when to update sampled type
     sampled_type = bxdf.type
-    wi, pdf, f, sampled_type_tmp = sample_f(bxdf, wo, u_remapped)
+    xx = sample_f(bxdf, wo, u_remapped)
+    wi, pdf, f, sampled_type_tmp = xx
     sampled_type_tmp ≢ nothing && (sampled_type = sampled_type_tmp)
 
     pdf ≈ 0f0 && return (

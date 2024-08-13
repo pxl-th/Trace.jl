@@ -73,7 +73,7 @@ struct BVHAccel <: AccelPrimitive
         offset = Ref{UInt32}(1)
         flattened = Vector{LinearBVH}(undef, total_nodes[])
         _unroll(flattened, root, offset)
-        @assert total_nodes[] + 1 == offset[]
+        @real_assert total_nodes[] + 1 == offset[]
 
         new(ordered_primitives, max_node_primitives, flattened)
     end

@@ -61,7 +61,7 @@ function sample_le(
     p::PointLight, u1::Point2f, ::Point2f, ::Float32,
 )::Tuple{RGBSpectrum,Ray,Normal3f,Float32,Float32}
     ray = Ray(o = p.position, d = uniform_sample_sphere(u1))
-    @assert norm(ray.d) ≈ 1f0
+    @real_assert norm(ray.d) ≈ 1f0
     light_normal = Normal3f(ray.d)
     pdf_pos = 1f0
     pdf_dir = uniform_sphere_pdf()

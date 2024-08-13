@@ -148,7 +148,7 @@ function _trowbridge_reitz_sample(
     )
     slope_y = s * z * √(1f0 + slope_x^2)
 
-    @assert !isinf(slope_y) && !isnan(slope_y)
+    @real_assert !isinf(slope_y) && !isnan(slope_y)
     slope_x, slope_y
 end
 
@@ -233,7 +233,7 @@ function (m::MicrofacetReflection{S,T})(
     f / (4f0 * cosθi * cosθo)
 end
 
-function sample_f(
+@inline function sample_f(
     m::MicrofacetReflection{S,T}, wo::Vec3f, u::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where {S<:Spectrum,T<:TransportMode}
     wo[3] ≈ 0 && return Vec3f(0f0), 0f0, S(0f0), nothing
@@ -304,7 +304,7 @@ function (m::MicrofacetTransmission{S,T})(
     )
 end
 
-function sample_f(
+@inline function sample_f(
     m::MicrofacetTransmission{S,T}, wo::Vec3f, u::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where {S<:Spectrum,T<:TransportMode}
     wo[3] ≈ 0 && return Vec3f(0f0), 0f0, S(0f0), nothing
@@ -326,7 +326,7 @@ function compute_pdf(
 
     η = cos_θ(wo) > 0f0 ? (m.η_b / m.η_a) : (m.η_a / m.η_b)
     wh = normalize((wo + wi * η))
-    @assert !isnan(wh)
+    @real_assert !isnan(wh)
     d_o, d_i = wo ⋅ wh, wi ⋅ wh
     (d_o * d_i) > 0 && return 0f0
 

@@ -31,7 +31,7 @@ Compute the direction of incident light wi, given an outgoing direction wo
 and return the value of BxDF for the pair of directions.
 `sample` parameter isn't needed for the δ-distribution.
 """
-function sample_f(
+@inline function sample_f(
     s::SpecularReflection{S,F}, wo::Vec3f, ::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where {S<:Spectrum,F<:Fresnel}
     wi = Vec3f(-wo[1], -wo[2], wo[3])
@@ -81,7 +81,7 @@ Compute the direction of incident light wi, given an outgoing direction wo
 and return the value of BxDF for the pair of directions.
 `sample` parameter isn't needed for the δ-distribution.
 """
-function sample_f(
+@inline function sample_f(
     s::SpecularTransmission{S,T}, wo::Vec3f, ::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where {S<:Spectrum,T<:TransportMode}
     # Figure out which η is incident and which is transmitted.
@@ -142,7 +142,7 @@ end
 Compute the direction of incident light wi, given an outgoing direction wo
 and return the value of BxDF for the pair of directions.
 """
-function sample_f(
+@inline function sample_f(
     f::FresnelSpecular{S,T}, wo::Vec3f, u::Point2f,
 )::Tuple{Vec3f,Float32,RGBSpectrum,Maybe{UInt8}} where {S<:Spectrum,T<:TransportMode}
     fd = fresnel_dielectric(cos_θ(wo), f.η_a, f.η_b)
