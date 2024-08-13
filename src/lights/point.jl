@@ -1,4 +1,4 @@
-struct PointLight{S <: Spectrum} <: Light
+struct PointLight{S<:Spectrum} <: Light
     """
     Since point lights represent singularities that only emit light
     from a single position, flag is set to `LightδPosition`.
@@ -16,10 +16,10 @@ struct PointLight{S <: Spectrum} <: Light
     """
     position::Point3f
 
-    function PointLight(light_to_world::Transformation, i::S) where S <: Spectrum
+    function PointLight(light_to_world::Transformation, i::S) where S<:Spectrum
         new{S}(
-            LightδPosition, light_to_world, light_to_world |> inv,
-            i, Point3f(0f0) |> light_to_world,
+            LightδPosition, light_to_world, inv(light_to_world),
+            i, light_to_world(Point3f(0f0)),
         )
     end
 end
@@ -48,7 +48,7 @@ due to that light, assuming there are no occluding objects between them.
         there are no occluding objects between the light and reference point.
 """
 function sample_li(p::PointLight, ref::Interaction, ::Point2f)
-    wi = Vec3f(p.position - ref.p) |> normalize
+    wi = normalize(Vec3f(p.position - ref.p))
     pdf = 1f0
     visibility = VisibilityTester(
         ref, Interaction(p.position, ref.time, Vec3f(0f0), Normal3f(0f0)),
@@ -59,10 +59,10 @@ end
 
 function sample_le(
     p::PointLight, u1::Point2f, ::Point2f, ::Float32,
-)::Tuple{RGBSpectrum, Ray, Normal3f, Float32, Float32}
-    ray = Ray(o=p.position, d=uniform_sample_sphere(u1))
+)::Tuple{RGBSpectrum,Ray,Normal3f,Float32,Float32}
+    ray = Ray(o = p.position, d = uniform_sample_sphere(u1))
     @assert norm(ray.d) ≈ 1f0
-    light_normal = ray.d |> Normal3f
+    light_normal = Normal3f(ray.d)
     pdf_pos = 1f0
     pdf_dir = uniform_sphere_pdf()
     p.i, ray, light_normal, pdf_pos, pdf_dir

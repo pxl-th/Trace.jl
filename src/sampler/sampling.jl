@@ -6,21 +6,21 @@ struct Distribution1D
     func_int::Float32
 
     function Distribution1D(func::Vector{Float32})
-        n = func |> length
+        n = length(func)
         cdf = Vector{Float32}(undef, n + 1)
         # Compute integral of step function at `xᵢ`.
         cdf[1] = 0f0
         @inbounds for i in 2:length(cdf)
-            cdf[i] = cdf[i - 1] + func[i - 1] / n
+            cdf[i] = cdf[i-1] + func[i-1] / n
         end
         # Transform step function integral into CDF.
-        func_int = cdf[n + 1]
+        func_int = cdf[n+1]
         if func_int ≈ 0f0
-            @inbounds for i in 2:n + 1
+            @inbounds for i in 2:n+1
                 cdf[i] = i / n
             end
         else
-            @inbounds for i in 2:n + 1
+            @inbounds for i in 2:n+1
                 cdf[i] /= func_int
             end
         end
@@ -36,7 +36,7 @@ function sample_discrete(d::Distribution1D, u::Float32)
     offset = clamp(offset, 1, length(d.cdf) - 1)
 
     pdf = d.func_int > 0 ? d.func[offset] / (d.func_int * length(d.func)) : 0f0
-    u_remapped = (u - d.cdf[offset]) / (d.cdf[offset + 1] - d.cdf[offset])
+    u_remapped = (u - d.cdf[offset]) / (d.cdf[offset+1] - d.cdf[offset])
     offset, pdf, u_remapped
 end
 
@@ -68,7 +68,7 @@ end
 end
 
 @inline function reverse_bits(n::UInt64)::UInt64
-    n0 = reverse_bits(UInt32((n << 32) >> 32)) |> UInt64
-    n1 = reverse_bits(UInt32(n >> 32)) |> UInt64
+    n0 = UInt64(reverse_bits(UInt32((n << 32) >> 32)))
+    n1 = UInt64(reverse_bits(UInt32(n >> 32)))
     return (n0 << 32) | n1
 end

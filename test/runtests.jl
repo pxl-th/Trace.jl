@@ -35,7 +35,7 @@ end
     core = Trace.ShapeCore(Trace.translate(Vec3f(0)), false)
     s = Trace.Sphere(core, 1f0, -1f0, 1f0, 360f0)
 
-    sb = s |> Trace.object_bound
+    sb = Trace.object_bound(s)
     @test sb[1] == Point3f(-1f0)
     @test sb[2] == Point3f(1f0)
 end

@@ -19,7 +19,7 @@ Base.@kwdef mutable struct RayDifferentials <: AbstractRay
 end
 
 @inline function RayDifferentials(r::Ray)::RayDifferentials
-    RayDifferentials(o=r.o, d=r.d, t_max=r.t_max, time=r.time)
+    RayDifferentials(o = r.o, d = r.d, t_max = r.t_max, time = r.time)
 end
 
 @inline function set_direction!(r::AbstractRay, d::Vec3f)
@@ -28,7 +28,7 @@ end
 
 @inline check_direction!(r::AbstractRay) = set_direction!(r, r.d)
 
-function (r::Union{Ray, RayDifferentials})(t::Number)
+function (r::Union{Ray,RayDifferentials})(t::Number)
     r.o + r.d * t
 end
 

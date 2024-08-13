@@ -15,14 +15,14 @@ Compute scattering function.
 """
 function (m::MatteMaterial)(
     si::SurfaceInteraction, ::Bool, ::Type{T},
-) where T <: TransportMode
+) where T<:TransportMode
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
-    si.bsdf = si |> BSDF
-    r = si |> m.Kd |> clamp
+    si.bsdf = BSDF(si)
+    r = clamp(m.Kd(si))
     is_black(r) && return
 
-    σ = clamp(si |> m.σ, 0f0, 90f0)
+    σ = clamp(m.σ(si), 0f0, 90f0)
     if σ ≈ 0f0
         add!(si.bsdf, LambertianReflection(r))
     else
@@ -38,9 +38,9 @@ end
 
 function (m::MirrorMaterial)(
     si::SurfaceInteraction, ::Bool, ::Type{T},
-) where T <: TransportMode
-    si.bsdf = si |> BSDF
-    r = si |> m.Kr |> clamp
+) where T<:TransportMode
+    si.bsdf = BSDF(si)
+    r = clamp(m.Kr(si))
     is_black(r) && return
     add!(si.bsdf, SpecularReflection(r, FresnelNoOp()))
 end
@@ -74,14 +74,14 @@ end
 
 function (g::GlassMaterial)(
     si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
-) where T <: TransportMode
-    η = si |> g.index
-    u_roughness = si |> g.u_roughness
-    v_roughness = si |> g.v_roughness
+) where T<:TransportMode
+    η = g.index(si)
+    u_roughness = g.u_roughness(si)
+    v_roughness = g.v_roughness(si)
 
     si.bsdf = BSDF(si, η)
-    r = si |> g.Kr |> clamp
-    t = si |> g.Kt |> clamp
+    r = clamp(g.Kr(si))
+    t = clamp(g.Kt(si))
     is_black(r) && is_black(t) && return
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
@@ -134,18 +134,18 @@ end
 
 function (p::PlasticMaterial)(
     si::SurfaceInteraction, ::Bool, ::Type{T},
-) where T <: TransportMode
+) where T<:TransportMode
     si.bsdf = BSDF(si)
     # Initialize diffuse componen of plastic material.
-    kd = si |> p.Kd |> clamp
+    kd = clamp(p.Kd(si))
     !is_black(kd) && add!(si.bsdf, LambertianReflection(kd))
     # Initialize specular component.
-    ks = si |> p.Ks |> clamp
+    ks = clamp(p.Ks(si))
     is_black(ks) && return
     # Create microfacet distribution for plastic material.
     fresnel = FresnelDielectric(1.5f0, 1f0)
-    rough = si |> p.roughness
-    p.remap_roughness && (rough = roughness_to_α(rough);)
+    rough = p.roughness(si)
+    p.remap_roughness && (rough = roughness_to_α(rough))
     distribution = TrowbridgeReitzDistribution(rough, rough)
     add!(si.bsdf, MicrofacetReflection(ks, distribution, fresnel, T))
 end

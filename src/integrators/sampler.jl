@@ -1,17 +1,17 @@
 abstract type SamplerIntegrator <: Integrator end
 
 struct WhittedIntegrator <: SamplerIntegrator
-    camera::C where C <: Camera
-    sampler::S where S <: AbstractSampler
+    camera::C where C<:Camera
+    sampler::S where S<:AbstractSampler
     max_depth::Int64
 end
 
 """
 Render scene.
 """
-function (i::I where I <: SamplerIntegrator)(scene::Scene)
-    sample_bounds = i.camera |> get_film |> get_sample_bounds
-    sample_extent = sample_bounds |> diagonal
+function (i::I where I<:SamplerIntegrator)(scene::Scene)
+    sample_bounds = get_sample_bounds(get_film(i.camera))
+    sample_extent = diagonal(sample_bounds)
     tile_size = 16
     n_tiles::Point2 = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
 
@@ -24,16 +24,16 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
-        t_sampler = i.sampler |> deepcopy
+        t_sampler = deepcopy(i.sampler)
 
         tb_min = sample_bounds.p_min .+ tile .* tile_size
         tb_max = min.(tb_min .+ (tile_size - 1), sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
 
-        film_tile = FilmTile(i.camera |> get_film, tile_bounds)
+        film_tile = FilmTile(get_film(i.camera), tile_bounds)
         for pixel in tile_bounds
             start_pixel!(t_sampler, pixel)
-            while t_sampler |> has_next_sample
+            while has_next_sample(t_sampler)
                 camera_sample = get_camera_sample(t_sampler, pixel)
                 ray, ω = generate_ray_differential(i.camera, camera_sample)
                 scale_differentials!(
@@ -41,18 +41,18 @@ function (i::I where I <: SamplerIntegrator)(scene::Scene)
                 )
 
                 l = RGBSpectrum(0f0)
-                ω > 0f0 && (l = li(i, ray, scene, 1);)
+                ω > 0f0 && (l = li(i, ray, scene, 1))
                 # TODO check l for invalid values
-                isnan(l) && (l = RGBSpectrum(0f0);)
+                isnan(l) && (l = RGBSpectrum(0f0))
 
                 add_sample!(film_tile, camera_sample.film, l, ω)
-                t_sampler |> start_next_sample!
+                start_next_sample!(t_sampler)
             end
         end
-        merge_film_tile!(i.camera |> get_film, film_tile)
-        bar |> next!
+        merge_film_tile!(get_film(i.camera), film_tile)
+        next!(bar)
     end
-    i.camera |> get_film |> save
+    save(get_film(i.camera))
 end
 
 function li(
@@ -84,7 +84,7 @@ function li(
     # Add contribution of each light source.
     for light in scene.lights
         sampled_li, wi, pdf, visibility_tester = sample_li(
-            light, surface_interaction.core, i.sampler |> get_2d,
+            light, surface_interaction.core, get_2d(i.sampler),
         )
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = surface_interaction.bsdf(wo, wi)
@@ -103,12 +103,12 @@ end
 function specular_reflect(
     i::I, ray::RayDifferentials,
     surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
-) where I <: SamplerIntegrator
+) where I<:SamplerIntegrator
     # Compute specular reflection direction `wi` and BSDF value.
     wo = surface_intersect.core.wo
     type = BSDF_REFLECTION | BSDF_SPECULAR
     wi, f, pdf, sampled_type = sample_f(
-        surface_intersect.bsdf, wo, i.sampler |> get_2d, type,
+        surface_intersect.bsdf, wo, get_2d(i.sampler), type,
     )
     # Return contribution of specular reflection.
     ns = surface_intersect.shading.n
@@ -116,7 +116,7 @@ function specular_reflect(
         return RGBSpectrum(0f0)
     end
     # Compute ray differential for specular reflection.
-    rd = spawn_ray(surface_intersect, wi) |> RayDifferentials
+    rd = RayDifferentials(spawn_ray(surface_intersect, wi))
     if ray.has_differentials
         rd.has_differentials = true
         rd.rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
@@ -124,11 +124,13 @@ function specular_reflect(
         # Compute differential reflected directions.
         ∂n∂x = (
             surface_intersect.shading.∂n∂u * surface_intersect.∂u∂x
-            + surface_intersect.shading.∂n∂v * surface_intersect.∂v∂x
+            +
+            surface_intersect.shading.∂n∂v * surface_intersect.∂v∂x
         )
         ∂n∂y = (
             surface_intersect.shading.∂n∂u * surface_intersect.∂u∂y
-            + surface_intersect.shading.∂n∂v * surface_intersect.∂v∂y
+            +
+            surface_intersect.shading.∂n∂v * surface_intersect.∂v∂y
         )
         ∂wo∂x = -ray.rx_direction - wo
         ∂wo∂y = -ray.ry_direction - wo
@@ -143,12 +145,12 @@ end
 function specular_transmit(
     i::S, ray::RayDifferentials,
     surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
-) where S <: SamplerIntegrator
+) where S<:SamplerIntegrator
     # Compute specular reflection direction `wi` and BSDF value.
     wo = surface_intersect.core.wo
     type = BSDF_TRANSMISSION | BSDF_SPECULAR
     wi, f, pdf, sampled_type = sample_f(
-        surface_intersect.bsdf, wo, i.sampler |> get_2d, type,
+        surface_intersect.bsdf, wo, get_2d(i.sampler), type,
     )
 
     ns = surface_intersect.shading.n
@@ -156,7 +158,7 @@ function specular_transmit(
         return RGBSpectrum(0f0)
     end
     # TODO shift in ray direction instead of normal?
-    rd = spawn_ray(surface_intersect, wi ) |> RayDifferentials
+    rd = RayDifferentials(spawn_ray(surface_intersect, wi))
     if ray.has_differentials
         rd.has_differentials = true
         rd.rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
@@ -164,11 +166,13 @@ function specular_transmit(
         # Compute differential transmitted directions.
         ∂n∂x = (
             surface_intersect.shading.∂n∂u * surface_intersect.∂u∂x
-            + surface_intersect.shading.∂n∂v * surface_intersect.∂v∂x
+            +
+            surface_intersect.shading.∂n∂v * surface_intersect.∂v∂x
         )
         ∂n∂y = (
             surface_intersect.shading.∂n∂u * surface_intersect.∂u∂y
-            + surface_intersect.shading.∂n∂v * surface_intersect.∂v∂y
+            +
+            surface_intersect.shading.∂n∂v * surface_intersect.∂v∂y
         )
         # The BSDF stores the IOR of the interior of the object being
         # intersected. Compute the relative IOR by first out by assuming
@@ -185,7 +189,7 @@ function specular_transmit(
         ∂dn∂x = ∂wo∂x ⋅ ns + wo ⋅ ∂n∂x
         ∂dn∂y = ∂wo∂y ⋅ ns + wo ⋅ ∂n∂y
         μ = η * (wo ⋅ ns) - abs(wi ⋅ ns)
-        ν = η - (η ^ 2 * (wo ⋅ ns)) / abs(wi ⋅ ns)
+        ν = η - (η^2 * (wo ⋅ ns)) / abs(wi ⋅ ns)
         ∂μ∂x = ν * ∂dn∂x
         ∂μ∂y = ν * ∂dn∂y
         rd.rx_direction = wi - η * ∂wo∂x + μ * ∂n∂x + ∂μ∂x * ns

@@ -1,11 +1,11 @@
 struct StratifiedSampler <: AbstractSampler
     pixel_sampler::PixelSampler
-    pixel_samlpes::Tuple{UInt32, UInt32}
+    pixel_samlpes::Tuple{UInt32,UInt32}
     jitter_samples::Bool
 end
 
 function StratifiedSampler(
-    pixel_samples::Tuple{Integer, Integer}, jitter_samples::Bool,
+    pixel_samples::Tuple{Integer,Integer}, jitter_samples::Bool,
     n_sampled_dimensions::Int64,
 )
     StratifiedSampler(

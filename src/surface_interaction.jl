@@ -26,7 +26,7 @@ mutable struct ShadingInteraction
     ∂n∂v::Normal3f
 end
 
-mutable struct SurfaceInteraction{S <: AbstractShape}
+mutable struct SurfaceInteraction{S<:AbstractShape}
     core::Interaction
     shading::ShadingInteraction
     uv::Point2f
@@ -37,8 +37,8 @@ mutable struct SurfaceInteraction{S <: AbstractShape}
     ∂n∂v::Normal3f
 
     shape::Maybe{S}
-    primitive::Maybe{P} where P <: Primitive
-    bsdf # TODO ::Maybe{BSDF}
+    primitive::Maybe{P} where P<:Primitive
+    bsdf::Any # TODO ::Maybe{BSDF}
 
     ∂u∂x::Float32
     ∂u∂y::Float32
@@ -52,8 +52,8 @@ function SurfaceInteraction(
     p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
     ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f,
     shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
-) where S <: AbstractShape where P <: Primitive
-    n = (∂p∂u × ∂p∂v) |> normalize
+) where S<:AbstractShape where P<:Primitive
+    n = normalize((∂p∂u × ∂p∂v))
     if !(shape isa Nothing) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
         n *= -1
     end
@@ -112,7 +112,7 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
     si.∂p∂y = py - si.core.p
     # Compute (u, v) offsets at auxiliary points.
     # Choose two dimensions for ray offset computation.
-    n = si.core.n .|> abs
+    n = abs.(si.core.n)
     if n[1] > n[2] && n[1] > n[3]
         dim = Point2(2, 3)
     elseif n[2] > n[3]
@@ -141,7 +141,7 @@ at the point.
 function compute_scattering!(
     si::SurfaceInteraction, ray::RayDifferentials,
     allow_multiple_lobes::Bool = false, ::Type{T} = Radiance,
-) where T <: TransportMode
+) where T<:TransportMode
     compute_differentials!(si, ray)
     compute_scattering!(si.primitive, si, allow_multiple_lobes, T)
 end
@@ -153,29 +153,29 @@ end
 
 function (t::Transformation)(sc::Interaction)
     Interaction(
-        sc.p |> t,
+        t(sc.p),
         sc.time,
-        sc.wo |> t |> normalize,
-        sc.n |> t |> normalize,
+        normalize(t(sc.wo)),
+        normalize(t(sc.n)),
     )
 end
 function (t::Transformation)(sh::ShadingInteraction)
     ShadingInteraction(
-        sh.n |> t |> normalize,
-        sh.∂p∂u |> t, sh.∂p∂v |> t,
-        sh.∂n∂u |> t, sh.∂n∂v |> t,
+        normalize(t(sh.n)),
+        t(sh.∂p∂u), t(sh.∂p∂v),
+        t(sh.∂n∂u), t(sh.∂n∂v),
     )
 end
 function (t::Transformation)(si::SurfaceInteraction)
     # TODO compute shading normal separately
-    core = si.core |> t
-    shading = si.shading |> t
+    core = t(si.core)
+    shading = t(si.shading)
     SurfaceInteraction(
         core, shading, si.uv,
-        si.∂p∂u |> t, si.∂p∂v |> t,
-        si.∂n∂u |> t, si.∂n∂v |> t,
+        t(si.∂p∂u), t(si.∂p∂v),
+        t(si.∂n∂u), t(si.∂n∂v),
         si.shape, si.primitive, si.bsdf,
         si.∂u∂x, si.∂u∂y, si.∂v∂x, si.∂v∂y,
-        si.∂p∂x |> t, si.∂p∂y |> t,
+        t(si.∂p∂x), t(si.∂p∂y),
     )
 end

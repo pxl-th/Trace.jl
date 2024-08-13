@@ -27,8 +27,8 @@ end
 
 function get_camera_sample(sampler::AbstractSampler, p_raster::Point2f)
     p_film = p_raster .+ get_2d(sampler)
-    time = sampler |> get_1d
-    p_lens = sampler |> get_2d
+    time = get_1d(sampler)
+    p_lens = get_2d(sampler)
     CameraSample(p_film, p_lens, time)
 end
 
@@ -68,14 +68,14 @@ end
 
 function get_1d_array(sampler::Sampler, n::Integer)
     sampler.array_1d_offset == length(sampler.sample_array_1d) + 1 && return nothing
-    arr = @view sampler.sample_array_1d[sampler.array_1d_offset][sampler.current_pixel_sample_id * n:end]
+    arr = @view sampler.sample_array_1d[sampler.array_1d_offset][sampler.current_pixel_sample_id*n:end]
     sampler.array_1d_offset += 1
     arr
 end
 
 function get_2d_array(sampler::Sampler, n::Integer)
     sampler.array_2d_offset == length(sampler.sample_array_2d) + 1 && return nothing
-    arr = @view sampler.sample_array_2d[sampler.array_2d_offset][sampler.current_pixel_sample_id * n:end]
+    arr = @view sampler.sample_array_2d[sampler.array_2d_offset][sampler.current_pixel_sample_id*n:end]
     sampler.array_2d_offset += 1
     arr
 end
@@ -103,7 +103,7 @@ start_pixel(p::PixelSampler, point::Point2f) = start_pixel(p.sampler, point)
 
 function start_next_sample(ps::PixelSampler)
     ps.current_1d_dimension = ps.current_2d_dimension = 1
-    ps.sampler |> start_next_sample
+    start_next_sample(ps.sampler)
 end
 
 function set_sample_number(ps::PixelSampler, sample_num::Integer)::Bool

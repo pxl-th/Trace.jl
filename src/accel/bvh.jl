@@ -15,7 +15,7 @@ end
 
 struct BVHNode
     bounds::Bounds3
-    children::Tuple{Maybe{BVHNode}, Maybe{BVHNode}}
+    children::Tuple{Maybe{BVHNode},Maybe{BVHNode}}
     split_axis::UInt8
     offset::UInt32
     n_primitives::UInt32
@@ -45,28 +45,28 @@ struct LinearBVHInterior <: LinearNode
     second_child_offset::UInt32
     split_axis::UInt8
 end
-const LinearBVH = Union{LinearBVHLeaf, LinearBVHInterior}
+const LinearBVH = Union{LinearBVHLeaf,LinearBVHInterior}
 
 struct BVHAccel <: AccelPrimitive
-    primitives::Vector{P} where P <: Primitive
+    primitives::Vector{P} where P<:Primitive
     max_node_primitives::UInt8
     nodes::Vector{LinearBVH}
 
     function BVHAccel(
         primitives::Vector{P}, max_node_primitives::Integer = 1,
-    ) where P <: Primitive
+    ) where P<:Primitive
         max_node_primitives = min(255, max_node_primitives)
         length(primitives) == 0 && return new(primitives, max_node_primitives)
 
         primitives_info = [
-            BVHPrimitiveInfo(i, p |> world_bound)
+            BVHPrimitiveInfo(i, world_bound(p))
             for (i, p) in enumerate(primitives)
         ]
 
-        total_nodes = 0 |> Ref
+        total_nodes = Ref(0)
         ordered_primitives = Vector{P}(undef, 0)
         root = _init(
-            primitives, primitives_info, 1, primitives |> length,
+            primitives, primitives_info, 1, length(primitives),
             total_nodes, ordered_primitives, max_node_primitives,
         )
 
@@ -88,12 +88,12 @@ function _init(
     primitives::Vector{P}, primitives_info::Vector{BVHPrimitiveInfo},
     from::Integer, to::Integer, total_nodes::Ref{Int64},
     ordered_primitives::Vector{P}, max_node_primitives::Integer,
-) where P <: Primitive
+) where P<:Primitive
     total_nodes[] += 1
     n_primitives = to - from + 1
     # Compute bounds for all primitives in BVH node.
     bounds = mapreduce(
-        i -> primitives_info[i].bounds, ∪, from:to, init=Bounds3(),
+        i -> primitives_info[i].bounds, ∪, from:to, init = Bounds3(),
     )
     @inline function _create_leaf()::BVHNode
         first_offset = length(ordered_primitives) + 1
@@ -109,20 +109,21 @@ function _init(
     n_primitives == 1 && return _create_leaf()
     # Compute bound of primitive centroids, choose split dimension.
     centroid_bounds = mapreduce(
-        i -> primitives_info[i].centroid |> Bounds3, ∪, from:to,
-        init=Bounds3(),
+        i -> Bounds3(primitives_info[i].centroid), ∪, from:to,
+        init = Bounds3(),
     )
-    dim = centroid_bounds |> maximum_extent
+    dim = maximum_extent(centroid_bounds)
     ( # Create leaf node.
         !is_valid(centroid_bounds)
-        || centroid_bounds.p_min[dim] == centroid_bounds.p_max[dim]
+        ||
+        centroid_bounds.p_min[dim] == centroid_bounds.p_max[dim]
     ) && return _create_leaf()
     # Partition primitives into sets and build children.
     if n_primitives <= 2 # Equally-sized subsets.
         mid = (from + to) ÷ 2
         pmid = mid > from ? mid - from + 1 : 1
         partialsort!(
-            @view(primitives_info[from:to]), pmid, by=i -> i.centroid[dim],
+            @view(primitives_info[from:to]), pmid, by = i -> i.centroid[dim],
         )
     else # Perform Surface-Area-Heuristic partitioning.
         n_buckets = 12
@@ -130,7 +131,7 @@ function _init(
         # Initialize buckets.
         for i in from:to
             b = Int32(floor(n_buckets * offset(
-                centroid_bounds, primitives_info[i].centroid
+                centroid_bounds, primitives_info[i].centroid,
             )[dim])) + 1
             (b == n_buckets + 1) && (b -= 1)
             buckets[b].count += 1
@@ -138,8 +139,8 @@ function _init(
         end
         # Compute costs for splitting after each bucket.
         costs = Vector{Float32}(undef, n_buckets - 1)
-        for i in 1:(n_buckets - 1)
-            it1, it2 = 1:i, (i + 1):(n_buckets - 1)
+        for i in 1:(n_buckets-1)
+            it1, it2 = 1:i, (i+1):(n_buckets-1)
             s1, s2 = 0, 0
             if length(it1) > 0
                 s1 = length(it1) * surface_area(
@@ -154,16 +155,17 @@ function _init(
             costs[i] = 1f0 + (s1 + s2) / surface_area(bounds)
         end
         # Find bucket to split that minimizes SAH metric.
-        min_cost_id = costs |> argmin
+        min_cost_id = argmin(costs)
         leaf_cost = n_primitives
         # Either create leaf or split primitives at selected SAH bucket.
         !(
             n_primitives > max_node_primitives
-            || costs[min_cost_id] < leaf_cost
+            ||
+            costs[min_cost_id] < leaf_cost
         ) && return _create_leaf()
         mid = partition!(primitives_info, from:to, i -> begin
             b = Int32(floor(
-                n_buckets * offset(centroid_bounds, i.centroid)[dim]
+                n_buckets * offset(centroid_bounds, i.centroid)[dim],
             )) + 1
             (b == n_buckets + 1) && (b -= 1)
             b <= min_cost_id
@@ -212,9 +214,9 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
     interaction::Maybe{SurfaceInteraction} = nothing
     length(bvh.nodes) == 0 && return hit, interaction
 
-    ray |> check_direction!
+    check_direction!(ray)
     inv_dir = 1f0 ./ ray.d
-    dir_is_neg = ray.d |> is_dir_negative
+    dir_is_neg = is_dir_negative(ray.d)
 
     to_visit_offset, current_node_i = 1, 1
     nodes_to_visit = zeros(Int32, 64)
@@ -224,9 +226,9 @@ function intersect!(bvh::BVHAccel, ray::AbstractRay)
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
-                for i in 0:ln.n_primitives - 1
+                for i in 0:ln.n_primitives-1
                     tmp_hit, tmp_interaction = intersect!(
-                        bvh.primitives[ln.primitives_offset + i], ray,
+                        bvh.primitives[ln.primitives_offset+i], ray,
                     )
                     if tmp_hit
                         hit = tmp_hit
@@ -258,9 +260,9 @@ end
 function intersect_p(bvh::BVHAccel, ray::AbstractRay)
     length(bvh.nodes) == 0 && return false
 
-    ray |> check_direction!
+    check_direction!(ray)
     inv_dir = 1f0 ./ ray.d
-    dir_is_neg = ray.d |> is_dir_negative
+    dir_is_neg = is_dir_negative(ray.d)
 
     to_visit_offset, current_node_i = 1, 1
     nodes_to_visit = zeros(Int32, 64)
@@ -269,9 +271,9 @@ function intersect_p(bvh::BVHAccel, ray::AbstractRay)
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
-                for i in 0:ln.n_primitives - 1
+                for i in 0:ln.n_primitives-1
                     intersect_p(
-                        bvh.primitives[ln.primitives_offset + i], ray,
+                        bvh.primitives[ln.primitives_offset+i], ray,
                     ) && return true
                 end
                 to_visit_offset == 1 && break

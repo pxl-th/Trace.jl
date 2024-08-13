@@ -16,13 +16,13 @@ Bounds3(p::Point3f) = Bounds3(p, p)
 Bounds2c(p1::Point2f, p2::Point2f) = Bounds2(min.(p1, p2), max.(p1, p2))
 Bounds3c(p1::Point3f, p2::Point3f) = Bounds3(min.(p1, p2), max.(p1, p2))
 
-function Base.:(==)(b1::Union{Bounds2, Bounds3}, b2::Union{Bounds2, Bounds3})
+function Base.:(==)(b1::Union{Bounds2,Bounds3}, b2::Union{Bounds2,Bounds3})
     b1.p_min == b2.p_min && b1.p_max == b2.p_max
 end
-function Base.:≈(b1::Union{Bounds2, Bounds3}, b2::Union{Bounds2, Bounds3})
+function Base.:≈(b1::Union{Bounds2,Bounds3}, b2::Union{Bounds2,Bounds3})
     b1.p_min ≈ b2.p_min && b1.p_max ≈ b2.p_max
 end
-function Base.getindex(b::Union{Bounds2, Bounds3}, i::Integer)
+function Base.getindex(b::Union{Bounds2,Bounds3}, i::Integer)
     i == 1 && return b.p_min
     i == 2 && return b.p_max
     error("Invalid index `$i`. Only `1` & `2` are valid.")
@@ -38,7 +38,7 @@ end
 
 function Base.iterate(
     b::Bounds2, i::Integer = 1,
-)::Union{Nothing, Tuple{Point2f, Integer}}
+)::Union{Nothing,Tuple{Point2f,Integer}}
     i > length(b) && return nothing
 
     j = i - 1
@@ -50,17 +50,17 @@ end
 function corner(b::Bounds3, c::Integer)
     c -= 1
     Point3f(
-        b[(c & 1) + 1][1],
+        b[(c&1)+1][1],
         b[(c & 2) != 0 ? 2 : 1][2],
         b[(c & 4) != 0 ? 2 : 1][3],
     )
 end
 
-function Base.union(b1::B, b2::B) where B <: Union{Bounds2, Bounds3}
+function Base.union(b1::B, b2::B) where B<:Union{Bounds2,Bounds3}
     B(min.(b1.p_min, b2.p_min), max.(b1.p_max, b2.p_max))
 end
 
-function Base.intersect(b1::B, b2::B) where B <: Union{Bounds2, Bounds3}
+function Base.intersect(b1::B, b2::B) where B<:Union{Bounds2,Bounds3}
     B(max.(b1.p_min, b2.p_min), min.(b1.p_max, b2.p_max))
 end
 
@@ -77,10 +77,10 @@ function inside_exclusive(b::Bounds3, p::Point3f)
 end
 
 expand(b::Bounds3, δ::Float32) = Bounds3(b.p_min .- δ, b.p_max .+ δ)
-diagonal(b::Union{Bounds2, Bounds3}) = b.p_max - b.p_min
+diagonal(b::Union{Bounds2,Bounds3}) = b.p_max - b.p_min
 
 function surface_area(b::Bounds3)
-    d = b |> diagonal
+    d = diagonal(b)
     2 * (d[1] * d[2] + d[1] * d[3] + d[2] * d[3])
 end
 
@@ -89,16 +89,16 @@ function area(b::Bounds2)
     δ[1] * δ[2]
 end
 
-@inline function sides(b::Union{Bounds2, Bounds3})
+@inline function sides(b::Union{Bounds2,Bounds3})
     [abs(b1 - b0) for (b1, b0) in zip(b.p_max, b.p_min)]
 end
 
-@inline function inclusive_sides(b::Union{Bounds2, Bounds3})
+@inline function inclusive_sides(b::Union{Bounds2,Bounds3})
     [abs(b1 - (b0 - 1f0)) for (b1, b0) in zip(b.p_max, b.p_min)]
 end
 
 function volume(b::Bounds3)
-    d = b |> diagonal
+    d = diagonal(b)
     d[1] * d[2] * d[3]
 end
 
@@ -110,7 +110,7 @@ when building ray-tracing acceleration structures.
 1 - x, 2 - y, 3 - z.
 """
 function maximum_extent(b::Bounds3)
-    d = b |> diagonal
+    d = diagonal(b)
     if d[1] > d[2] && d[1] > d[3]
         return 1
     elseif d[2] > d[3]
@@ -142,13 +142,13 @@ function offset(b::Bounds3, p::Point3f)
     )
 end
 
-function bounding_sphere(b::Bounds3)::Tuple{Point3f, Float32}
+function bounding_sphere(b::Bounds3)::Tuple{Point3f,Float32}
     center = (b.p_min + b.p_max) / 2f0
     radius = inside(b, center) ? distance(center, b.p_max) : 0f0
     center, radius
 end
 
-function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool, Float32, Float32}
+function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool,Float32,Float32}
     t0, t1 = 0f0, ray.t_max
     @inbounds for i in 1:3
         # Update interval for i-th bbox slab.
@@ -182,19 +182,19 @@ function intersect_p(
     inv_dir::Vec3f, dir_is_negative::Point3{UInt8},
 )::Bool
     tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
-    tx_max = (b[3 - dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
+    tx_max = (b[3-dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
     ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
-    ty_max = (b[3 - dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
+    ty_max = (b[3-dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
 
     (tx_min > ty_max || ty_min > tx_max) && return false
-    ty_min > tx_min && (tx_min = ty_min;)
-    ty_max > tx_max && (tx_max = ty_max;)
+    ty_min > tx_min && (tx_min = ty_min)
+    ty_max > tx_max && (tx_max = ty_max)
 
     tz_min = (b[dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
-    tz_max = (b[3 - dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
+    tz_max = (b[3-dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
     (tx_min > tz_max || tz_min > tx_max) && return false
 
-    (tz_min > tx_min) && (tx_min = tz_min;)
-    (tz_max < tx_max) && (tx_max = tz_max;)
+    (tz_min > tx_min) && (tx_min = tz_min)
+    (tz_max < tx_max) && (tx_max = tz_max)
     tx_min < ray.t_max && tx_max > 0
 end

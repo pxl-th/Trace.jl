@@ -24,7 +24,7 @@ function _node_to_triangle_mesh!(
         mesh = mmesh.mesh
         m_vertices = mesh.position
         m_normals = convert(Vector{Trace.Normal3f}, mesh.normals)
-        m_faces = mesh |> faces
+        m_faces = faces(mesh)
         @assert length(eltype(m_faces)) == 3 "Only triangles supported."
         @assert length(m_vertices) == length(m_normals) "Number of normals is different from the number of vertices"
 
@@ -42,7 +42,7 @@ function _node_to_triangle_mesh!(
         )
         append!(triangles, [
             Trace.Triangle(core, triangle_mesh, i)
-            for i in UnitRange{UInt32}(0:length(m_faces) - 1)
+            for i in UnitRange{UInt32}(0:length(m_faces)-1)
         ])
         push!(triangle_meshes, triangle_mesh)
     end

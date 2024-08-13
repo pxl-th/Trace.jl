@@ -1,8 +1,8 @@
 @enum LightFlags::UInt8 begin
-    LightδPosition  = 0b1
+    LightδPosition = 0b1
     LightδDirection = 0b10
-    LightArea       = 0b100
-    LightInfinite   = 0b1000
+    LightArea = 0b100
+    LightInfinite = 0b1000
 end
 
 @inline function is_δ_light(flag::LightFlags)::Bool
@@ -38,4 +38,4 @@ end
 Emmited light if ray hit an area light source.
 By default light sources have no area.
 """
-@inline le(::Light, ::Union{Ray, RayDifferentials}) = RGBSpectrum(0f0)
+@inline le(::Light, ::Union{Ray,RayDifferentials}) = RGBSpectrum(0f0)
