@@ -130,7 +130,7 @@ function perspective(fov::Float32, near::Float32, far::Float32)
 end
 
 function (t::Transformation)(p::Point3f)::Point3f
-    ph = Point4f0(p..., 1f0)
+    ph = Point4f(p..., 1f0)
     pt = t.m * ph
     pr = Point3f(pt[1:3])
     pt[4] == 1 && return pr

@@ -2,5 +2,4 @@
 
 ```@example
 using Trace
-
 ```

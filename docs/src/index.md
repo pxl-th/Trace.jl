@@ -5,7 +5,7 @@ layout: home
 
 hero:
   name: "Trace.jl"
-  tagline: Physically-based ray tracing on CPU / ?
+  tagline: Physically-based ray tracing on CPU
   image:
     src: /logo.png
     alt: Trace

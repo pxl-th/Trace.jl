@@ -11,8 +11,8 @@ makedocs(; sitename="Trace", authors="Anton Smirnov and contributors",
         devurl = "dev";
     ),
     draft=false,
-    source="src", 
-    build= "build", 
+    source="src",
+    build= "build",
     warnonly = true,
     pages=[
         "Home" => "index.md",
@@ -22,7 +22,7 @@ makedocs(; sitename="Trace", authors="Anton Smirnov and contributors",
     ],
     )
 
-deploydocs(; 
+deploydocs(;
     repo="github.com/pxl-th/Trace.jl",
     target="build", # this is where Vitepress stores its output
     branch = "gh-pages",
