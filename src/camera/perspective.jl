@@ -28,7 +28,7 @@ struct ProjectiveCamera <: Camera
                 -screen_window.p_min[1], -screen_window.p_max[2], 0f0,
             ))
         )
-        raster_to_screen = screen_to_raster |> inv
+        raster_to_screen = inv(screen_to_raster)
         raster_to_camera = inv(camera_to_screen) * raster_to_screen
 
         new(
@@ -84,19 +84,19 @@ end
 
 function generate_ray(
     camera::PerspectiveCamera, sample::CameraSample,
-)::Tuple{Ray, Float32}
+)::Tuple{Ray,Float32}
     # Compute raster & camera sample positions.
     p_film = Point3f(sample.film[1], sample.film[2], 0f0)
-    p_camera = p_film |> camera.core.raster_to_camera
+    p_camera = camera.core.raster_to_camera(p_film)
 
-    ray = Ray(o=Point3f(0), d=p_camera |> Vec3f |> normalize)
+    ray = Ray(o = Point3f(0), d = normalize(Vec3f(p_camera)))
     # Modify ray for depth of field.
     if camera.core.lens_radius > 0
         # Sample points on lens.
         p_lens = camera.core.lens_radius * concentric_sample_disk(sample.lens)
         # Compute point on plane of focus.
         t = camera.core.focal_distance / ray.d[3]
-        p_focus = t |> ray
+        p_focus = ray(t)
         # Update ray for effects of lens.
         ray.o = Point3f(p_lens[1], p_lens[2], 0f0)
         ray.d = normalize(Vec3f(p_focus - ray.o))
@@ -108,7 +108,7 @@ function generate_ray(
         sample.time,
     )
     # TODO add medium
-    ray = ray |> camera.core.core.camera_to_world
-    ray.d = ray.d |> normalize
+    ray = camera.core.core.camera_to_world(ray)
+    ray.d = normalize(ray.d)
     ray, 1f0
 end

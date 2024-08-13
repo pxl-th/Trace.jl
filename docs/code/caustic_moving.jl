@@ -53,7 +53,7 @@ function render()
     screen = Trace.Bounds2(Point2f(-1f0), Point2f(1f0))
     filter = Trace.LanczosSincFilter(Point2f(1f0), 3f0)
 
-    ir = resolution .|> Int64
+    ir = Int64.(resolution)
 
     for (i, shift) in enumerate(0:0.1:5)
         @info "Shift $shift"
@@ -61,15 +61,15 @@ function render()
         to = Point3f(-5, 0, 5)
 
         cone_angle, cone_δ_angle = 30f0, 10f0
-        dir = Vec3f(to - from) |> normalize
+        dir = normalize(Vec3f(to - from))
         dir, du, dv = Trace.coordinate_system(dir)
 
-        dir_to_z = Trace.Transformation(Mat4f(
+        dir_to_z = Trace.Transformation(transpose(Mat4f(
             du[1], du[2], du[3], 0f0,
             dv[1], dv[2], dv[3], 0f0,
             dir[1], dir[2], dir[3], 0f0,
             0f0, 0f0, 0f0, 1f0,
-        ) |> transpose)
+        )))
         light_to_world = (
             Trace.translate(Vec3f(4.5, 0, -101))
             * Trace.translate(Vec3f(from))
@@ -98,7 +98,7 @@ function render()
             screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
         )
         integrator = Trace.SPPMIntegrator(camera, 0.055f0, ray_depth, 25, 1_250_000)
-        scene |> integrator
+        integrator(scene)
     end
 end
 

@@ -8,14 +8,14 @@ struct ShapeCore
         object_to_world::Transformation, reverse_orientation::Bool,
     )
         new(
-            object_to_world, object_to_world |> inv, reverse_orientation,
-            object_to_world |> swaps_handedness,
+            object_to_world, inv(object_to_world), reverse_orientation,
+            swaps_handedness(object_to_world),
         )
     end
 end
 
 function world_bound(s::AbstractShape)::Bounds3
-    s |> object_bound |> s.core.object_to_world
+    s.core.object_to_world(object_bound(s))
 end
 
 include("sphere.jl")

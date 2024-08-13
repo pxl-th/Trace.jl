@@ -16,7 +16,7 @@ function blackbody!(Le::Vector{Float32}, λ::Vector{Float32}, T::Float32)
     for i in 1:length(λ)
         # Compute emmited radiance for blackbody at wavelength λi.
         l = λ[i] * 1f-9 # Convert nanometers to meters.
-        Le[i] = (2 * ℎ * c * c) / (l ^ 5 * (exp((ℎ * c) / (l * kb * T)) - 1f0))
+        Le[i] = (2 * ℎ * c * c) / (l^5 * (exp((ℎ * c) / (l * kb * T)) - 1f0))
     end
 end
 """

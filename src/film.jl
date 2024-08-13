@@ -12,7 +12,7 @@ struct Film
     """
     crop_bounds::Bounds2
     diagonal::Float32
-    filter::F where F <: Filter
+    filter::F where F<:Filter
     filename::String
     """
     pixels in (y, x) format
@@ -34,7 +34,7 @@ struct Film
     function Film(
         resolution::Point2f, crop_bounds::Bounds2, filter::F,
         diagonal::Float32, scale::Float32, filename::String,
-    ) where F <: Filter
+    ) where F<:Filter
         filter_table_width = 16
         filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
         # Compute film image bounds.
@@ -42,7 +42,7 @@ struct Film
             ceil.(resolution .* crop_bounds.p_min) .+ 1f0,
             ceil.(resolution .* crop_bounds.p_max),
         )
-        crop_resolution = crop_bounds |> inclusive_sides .|> Int32
+        crop_resolution = Int32.(inclusive_sides(crop_bounds))
         # Allocate film image storage.
         pixels = Pixel[
             Pixel(Point3f(0f0), 0f0, Point3f(0f0))
@@ -50,9 +50,9 @@ struct Film
         ]
         # Precompute filter weight table.
         r = filter.radius ./ filter_table_width
-        for y in 0:filter_table_width - 1, x in 0:filter_table_width - 1
+        for y in 0:filter_table_width-1, x in 0:filter_table_width-1
             p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
-            filter_table[y + 1, x + 1] = p |> filter
+            filter_table[y+1, x+1] = filter(p)
         end
         new(
             resolution, crop_bounds, diagonal * 0.001f0, filter, filename,
@@ -78,18 +78,18 @@ This is needed for realistic cameras.
 """
 function get_physical_extension(f::Film)
     aspect = f.resolution[2] / f.resolution[1]
-    x = sqrt(f.diagonal ^ 2 / (1 + aspect ^ 2))
+    x = sqrt(f.diagonal^2 / (1 + aspect^2))
     y = aspect * x
     Bounds2(Point2f(-x / 2f0, -y / 2f0), Point2f(x / 2f0, y / 2f0))
 end
 
-mutable struct FilmTilePixel
-    contrib_sum::S where S <: Spectrum
+mutable struct FilmTilePixel{S<:Spectrum}
+    contrib_sum::S
     filter_weight_sum::Float32
 end
 FilmTilePixel() = FilmTilePixel(RGBSpectrum(), 0f0)
 
-struct FilmTile
+struct FilmTile{S<:Spectrum}
     """
     Bounds should start from 1 not 0.
     """
@@ -98,15 +98,15 @@ struct FilmTile
     inv_filter_radius::Point2f
     filter_table::Matrix{Float32}
     filter_table_width::Int32
-    pixels::Matrix{FilmTilePixel}
+    pixels::Matrix{FilmTilePixel{S}}
 
     function FilmTile(
         bounds::Bounds2, filter_radius::Point2f,
         filter_table::Matrix{Float32}, filter_table_width::Int32,
     )
-        tile_res = (bounds |> inclusive_sides .|> Int32)
+        tile_res = (Int32.(inclusive_sides(bounds)))
         pixels = [FilmTilePixel() for _ in 1:tile_res[2], __ in 1:tile_res[1]]
-        new(
+        new{RGBSpectrum}(
             bounds, filter_radius, 1f0 ./ filter_radius,
             filter_table, filter_table_width,
             pixels,
@@ -134,7 +134,7 @@ Add sample contribution to the film tile.
 function add_sample!(
     t::FilmTile, point::Point2f, spectrum::S,
     sample_weight::Float32 = 1f0,
-) where S <: Spectrum
+) where S<:Spectrum
     # Compute sample's raster bounds.
     discrete_point = point .- 0.5f0
     p0 = ceil.(discrete_point .- t.filter_radius)
@@ -146,18 +146,18 @@ function add_sample!(
     offsets_y = Vector{Int32}(undef, Int32(p1[2] - p0[2] + 1))
     for (i, x) in enumerate(p0[1]:p1[1])
         fx = abs((x - discrete_point[1]) * t.inv_filter_radius[1] * t.filter_table_width)
-        offsets_x[i] = clamp(fx |> ceil, 1, t.filter_table_width)  # TODO is clipping ok?
+        offsets_x[i] = clamp(ceil(fx), 1, t.filter_table_width)  # TODO is clipping ok?
     end
     for (i, y) in enumerate(p0[2]:p1[2])
         fy = abs((y - discrete_point[2]) * t.inv_filter_radius[2] * t.filter_table_width)
-        offsets_y[i] = clamp(fy |> floor, 1, t.filter_table_width)
+        offsets_y[i] = clamp(floor(fy), 1, t.filter_table_width)
     end
     # Loop over filter support & add sample to pixel array.
     for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
         w = t.filter_table[offsets_y[j], offsets_x[i]]
         pixel = get_pixel(t, Point2f(x, y))
-        @assert sample_weight <= 1
-        @assert w <= 1
+        @real_assert sample_weight <= 1
+        @real_assert w <= 1
         pixel.contrib_sum += spectrum * sample_weight * w
         pixel.filter_weight_sum += w
     end
@@ -167,7 +167,7 @@ end
 Point in (x, y) format.
 """
 @inline function get_pixel(t::FilmTile, p::Point2f)
-    pp = (p .- t.bounds.p_min .+ 1f0) .|> Int32
+    pp = Int32.((p .- t.bounds.p_min .+ 1f0))
     t.pixels[pp[2], pp[1]]
 end
 
@@ -175,7 +175,7 @@ end
 Point in (x, y) format.
 """
 @inline function get_pixel(f::Film, p::Point2f)
-    pp = (p .- f.crop_bounds.p_min .+ 1f0) .|> Int32
+    pp = Int32.((p .- f.crop_bounds.p_min .+ 1f0))
     f.pixels[pp[2], pp[1]]
 end
 
@@ -187,15 +187,15 @@ function merge_film_tile!(f::Film, ft::FilmTile)
         pixel = Point2f(x, y)
         tile_pixel = get_pixel(ft, pixel)
         merge_pixel = get_pixel(f, pixel)
-        merge_pixel.xyz += tile_pixel.contrib_sum |> to_XYZ
+        merge_pixel.xyz += to_XYZ(tile_pixel.contrib_sum)
         merge_pixel.filter_weight_sum += tile_pixel.filter_weight_sum
     end
 end
 
-function set_image!(f::Film, spectrum::Matrix{S}) where S <: Spectrum
-    @assert size(f.pixels) == size(spectrum)
+function set_image!(f::Film, spectrum::Matrix{S}) where S<:Spectrum
+    @real_assert size(f.pixels) == size(spectrum)
     for (i, p) in enumerate(f.pixels)
-        p.xyz = spectrum[i] |> to_XYZ
+        p.xyz = to_XYZ(spectrum[i])
         p.filter_weight_sum = 1f0
         p.splat_xyz = Point3f(0f0)
     end

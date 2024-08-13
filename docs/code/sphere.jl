@@ -59,12 +59,12 @@ function render()
     triangle_primitive4 = Trace.GeometricPrimitive(triangles[4], material_white)
 
     bvh = Trace.BVHAccel([
-        primitive3,
-        # triangle_primitive,
-        # triangle_primitive2,
-        #triangle_primitive3,
-        triangle_primitive4,
-    ], 1)
+            primitive3,
+            # triangle_primitive,
+            # triangle_primitive2,
+            #triangle_primitive3,
+            triangle_primitive4,
+        ], 1)
 
     lights = [Trace.PointLight(
         Trace.translate(Vec3f(-1, 1, 0)), Trace.RGBSpectrum(25f0),
@@ -86,7 +86,7 @@ function render()
 
     # integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 8)
     integrator = Trace.SPPMIntegrator(camera, 0.025f0, 5, 10)
-    scene |> integrator
+    integrator(scene)
 end
 
 render()

@@ -4,10 +4,10 @@ struct Transformation
 end
 
 Transformation() = Transformation(Mat4f(I), Mat4f(I))
-Transformation(m::Mat4f) = Transformation(m, m |> inv)
+Transformation(m::Mat4f) = Transformation(m, inv(m))
 is_identity(t::Transformation) = t.m == I && t.inv_m == I
 function Base.transpose(t::Transformation)
-    Transformation(t.m |> transpose, t.inv_m |> transpose)
+    Transformation(transpose(t.m), transpose(t.inv_m))
 end
 Base.inv(t::Transformation) = Transformation(t.inv_m, t.m)
 
@@ -22,98 +22,98 @@ function Base.:*(t1::Transformation, t2::Transformation)
 end
 
 function translate(δ::Vec3f)
-    m = Mat4f(
+    m = transpose(Mat4f(
         1, 0, 0, δ[1],
         0, 1, 0, δ[2],
         0, 0, 1, δ[3],
         0, 0, 0, 1,
-    ) |> transpose
-    m_inv = Mat4f(
+    ))
+    m_inv = transpose(Mat4f(
         1, 0, 0, -δ[1],
         0, 1, 0, -δ[2],
         0, 0, 1, -δ[3],
         0, 0, 0, 1,
-    ) |> transpose
+    ))
     Transformation(m, m_inv)
 end
 
 function scale(x::Number, y::Number, z::Number)
-    m = Mat4f(
+    m = transpose(Mat4f(
         x, 0, 0, 0,
         0, y, 0, 0,
         0, 0, z, 0,
         0, 0, 0, 1,
-    ) |> transpose
-    m_inv = Mat4f(
+    ))
+    m_inv = transpose(Mat4f(
         1 / x, 0, 0, 0,
         0, 1 / y, 0, 0,
         0, 0, 1 / z, 0,
         0, 0, 0, 1,
-    ) |> transpose
+    ))
     Transformation(m, m_inv)
 end
 
 function rotate_x(θ::Float32)
-    sin_θ = θ |> deg2rad |> sin
-    cos_θ = θ |> deg2rad |> cos
-    m = Mat4f(
+    sin_θ = sin(deg2rad(θ))
+    cos_θ = cos(deg2rad(θ))
+    m = transpose(Mat4f(
         1, 0, 0, 0,
         0, cos_θ, -sin_θ, 0,
         0, sin_θ, cos_θ, 0,
         0, 0, 0, 1,
-    ) |> transpose
-    Transformation(m, m |> transpose)
+    ))
+    Transformation(m, transpose(m))
 end
 
 function rotate_y(θ::Float32)
-    sin_θ = θ |> deg2rad |> sin
-    cos_θ = θ |> deg2rad |> cos
-    m = Mat4f(
+    sin_θ = sin(deg2rad(θ))
+    cos_θ = cos(deg2rad(θ))
+    m = transpose(Mat4f(
         cos_θ, 0, sin_θ, 0,
         0, 1, 0, 0,
         -sin_θ, 0, cos_θ, 0,
         0, 0, 0, 1,
-    ) |> transpose
-    Transformation(m, m |> transpose)
+    ))
+    Transformation(m, transpose(m))
 end
 
 function rotate_z(θ::Float32)
-    sin_θ = θ |> deg2rad |> sin
-    cos_θ = θ |> deg2rad |> cos
-    m = Mat4f(
+    sin_θ = sin(deg2rad(θ))
+    cos_θ = cos(deg2rad(θ))
+    m = transpose(Mat4f(
         cos_θ, -sin_θ, 0, 0,
         sin_θ, cos_θ, 0, 0,
         0, 0, 1, 0,
         0, 0, 0, 1,
-    ) |> transpose
-    Transformation(m, m |> transpose)
+    ))
+    Transformation(m, transpose(m))
 end
 
 function rotate(θ::Float32, axis::Vec3f)
-    a = axis |> normalize
-    sin_θ = θ |> deg2rad |> sin
-    cos_θ = θ |> deg2rad |> cos
-    m = Mat4f(
+    a = normalize(axis)
+    sin_θ = sin(deg2rad(θ))
+    cos_θ = cos(deg2rad(θ))
+    m = transpose(Mat4f(
         a[1] * a[1] + (1 - a[1] * a[1]) * cos_θ, a[1] * a[2] * (1 - cos_θ) - a[3] * sin_θ, a[1] * a[3] * (1 - cos_θ) + a[2] * sin_θ, 0,
         a[1] * a[2] * (1 - cos_θ) + a[3] * sin_θ, a[2] * a[2] + (1 - a[2] * a[2]) * cos_θ, a[2] * a[3] * (1 - cos_θ) - a[1] * sin_θ, 0,
         a[1] * a[3] * (1 - cos_θ) - a[2] * sin_θ, a[2] * a[3] * (1 - cos_θ) + a[1] * sin_θ, a[3] * a[3] + (1 - a[3] * a[3]) * cos_θ, 0,
         0, 0, 0, 1,
-    ) |> transpose
-    Transformation(m, m |> transpose)
+    ))
+    Transformation(m, transpose(m))
 end
 
 function look_at(position::Point3f, target::Point3f, up::Vec3f)
-    z_axis = (position - target) |> normalize
-    x_axis = (up × z_axis) |> normalize
+    z_axis = normalize((position - target))
+    x_axis = normalize((up × z_axis))
     y_axis = z_axis × x_axis
 
-    m = Mat4f(
+    m = transpose(Mat4f(
         x_axis[1], y_axis[1], z_axis[1], 0,
         x_axis[2], y_axis[2], z_axis[2], 0,
         x_axis[3], y_axis[3], z_axis[3], 0,
         0, 0, 0, 1,
-    ) |> transpose
-    translate(Vec3f(position)) * Transformation(m, m |> transpose)
+    ))
+    translate(Vec3f(position)) * Transformation(m, transpose(m))
 end
 
 function perspective(fov::Float32, near::Float32, far::Float32)
@@ -132,36 +132,36 @@ end
 function (t::Transformation)(p::Point3f)::Point3f
     ph = Point4f(p..., 1f0)
     pt = t.m * ph
-    pr = Point3f(pt[1:3])
+    pr = Point3f(pt[Vec(1, 2, 3)])
     pt[4] == 1 && return pr
     pr ./ pt[4]
 end
-(t::Transformation)(v::Vec3f)::Vec3f = t.m[1:3, 1:3] * v
-(t::Transformation)(n::Normal3f)::Normal3f = transpose(t.inv_m[1:3, 1:3]) * n
+(t::Transformation)(v::Vec3f)::Vec3f = t.m[Vec(1, 2, 3), Vec(1, 2, 3)] * v
+(t::Transformation)(n::Normal3f)::Normal3f = transpose(t.inv_m[Vec(1, 2, 3), Vec(1, 2, 3)]) * n
 function (t::Transformation)(b::Bounds3)
-    mapreduce(i -> corner(b, i) |> t |> Bounds3, ∪, 1:8)
+    mapreduce(i -> Bounds3(t(corner(b, i))), ∪, 1:8)
 end
-(t::Transformation)(r::Ray) = Ray(r.o |> t, r.d |> t, r.t_max, r.time)
+(t::Transformation)(r::Ray) = Ray(t(r.o), t(r.d), r.t_max, r.time)
 function (t::Transformation)(rd::RayDifferentials)
     RayDifferentials(
-        rd.o |> t, rd.d |> t, rd.t_max, rd.time,
+        t(rd.o), t(rd.d), rd.t_max, rd.time,
         rd.has_differentials,
-        rd.rx_origin |> t,
-        rd.ry_origin |> t,
-        rd.rx_direction |> t,
-        rd.ry_direction |> t,
+        t(rd.rx_origin),
+        t(rd.ry_origin),
+        t(rd.rx_direction),
+        t(rd.ry_direction),
     )
 end
 
 function has_scale(t::Transformation)
-    a = Vec3f(1, 0, 0) |> t |> norm
-    b = Vec3f(0, 1, 0) |> t |> norm
-    c = Vec3f(0, 0, 1) |> t |> norm
+    a = norm(t(Vec3f(1, 0, 0)))
+    b = norm(t(Vec3f(0, 1, 0)))
+    c = norm(t(Vec3f(0, 0, 1)))
     a ≉ 1 || b ≉ 1 || c ≉ 1
 end
 
 function swaps_handedness(t::Transformation)
-    det(t.m[1:3, 1:3]) < 0
+    det(t.m[Vec(1, 2, 3), Vec(1, 2, 3)]) < 0
 end
 
 struct Quaternion
@@ -171,7 +171,7 @@ end
 
 Quaternion() = Quaternion(Vec3f(0f0), 1f0)
 function Quaternion(t::Transformation)
-    trace = t.m[1:3, 1:3] |> tr
+    trace = tr(t.m[Vec(1, 2, 3), Vec(1, 2, 3)])
     if trace > 0f0
         # Compute w from matrix trace, then xyz.
         # 4w^2 = m[0, 0] + m[1, 1] + m[2, 2] + m[3, 3] => (m[3, 3] == 1)
@@ -230,14 +230,14 @@ function Transformation(q::Quaternion)
         2 * (xz + wy), 2 * (yz - wx), 1 - 2 * (xx + yy), 0,
         0, 0, 0, 1,
     )
-    Transformation(m, m |> transpose)
+    Transformation(m, transpose(m))
 end
 
 function slerp(q1::Quaternion, q2::Quaternion, t::Float32)
     cos_θ = q1 ⋅ q2
     cos_θ > 0.9995f0 && return normalize((1 - t) * q1 + t * q2)
 
-    θ = cos_θ |> acos
+    θ = acos(cos_θ)
     θ_p = θ * t
     q_perp = normalize(q2 - q1 * cos_θ)
     q1 * cos(θ_p) + q_perp * sin(θ_p)

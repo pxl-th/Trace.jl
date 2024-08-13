@@ -36,7 +36,7 @@ mutable struct BSDF
     """
     Individual BxDF components. Maximum allowed number of components is 8.
     """
-    bxdfs::Vector{B} where B <: BxDF
+    bxdfs::Vector{B} where B<:BxDF
 
     function BSDF(si::SurfaceInteraction, η::Float32 = 1f0)
         ng = si.core.n
@@ -45,13 +45,13 @@ mutable struct BSDF
         ts = ns × ss
         new(
             η, ng, ns, ss, ts, UInt8(0),
-            Vector{B where B <: BxDF}(undef, MAX_BxDF),
+            Vector{B where B<:BxDF}(undef, MAX_BxDF),
         )
     end
 end
 
-function add!(b::BSDF, x::B) where B <: BxDF
-    @assert b.n_bxdfs < MAX_BxDF
+function add!(b::BSDF, x::B) where B<:BxDF
+    @real_assert b.n_bxdfs < MAX_BxDF
     b.n_bxdfs += 1
     b.bxdfs[b.n_bxdfs] = x
 end
@@ -106,7 +106,7 @@ to perfect specular reflection or refraction.
 """
 function sample_f(
     b::BSDF, wo_world::Vec3f, u::Point2f, type::UInt8,
-)::Tuple{Vec3f, RGBSpectrum, Float32, UInt8}
+)::Tuple{Vec3f,RGBSpectrum,Float32,UInt8}
     # Choose which BxDF to sample.
     matching_components = num_components(b, type)
     matching_components == 0 && return (
@@ -126,7 +126,7 @@ function sample_f(
             count -= 1
         end
     end
-    @assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
+    @real_assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f(
         min(u[1] * matching_components - component, 1f0), u[2],
@@ -139,8 +139,9 @@ function sample_f(
 
     # TODO when to update sampled type
     sampled_type = bxdf.type
-    wi, pdf, f, sampled_type_tmp = sample_f(bxdf, wo, u_remapped)
-    sampled_type_tmp ≢ nothing && (sampled_type = sampled_type_tmp;)
+    xx = sample_f(bxdf, wo, u_remapped)
+    wi, pdf, f, sampled_type_tmp = xx
+    sampled_type_tmp ≢ nothing && (sampled_type = sampled_type_tmp)
 
     pdf ≈ 0f0 && return (
         Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,

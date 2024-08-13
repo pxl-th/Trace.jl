@@ -20,17 +20,26 @@ abstract type Integrator end
 
 const Radiance = Val{:Radiance}
 const Importance = Val{:Importance}
-const TransportMode = Union{Radiance, Importance}
+const TransportMode = Union{Radiance,Importance}
+
+const DO_ASSERTS = false
+macro real_assert(expr, msg="")
+    if DO_ASSERTS
+        esc(:(@assert $expr $msg))
+    else
+        return :()
+    end
+end
 
 # GeometryBasics.@fixed_vector Normal StaticVector
 include("typeNormal3f.jl")
 
-const Maybe{T} = Union{T, Nothing}
+const Maybe{T} = Union{T,Nothing}
 
 function get_progress_bar(n::Integer, desc::String = "Progress")
     Progress(
-        n, desc=desc, dt=1,
-        barglyphs=BarGlyphs("[=> ]"), barlen=50, color=:white,
+        n, desc = desc, dt = 1,
+        barglyphs = BarGlyphs("[=> ]"), barlen = 50, color = :white,
     )
 end
 
@@ -48,25 +57,25 @@ function concentric_sample_disk(u::Point2f)::Point2f
         r = offset[2]
         θ = π / 2f0 - (offset[1] / offset[2]) * π / 4f0
     end
-    r * Point2f(θ |> cos, θ |> sin)
+    r * Point2f(cos(θ), sin(θ))
 end
 
 function cosine_sample_hemisphere(u::Point2f)::Vec3f
-    d = u |> concentric_sample_disk
-    z = √max(0f0, 1f0 - d[1] ^ 2 - d[2] ^ 2)
+    d = concentric_sample_disk(u)
+    z = √max(0f0, 1f0 - d[1]^2 - d[2]^2)
     Vec3f(d[1], d[2], z)
 end
 
 function uniform_sample_sphere(u::Point2f)::Vec3f
     z = 1f0 - 2f0 * u[1]
-    r = √(max(0f0, 1f0 - z ^ 2))
+    r = √(max(0f0, 1f0 - z^2))
     ϕ = 2f0 * π * u[2]
     Vec3f(r * cos(ϕ), r * sin(ϕ), z)
 end
 
 function uniform_sample_cone(u::Point2f, cosθ_max::Float32)::Vec3f
     cosθ = 1f0 - u[1] + u[1] * cosθ_max
-    sinθ = √(1f0 - cosθ ^ 2)
+    sinθ = √(1f0 - cosθ^2)
     ϕ = u[2] * 2f0 * π
     Vec3f(cos(ϕ) * sinθ, sin(ϕ) * sinθ, cosθ)
 end
@@ -75,7 +84,7 @@ function uniform_sample_cone(
     u::Point2f, cosθ_max::Float32, x::Vec3f, y::Vec3f, z::Vec3f,
 )::Vec3f
     cosθ = 1f0 - u[1] + u[1] * cosθ_max
-    sinθ = √(1f0 - cosθ ^ 2)
+    sinθ = √(1f0 - cosθ^2)
     ϕ = u[2] * 2f0 * π
     x * cos(ϕ) * sinθ + y * sin(ϕ) * sinθ + z * cosθ
 end
@@ -99,15 +108,15 @@ Since normal is `(0, 0, 1) → cos_θ = n · w = (0, 0, 1) ⋅ w = w.z`.
 """
 @inline cos_θ(w::Vec3f) = w[3]
 @inline sin_θ2(w::Vec3f) = max(0f0, 1f0 - cos_θ(w) * cos_θ(w))
-@inline sin_θ(w::Vec3f) = w |> sin_θ2 |> √
+@inline sin_θ(w::Vec3f) = √(sin_θ2(w))
 @inline tan_θ(w::Vec3f) = sin_θ(w) / cos_θ(w)
 
 @inline function cos_ϕ(w::Vec3f)
-    sinθ = w |> sin_θ
+    sinθ = sin_θ(w)
     sinθ ≈ 0f0 ? 1f0 : clamp(w[1] / sinθ, -1f0, 1f0)
 end
 @inline function sin_ϕ(w::Vec3f)
-    sinθ = w |> sin_θ
+    sinθ = sin_θ(w)
     sinθ ≈ 0f0 ? 1f0 : clamp(w[2] / sinθ, -1f0, 1f0)
 end
 
@@ -146,7 +155,7 @@ function spherical_direction(
     sin_θ * cos(ϕ) * x + sin_θ * sin(ϕ) * y + cos_θ * z
 end
 
-spherical_θ(v::Vec3f) = clamp(v[3], -1f0, 1f0) |> acos
+spherical_θ(v::Vec3f) = acos(clamp(v[3], -1f0, 1f0))
 function spherical_ϕ(v::Vec3f)
     p = atan(v[2], v[1])
     p < 0 ? p + 2f0 * π : p
@@ -165,22 +174,22 @@ include("spectrum.jl")
 include("surface_interaction.jl")
 
 struct Scene
-    lights::Vector{L} where L <: Light
-    aggregate::P where P <: Primitive
+    lights::Vector{L} where L<:Light
+    aggregate::P where P<:Primitive
     bound::Bounds3
 
     function Scene(
         lights::Vector{L}, aggregate::P,
-    ) where L <: Light where P <: Primitive
+    ) where L<:Light where P<:Primitive
         # TODO preprocess for lights
-        new(lights, aggregate, aggregate |> world_bound)
+        new(lights, aggregate, world_bound(aggregate))
     end
 end
 
-@inline function intersect!(scene::Scene, ray::Union{Ray, RayDifferentials})
+@inline function intersect!(scene::Scene, ray::Union{Ray,RayDifferentials})
     intersect!(scene.aggregate, ray)
 end
-@inline function intersect_p(scene::Scene, ray::Union{Ray, RayDifferentials})
+@inline function intersect_p(scene::Scene, ray::Union{Ray,RayDifferentials})
     intersect_p(scene.aggregate, ray)
 end
 
@@ -189,7 +198,7 @@ end
 )::Ray
     direction = p1.p - p0.p
     origin = p0.p .+ δ .* direction
-    Ray(o=origin, d=direction, time=p0.time)
+    Ray(o = origin, d = direction, time = p0.time)
 end
 @inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
     spawn_ray(p0.core, p1)
@@ -198,7 +207,7 @@ end
     si::SurfaceInteraction, direction::Vec3f, δ::Float32 = 1f-6,
 )::Ray
     origin = si.core.p .+ δ .* direction
-    Ray(o=origin, d=direction, time=si.core.time)
+    Ray(o = origin, d = direction, time = si.core.time)
 end
 
 include("shapes/Shape.jl")

@@ -38,7 +38,7 @@ based on their optical properties.
 """
 function generate_ray(
     camera::C, sample::CameraSample,
-)::Tuple{Ray, Float32} where C <: Camera
+)::Tuple{Ray,Float32} where C<:Camera
 end
 """
 Same as `generate_ray`, but also computes rays for pixels shifted one pixel
@@ -47,7 +47,7 @@ Useful for anti-aliasing textures.
 """
 function generate_ray_differential(
     camera::C, sample::CameraSample,
-)::Tuple{RayDifferentials, Float32} where C <: Camera
+)::Tuple{RayDifferentials,Float32} where C<:Camera
     ray, wt = generate_ray(camera, sample)
     shifted_x = CameraSample(
         sample.film + Point2f(1f0, 0f0), sample.lens, sample.time,
