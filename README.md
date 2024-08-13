@@ -1,7 +1,7 @@
 # Trace.jl
 [![][docs-dev-img]][docs-dev-url]
 
-Physically-based ray tracing on CPU / ?
+Physically-based ray tracing on CPU
 
 [docs-dev-img]: https://img.shields.io/badge/docs-dev-blue.svg
 [docs-dev-url]: https://pxl-th.github.io/Trace.jl/dev/
@@ -32,5 +32,5 @@ Caustic effect using Stochastic Progressive Photon Mapping on a glass block.
 
 |Image|Video|
 |:-:|:-:|
-|<img src="scenes/caustic-glass-sppm-100-iterations.png" width="400">|<img src="https://i.ytimg.com/vi_webp/87NlMA3Vwvs/maxresdefault.webp" width="720">|
+|<img src="https://github.com/user-attachments/assets/f7d8cd98-1dfa-4bb2-9bb4-3a48e3556f1a" width=400>|<img src="https://i.ytimg.com/vi_webp/87NlMA3Vwvs/maxresdefault.webp" width="720">|
 |100 iterations, ray depth 8|25 iterations per frame, ray depth 5. [YouTube](https://www.youtube.com/watch?v=87NlMA3Vwvs)|
