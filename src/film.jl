@@ -137,23 +137,23 @@ function add_sample!(
 ) where S<:Spectrum
     # Compute sample's raster bounds.
     discrete_point = point .- 0.5f0
-    p0 = ceil.(discrete_point .- t.filter_radius)
-    p1 = floor.(discrete_point .+ t.filter_radius) .+ 1f0
-    p0 = max.(p0, max.(t.bounds.p_min, Point2f(1f0)))
-    p1 = min.(p1, t.bounds.p_max)
+    p0 = ceil.(Int32, discrete_point .- t.filter_radius)
+    p1 = floor.(Int32, discrete_point .+ t.filter_radius) .+ 1
+    p0 = Int32.(max.(p0, max.(t.bounds.p_min, Point2(Int32(1)))))
+    p1 = Int32.(min.(p1, t.bounds.p_max))
     # Precompute x & y filter offsets.
-    offsets_x = Vector{Int32}(undef, Int32(p1[1] - p0[1] + 1))
-    offsets_y = Vector{Int32}(undef, Int32(p1[2] - p0[2] + 1))
-    for (i, x) in enumerate(p0[1]:p1[1])
+    offsets_x = Vector{Int32}(undef, p1[1] - p0[1] + 1)
+    offsets_y = Vector{Int32}(undef, p1[2] - p0[2] + 1)
+    @inbounds for (i, x) in enumerate(p0[1]:p1[1])
         fx = abs((x - discrete_point[1]) * t.inv_filter_radius[1] * t.filter_table_width)
         offsets_x[i] = clamp(ceil(fx), 1, t.filter_table_width)  # TODO is clipping ok?
     end
-    for (i, y) in enumerate(p0[2]:p1[2])
+    @inbounds for (i, y) in enumerate(p0[2]:p1[2])
         fy = abs((y - discrete_point[2]) * t.inv_filter_radius[2] * t.filter_table_width)
         offsets_y[i] = clamp(floor(fy), 1, t.filter_table_width)
     end
     # Loop over filter support & add sample to pixel array.
-    for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
+    @inbounds for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
         w = t.filter_table[offsets_y[j], offsets_x[i]]
         pixel = get_pixel(t, Point2f(x, y))
         @real_assert sample_weight <= 1
@@ -180,10 +180,10 @@ Point in (x, y) format.
 end
 
 function merge_film_tile!(f::Film, ft::FilmTile)
-    x_range = ft.bounds.p_min[1]:ft.bounds.p_max[1]
-    y_range = ft.bounds.p_min[2]:ft.bounds.p_max[2]
+    x_range = Int(ft.bounds.p_min[1]):Int(ft.bounds.p_max[1])
+    y_range = Int(ft.bounds.p_min[2]):Int(ft.bounds.p_max[2])
 
-    for y in y_range, x in x_range
+    @inbounds for y in y_range, x in x_range
         pixel = Point2f(x, y)
         tile_pixel = get_pixel(ft, pixel)
         merge_pixel = get_pixel(f, pixel)

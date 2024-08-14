@@ -9,7 +9,7 @@ end
 """
 Render scene.
 """
-function (i::I where I<:SamplerIntegrator)(scene::Scene)
+function (i::SamplerIntegrator)(scene::Scene)
     sample_bounds = get_sample_bounds(get_film(i.camera))
     sample_extent = diagonal(sample_bounds)
     tile_size = 16

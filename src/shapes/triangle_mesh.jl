@@ -112,14 +112,17 @@ function _to_ray_coordinate_space(
     denom = 1f0 / d[3]
     shear = Point3f(-d[1] * denom, -d[2] * denom, denom)
     # Translate, apply permutation and shear to vertices.
-    tvs = @SVector Point3f[
-        (vertices[i]-ray.o)[permutation] + Point3f(
-            shear[1] * (vertices[i][kz] - ray.o[kz]),
-            shear[2] * (vertices[i][kz] - ray.o[kz]),
-            0f0,
-        ) for i in 1:3
-    ]
-    tvs, shear
+    rkz = ray.o[kz]
+    tvs = ntuple(3) do i
+        v = vertices[i]
+        vo = (v-ray.o)[permutation]
+        return vo + Point3f(
+            shear[1] * (v[kz] - rkz),
+            shear[2] * (v[kz] - rkz),
+            0.0f0,
+        )
+    end
+    SVector(tvs), shear
 end
 
 function ∂p(

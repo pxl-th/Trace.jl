@@ -173,16 +173,16 @@ include("transformations.jl")
 include("spectrum.jl")
 include("surface_interaction.jl")
 
-struct Scene
+struct Scene{P<:Primitive}
     lights::Vector{L} where L<:Light
-    aggregate::P where P<:Primitive
+    aggregate::P
     bound::Bounds3
 
     function Scene(
         lights::Vector{L}, aggregate::P,
     ) where L<:Light where P<:Primitive
         # TODO preprocess for lights
-        new(lights, aggregate, world_bound(aggregate))
+        new{P}(lights, aggregate, world_bound(aggregate))
     end
 end
 

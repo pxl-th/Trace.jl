@@ -1,4 +1,4 @@
-mutable struct AtomicVec3f
+struct AtomicVec3f
     x::Threads.Atomic{Float32}
     y::Threads.Atomic{Float32}
     z::Threads.Atomic{Float32}
