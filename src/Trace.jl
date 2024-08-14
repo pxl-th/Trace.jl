@@ -8,6 +8,7 @@ using GeometryBasics
 using LinearAlgebra
 using StaticArrays
 using ProgressMeter
+using StructArrays
 
 abstract type AbstractRay end
 abstract type Spectrum end

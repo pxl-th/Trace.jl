@@ -3,8 +3,8 @@ mutable struct Pixel
     filter_weight_sum::Float32
     splat_xyz::Point3f
 end
-
-struct Film
+Pixel() = Pixel(Point3f(0.0f0), 0.0f0, Point3f(0.0f0))
+struct Film{Pixels<:AbstractMatrix{Pixel}}
     resolution::Point2f
     """
     Subset of the image to render, bounds are inclusive and start from 1.
@@ -17,7 +17,7 @@ struct Film
     """
     pixels in (y, x) format
     """
-    pixels::Matrix{Pixel}
+    pixels::Pixels
     filter_table_width::Int32
     """
     filter_table in (y, x) format
@@ -44,17 +44,14 @@ struct Film
         )
         crop_resolution = Int32.(inclusive_sides(crop_bounds))
         # Allocate film image storage.
-        pixels = Pixel[
-            Pixel(Point3f(0f0), 0f0, Point3f(0f0))
-            for y in 1:crop_resolution[end], x in 1:crop_resolution[begin]
-        ]
+        pixels = StructArray(fill(Pixel(), crop_resolution[end], crop_resolution[end]))
         # Precompute filter weight table.
         r = filter.radius ./ filter_table_width
         for y in 0:filter_table_width-1, x in 0:filter_table_width-1
             p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
             filter_table[y+1, x+1] = filter(p)
         end
-        new(
+        new{typeof(pixels)}(
             resolution, crop_bounds, diagonal * 0.001f0, filter, filename,
             pixels, filter_table_width, filter_table, scale,
         )
@@ -83,13 +80,13 @@ function get_physical_extension(f::Film)
     Bounds2(Point2f(-x / 2f0, -y / 2f0), Point2f(x / 2f0, y / 2f0))
 end
 
-mutable struct FilmTilePixel{S<:Spectrum}
+struct FilmTilePixel{S<:Spectrum}
     contrib_sum::S
     filter_weight_sum::Float32
 end
 FilmTilePixel() = FilmTilePixel(RGBSpectrum(), 0f0)
 
-struct FilmTile{S<:Spectrum}
+struct FilmTile{Pixels<:AbstractMatrix{<:FilmTilePixel}}
     """
     Bounds should start from 1 not 0.
     """
@@ -98,15 +95,15 @@ struct FilmTile{S<:Spectrum}
     inv_filter_radius::Point2f
     filter_table::Matrix{Float32}
     filter_table_width::Int32
-    pixels::Matrix{FilmTilePixel{S}}
+    pixels::Pixels
 
     function FilmTile(
         bounds::Bounds2, filter_radius::Point2f,
         filter_table::Matrix{Float32}, filter_table_width::Int32,
     )
         tile_res = (Int32.(inclusive_sides(bounds)))
-        pixels = [FilmTilePixel() for _ in 1:tile_res[2], __ in 1:tile_res[1]]
-        new{RGBSpectrum}(
+        pixels = StructArray(fill(FilmTilePixel(), (tile_res[2], tile_res[1])))
+        new{typeof(pixels)}(
             bounds, filter_radius, 1f0 ./ filter_radius,
             filter_table, filter_table_width,
             pixels,
@@ -153,52 +150,56 @@ function add_sample!(
         offsets_y[i] = clamp(floor(fy), 1, t.filter_table_width)
     end
     # Loop over filter support & add sample to pixel array.
+    pixels = t.pixels
+    contrib_sum = pixels.contrib_sum
+    filter_weight_sum = pixels.filter_weight_sum
     @inbounds for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
         w = t.filter_table[offsets_y[j], offsets_x[i]]
-        pixel = get_pixel(t, Point2f(x, y))
         @real_assert sample_weight <= 1
         @real_assert w <= 1
-        pixel.contrib_sum += spectrum * sample_weight * w
-        pixel.filter_weight_sum += w
+        idx = get_pixel_index(t, Point2(x, y))
+        contrib_sum[idx] += spectrum * sample_weight * w
+        filter_weight_sum[idx] += w
     end
 end
 
 """
 Point in (x, y) format.
 """
-@inline function get_pixel(t::FilmTile, p::Point2f)
-    pp = Int32.((p .- t.bounds.p_min .+ 1f0))
-    t.pixels[pp[2], pp[1]]
+@inline function get_pixel_index(t::FilmTile, p::Point2)
+    i1, i2 = Int32.((p .- t.bounds.p_min .+ 1))
+    return CartesianIndex(i2, i1)
 end
 
 """
 Point in (x, y) format.
 """
-@inline function get_pixel(f::Film, p::Point2f)
-    pp = Int32.((p .- f.crop_bounds.p_min .+ 1f0))
-    f.pixels[pp[2], pp[1]]
+@inline function get_pixel_index(f::Film, p::Point2)
+    i1, i2 = Int32.((p .- f.crop_bounds.p_min .+ 1.0))
+    return CartesianIndex(i2, i1)
 end
 
 function merge_film_tile!(f::Film, ft::FilmTile)
     x_range = Int(ft.bounds.p_min[1]):Int(ft.bounds.p_max[1])
     y_range = Int(ft.bounds.p_min[2]):Int(ft.bounds.p_max[2])
-
+    ft_contrib_sum = ft.pixels.contrib_sum
+    ft_filter_weight_sum = ft.pixels.filter_weight_sum
+    f_xyz = f.pixels.xyz
+    f_filter_weight_sum = f.pixels.filter_weight_sum
     @inbounds for y in y_range, x in x_range
-        pixel = Point2f(x, y)
-        tile_pixel = get_pixel(ft, pixel)
-        merge_pixel = get_pixel(f, pixel)
-        merge_pixel.xyz += to_XYZ(tile_pixel.contrib_sum)
-        merge_pixel.filter_weight_sum += tile_pixel.filter_weight_sum
+        pixel = Point2(x, y)
+        ft_idx = get_pixel_index(ft, pixel)
+        f_idx = get_pixel_index(f, pixel)
+        f_xyz[f_idx] += to_XYZ(ft_contrib_sum[ft_idx])
+        f_filter_weight_sum[f_idx] += ft_filter_weight_sum[ft_idx]
     end
 end
 
-function set_image!(f::Film, spectrum::Matrix{S}) where S<:Spectrum
+function set_image!(f::Film, spectrum::Matrix{S}) where {S<:Spectrum}
     @real_assert size(f.pixels) == size(spectrum)
-    for (i, p) in enumerate(f.pixels)
-        p.xyz = to_XYZ(spectrum[i])
-        p.filter_weight_sum = 1f0
-        p.splat_xyz = Point3f(0f0)
-    end
+    f.pixels.xyz .= to_XYZ.(spectrum)
+    f.pixels.filter_weight_sum .= 1.0f0
+    f.pixels.splat_xyz .= (Point3f(0.0f0),)
 end
 
 function save(film::Film, splat_scale::Float32 = 1f0)
