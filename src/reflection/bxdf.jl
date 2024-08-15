@@ -60,11 +60,12 @@ function fresnel_dielectric(cos_θi::Float32, ηi::Float32, ηt::Float32)
         (ηt * cos_θi - ηi * cos_θt) /
         (ηt * cos_θi + ηi * cos_θt)
     )
+
     r_perp = (
         (ηi * cos_θi - ηt * cos_θt) /
         (ηi * cos_θi + ηt * cos_θt)
     )
-    0.5f0 * (r_parallel^2 + r_perp^2)
+    return 0.5f0 * (r_parallel^2 + r_perp^2)
 end
 
 """

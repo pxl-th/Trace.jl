@@ -78,11 +78,12 @@ end
 end
 
 @inline function allocate(pool::MemoryPool, ::Type{T}) where {T}
+    @assert isbitstype(T) "$T"
     nbytes = sizeof(T)
     segment = next_free_segment(pool, nbytes)
     # If pool is not big enough, we do a gc tracked allocation
     if isnothing(segment)
-        error("Out of mem")
+        # error("Out of mem")
         return MutableRef{T}(C_NULL)
     else
         return MutableRef{T}(pointer(pool.bytes, segment[1]))
@@ -92,7 +93,6 @@ end
 @inline allocate(pool::MemoryPool, ::Type{MutableRef{T}}, args::AT) where {T, AT<:Tuple} = allocate(pool, T, args)
 
 @inline function allocate(pool::MemoryPool, ::Type{T}, args::AT) where {T,AT<:Tuple}
-
     obj = T(args...)
     mem = allocate(pool, T)
     ptr = Base.unsafe_convert(Ptr{T}, getfield(mem, :ptr))
@@ -100,8 +100,7 @@ end
     return mem
 end
 
-
-@inline function Base.setindex!(mref::MutableRef{T}, value, idx::Int) where {T}
+Base.@propagate_inbounds function Base.setindex!(mref::MutableRef{T}, value, idx::Int) where {T}
     fieldoffset = Base.fieldoffset(T, idx)
     VT = fieldtype(T, idx)
     converted = convert(VT, value)
@@ -110,21 +109,20 @@ end
     return converted
 end
 
-@inline function Base.setproperty!(mref::MutableRef{T}, field::Symbol, value) where {T}
+Base.@propagate_inbounds function Base.setproperty!(mref::MutableRef{T}, field::Symbol, value) where {T}
     idx = findfirst(x -> x === field, fieldnames(T))
     return mref[idx] = value
 end
 
-@inline function Base.getproperty(mref::MutableRef{T}, field::Symbol) where {T}
+Base.@propagate_inbounds function Base.getproperty(mref::MutableRef{T}, field::Symbol) where {T}
     idx = findfirst(x -> x === field, fieldnames(T))
     if isnothing(idx)
-        error("Field $field not found in type $T")
+        # error("Field $field not found in type $T")
     end
     return mref[idx]
 end
 
-@inline function Base.getindex(mref::MutableRef{T}, idx::Int) where {T}
-
+Base.@propagate_inbounds function Base.getindex(mref::MutableRef{T}, idx::Int) where {T}
     fieldoffset = Base.fieldoffset(T, idx)
     VT = fieldtype(T, idx)
     ptr = Ptr{VT}(getfield(mref, :ptr) + fieldoffset)

@@ -12,14 +12,6 @@ end
 
 const BXDFVector{S} = MutableRef{_BXDFVector{S}}
 
-function Base.push!(bsdfs::BXDFVector{S}, bxdf::UberBxDF{S}) where S<:Spectrum
-    if bsdfs.last == 8
-        error("Maximum number of BxDF components reached.")
-    end
-    i = bsdfs.last += 1
-    bsdfs[i] = bxdf
-end
-
 
 struct BSDF{S}
     """

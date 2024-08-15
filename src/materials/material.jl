@@ -6,10 +6,11 @@ function MatteMaterial(
     return UberMaterial(MATTE_MATERIAL; Kd=Kd, σ=σ)
 end
 
+
 """
 Compute scattering function.
 """
-function matte_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
+Base.Base.@propagate_inbounds  function matte_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
     bsdf = BSDF(pool, si)
@@ -18,10 +19,11 @@ function matte_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, t
     σ = clamp(m.σ(si), 0f0, 90f0)
     bsdfs = bsdf.bxdfs
     if σ ≈ 0f0
-        push!(bsdfs, LambertianReflection(r))
+        bsdfs[1] = LambertianReflection(r)
     else
-        push!(bsdfs, OrenNayar(r, σ))
+        bsdfs[1] = OrenNayar(r, σ)
     end
+    bsdfs.last = 1
     return bsdf
 end
 
@@ -31,11 +33,13 @@ function MirrorMaterial(Kr::Texture)
     return UberMaterial(MIRROR_MATERIAL; Kr=Kr)
 end
 
-function mirror_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
+Base.Base.@propagate_inbounds function mirror_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     bsdf = BSDF(pool, si)
     r = clamp(m.Kr(si))
     is_black(r) && return
-    push!(bsdf.bxdfs, SpecularReflection(r, FresnelNoOp()))
+    bxdfs = bsdf.bxdfs
+    bxdfs[1] = SpecularReflection(r, FresnelNoOp())
+    bxdfs.last = 1
     return bsdf
 end
 
@@ -48,7 +52,7 @@ function GlassMaterial(
     return UberMaterial(GLASS_MATERIAL; Kr=Kr, Kt=Kt, u_roughness=u_roughness, v_roughness=v_roughness, index=index, remap_roughness=remap_roughness)
 end
 
-function glass_material(pool, g::UberMaterial, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
+Base.Base.@propagate_inbounds function glass_material(pool, g::UberMaterial, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
 
     η = g.index(si)
     u_roughness = g.u_roughness(si)
@@ -62,7 +66,8 @@ function glass_material(pool, g::UberMaterial, si::SurfaceInteraction, allow_mul
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
     if is_specular && allow_multiple_lobes
-        push!(bsdfs, FresnelSpecular(r, t, 1.0f0, η, transport))
+        bsdfs[1] = FresnelSpecular(r, t, 1.0f0, η, transport)
+        bsdfs.last = 1
         return
     end
 
@@ -73,22 +78,25 @@ function glass_material(pool, g::UberMaterial, si::SurfaceInteraction, allow_mul
     distribution = is_specular ? nothing : TrowbridgeReitzDistribution(
         u_roughness, v_roughness,
     )
-
+    last = 0
     if !is_black(r)
         fresnel = FresnelDielectric(1f0, η)
         if is_specular
-            push!(bsdfs, SpecularReflection(r, fresnel))
+            bsdfs[1] = SpecularReflection(r, fresnel)
         else
-            push!(bsdfs, MicrofacetReflection(r, distribution, fresnel, transport))
+            bsdfs[1] = MicrofacetReflection(r, distribution, fresnel, transport)
         end
+        last = 1
     end
     if !is_black(t)
+        last += 1
         if is_specular
-            push!(bsdfs, SpecularTransmission(t, 1.0f0, η, transport))
+            bsdfs[last] = SpecularTransmission(t, 1.0f0, η, transport)
         else
-            push!(bsdfs, MicrofacetTransmission(t, distribution, 1.0f0, η, transport))
+            bsdfs[last] = MicrofacetTransmission(t, distribution, 1.0f0, η, transport)
         end
     end
+    bsdfs.last = last
     return bsdf
 end
 
@@ -100,15 +108,18 @@ function PlasticMaterial(
     return UberMaterial(PLASTIC_MATERIAL; Kd=Kd, Ks=Ks, roughness=roughness, remap_roughness=remap_roughness)
 end
 
-function plastic_material(pool, p::UberMaterial,
+Base.Base.@propagate_inbounds function plastic_material(pool, p::UberMaterial,
         si::SurfaceInteraction, ::Bool, transport,
     )
-
     bsdf = BSDF(pool, si)
     bsdfs = bsdf.bxdfs
     # Initialize diffuse componen of plastic material.
     kd = clamp(p.Kd(si))
-    !is_black(kd) && push!(bsdfs, LambertianReflection(kd))
+    last = 0
+    if !is_black(kd)
+        bsdfs[1] = LambertianReflection(kd)
+        last += 1
+    end
     # Initialize specular component.
     ks = clamp(p.Ks(si))
     is_black(ks) && return
@@ -117,6 +128,8 @@ function plastic_material(pool, p::UberMaterial,
     rough = p.roughness(si)
     p.remap_roughness && (rough = roughness_to_α(rough))
     distribution = TrowbridgeReitzDistribution(rough, rough)
-    push!(bsdfs, MicrofacetReflection(ks, distribution, fresnel, transport))
+    last += 1
+    bsdfs[last] = MicrofacetReflection(ks, distribution, fresnel, transport)
+    bsdfs.last = last
     return bsdf
 end

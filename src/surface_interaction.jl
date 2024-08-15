@@ -20,7 +20,7 @@ end
 
 const Interaction = MutableRef{_Interaction}
 
-mutable struct _ShadingInteraction
+struct _ShadingInteraction
     n::Normal3f
     ∂p∂u::Vec3f
     ∂p∂v::Vec3f

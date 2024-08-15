@@ -25,6 +25,35 @@ function Sampler(samples_per_pixel::Integer)
     )
 end
 
+using Random
+using RandomNumbers.Xorshifts
+
+
+const TRNG = Xoroshiro128Plus[]
+# Reset the per-thread random seeds to make results reproducible
+reseed!() = foreach(i-> Random.seed!(TRNG[i], i), 1:Threads.maxthreadid())
+
+function __init__()
+    # Instantiate 1 RNG (Random Number Generator) per thread, for performance.
+    # This can't be done during precompilation since the number of threads isn't known then.
+    resize!(TRNG, Threads.maxthreadid())
+    for i in 1:Threads.nthreads()
+        TRNG[i] = Xoroshiro128Plus(i)
+    end
+    nothing
+end
+
+"Per-thread rand()"
+@inline function trand()
+    @inbounds rng = TRNG[Threads.threadid()]
+    rand(rng)
+end
+
+@inline function trand(::Type{T}) where {T}
+    @inbounds rng = TRNG[Threads.threadid()]
+    rand(rng, T)
+end
+
 function get_camera_sample(sampler::AbstractSampler, p_raster::Point2f)
     p_film = p_raster .+ get_2d(sampler)
     time = get_1d(sampler)
@@ -132,10 +161,11 @@ mutable struct UniformSampler <: AbstractSampler
     UniformSampler(samples_per_pixel::Integer) = new(1, samples_per_pixel)
 end
 
-function get_camera_sample(sampler::UniformSampler, p_raster::Point2f)
-    p_film = p_raster .+ rand(Point2f)
-    p_lens = rand(Point2f)
-    CameraSample(p_film, p_lens, rand())
+function get_camera_sample(::UniformSampler, p_raster::Point2f)
+    @inbounds rng = TRNG[Threads.threadid()]
+    p_film = p_raster .+ rand(rng, Point2f)
+    p_lens = rand(rng, Point2f)
+    CameraSample(p_film, p_lens, rand(rng, Float32))
 end
 
 @inline function has_next_sample(u::UniformSampler)::Bool

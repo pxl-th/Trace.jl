@@ -1,4 +1,4 @@
-mutable struct Pixel
+struct Pixel
     xyz::Point3f
     filter_weight_sum::Float32
     splat_xyz::Point3f
