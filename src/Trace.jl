@@ -217,20 +217,23 @@ end
 end
 
 include("shapes/Shape.jl")
-include("primitive.jl")
 include("accel/bvh.jl")
 
 include("filter.jl")
 include("film.jl")
-include("reflection/Reflection.jl")
+
+
 
 include("camera/camera.jl")
 include("sampler/sampling.jl")
 include("sampler/sampler.jl")
 include("textures/mapping.jl")
 include("textures/basic.jl")
+include("materials/uber-material.jl")
+include("reflection/Reflection.jl")
 include("materials/bsdf.jl")
 include("materials/material.jl")
+include("primitive.jl")
 
 include("lights/emission.jl")
 include("lights/light.jl")

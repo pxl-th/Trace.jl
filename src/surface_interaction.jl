@@ -143,11 +143,11 @@ surface properties and then initializing a representation of the BSDF
 at the point.
 """
 function compute_scattering!(
-    primitive, si::SurfaceInteraction, ray::RayDifferentials,
+    pool, primitive, si::SurfaceInteraction, ray::RayDifferentials,
     allow_multiple_lobes::Bool = false, ::Type{T} = Radiance,
 ) where T<:TransportMode
     compute_differentials!(si, ray)
-    return compute_scattering!(primitive, si, allow_multiple_lobes, T)
+    return compute_scattering!(pool, primitive, si, allow_multiple_lobes, T)
 end
 
 @inline function le(::SurfaceInteraction, ::Vec3f)::RGBSpectrum

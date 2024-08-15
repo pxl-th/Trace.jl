@@ -6,6 +6,7 @@ struct WhittedIntegrator <: SamplerIntegrator
     max_depth::Int64
 end
 
+
 """
 Render scene.
 """
@@ -61,7 +62,7 @@ function li(
 )::RGBSpectrum
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
-    hit, primitive, surface_interaction = intersect!(pool, scene, ray)
+    hit, primitive, si = intersect!(pool, scene, ray)
     if !hit
         for light in scene.lights
             l += le(light, ray)
@@ -70,22 +71,23 @@ function li(
     end
     # Compute emmited & reflected light at ray intersection point.
     # Initialize common variables for Whitted integrator.
-    n = surface_interaction.shading.n
-    wo = surface_interaction.core.wo
+    core = si.core
+    n = si.shading.n
+    wo = core.wo
     # Compute scattering functions for surface interaction.
-    bsdf = compute_scattering!(primitive, surface_interaction, ray)
+    bsdf = compute_scattering!(pool, primitive, si, ray)
     if bsdf isa Nothing
         return li(
-            pool, spawn_ray(pool, surface_interaction, ray.d),
+            pool, spawn_ray(pool, si, ray.d),
             scene, i.sampler, depth,
         )
     end
     # Compute emitted light if ray hit an area light source.
-    l += le(surface_interaction, wo)
+    l += le(si, wo)
     # Add contribution of each light source.
     for light in scene.lights
         sampled_li, wi, pdf, visibility_tester = sample_li(
-            pool, light, surface_interaction.core, get_2d(i.sampler),
+            pool, light, core, get_2d(i.sampler),
         )
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = bsdf(wo, wi)
@@ -95,8 +97,8 @@ function li(
     end
     if depth + 1 ≤ i.max_depth
         # Trace rays for specular reflection & refraction.
-        l += specular_reflect(pool, bsdf, i, ray, surface_interaction, scene, depth)
-        l += specular_transmit(pool, bsdf, i, ray, surface_interaction, scene, depth)
+        l += specular_reflect(pool, bsdf, i, ray, si, scene, depth)
+        l += specular_transmit(pool, bsdf, i, ray, si, scene, depth)
     end
     l
 end

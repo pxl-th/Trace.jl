@@ -1,9 +1,27 @@
-"""
-Maximum allowed number of BxDF components in BSDF.
-"""
-const MAX_BxDF = UInt8(8)
+struct _BXDFVector{S<:Spectrum}
+    bxdf_1::UberBxDF{S}
+    bxdf_2::UberBxDF{S}
+    bxdf_3::UberBxDF{S}
+    bxdf_4::UberBxDF{S}
+    bxdf_5::UberBxDF{S}
+    bxdf_6::UberBxDF{S}
+    bxdf_7::UberBxDF{S}
+    bxdf_8::UberBxDF{S}
+    last::UInt8
+end
 
-mutable struct BSDF
+const BXDFVector{S} = MutableRef{_BXDFVector{S}}
+
+function Base.push!(bsdfs::BXDFVector{S}, bxdf::UberBxDF{S}) where S<:Spectrum
+    if bsdfs.last == 8
+        error("Maximum number of BxDF components reached.")
+    end
+    i = bsdfs.last += 1
+    bsdfs[i] = bxdf
+end
+
+
+struct BSDF{S}
     """
     Relative index of refraction over the boundary.
     For opaque surfaces it is not used and should be 1.
@@ -29,31 +47,23 @@ mutable struct BSDF
     shading normal as one of the axes.
     """
     ts::Vec3f
-    """
-    Current number of BxDFs (≤ 8).
-    """
-    n_bxdfs::UInt8
+
     """
     Individual BxDF components. Maximum allowed number of components is 8.
     """
-    bxdfs::Vector{B} where B<:BxDF
+    bxdfs::BXDFVector{S}
 
-    function BSDF(si::SurfaceInteraction, η::Float32 = 1f0)
+    function BSDF(pool, si::SurfaceInteraction, η::Float32 = 1f0)
         ng = si.core.n
         ns = si.shading.n
         ss = normalize(si.shading.∂p∂u)
         ts = ns × ss
-        new(
-            η, ng, ns, ss, ts, UInt8(0),
-            Vector{B where B<:BxDF}(undef, MAX_BxDF),
+        bsdfs = allocate(pool, BXDFVector{RGBSpectrum})
+        bsdfs.last = 0
+        new{RGBSpectrum}(
+            η, ng, ns, ss, ts, bsdfs,
         )
     end
-end
-
-function add!(b::BSDF, x::B) where B<:BxDF
-    @real_assert b.n_bxdfs < MAX_BxDF
-    b.n_bxdfs += 1
-    b.bxdfs[b.n_bxdfs] = x
 end
 
 """
@@ -77,8 +87,9 @@ end
 Evaluate BSDF function given incident and outgoind directions.
 """
 function (b::BSDF)(
-    wo_world::Vec3f, wi_world::Vec3f, flags::UInt8 = BSDF_ALL,
-)::RGBSpectrum
+        wo_world::Vec3f, wi_world::Vec3f, flags::UInt8 = BSDF_ALL,
+    )::RGBSpectrum
+
     # Transform world-space direction vectors to local BSDF space.
     wo = world_to_local(b, wo_world)
     wo[3] ≈ 0f0 && return RGBSpectrum(0f0)
@@ -87,16 +98,19 @@ function (b::BSDF)(
     reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
 
     output = RGBSpectrum(0f0)
-    for i in 1:b.n_bxdfs
-        bxdf = b.bxdfs[i]
+    bxdfs = b.bxdfs
+    Base.Cartesian.@nexprs 8 i -> begin
+        @assert i <= bxdfs.last
+        bxdf = bxdfs[i]
         if ((bxdf & flags) && (
-            (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
-            (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
-        ))
+                (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
+                (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
+            ))
             output += bxdf(wo, wi)
         end
+        bxdfs.last == i && return output
     end
-    output
+    return output
 end
 
 """
@@ -105,8 +119,9 @@ a given mode of light scattering corresponding
 to perfect specular reflection or refraction.
 """
 function sample_f(
-    b::BSDF, wo_world::Vec3f, u::Point2f, type::UInt8,
-)::Tuple{Vec3f,RGBSpectrum,Float32,UInt8}
+        b::BSDF, wo_world::Vec3f, u::Point2f, type::UInt8,
+    )::Tuple{Vec3f,RGBSpectrum,Float32,UInt8}
+
     # Choose which BxDF to sample.
     matching_components = num_components(b, type)
     matching_components == 0 && return (
@@ -120,9 +135,13 @@ function sample_f(
     count = component
     component -= 1
     bxdf = nothing
-    for i in 1:b.n_bxdfs
-        if b.bxdfs[i] & type
-            count == 1 && (bxdf = b.bxdfs[i]; break)
+    bxdfs = b.bxdfs
+    Base.Cartesian.@nexprs 8 i -> begin
+        _bxdf = bxdfs[i]
+        if _bxdf & type
+            if count == 1
+                bxdf = _bxdf
+            end
             count -= 1
         end
     end
@@ -139,9 +158,9 @@ function sample_f(
 
     # TODO when to update sampled type
     sampled_type = bxdf.type
-    xx = sample_f(bxdf, wo, u_remapped)
-    wi, pdf, f, sampled_type_tmp = xx
-    sampled_type_tmp ≢ nothing && (sampled_type = sampled_type_tmp)
+
+    wi, pdf, f, sampled_type_tmp = sample_f(bxdf, wo, u_remapped)
+    sampled_type_tmp === BSDF_NONE || (sampled_type = sampled_type_tmp)
 
     pdf ≈ 0f0 && return (
         Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
@@ -149,9 +168,9 @@ function sample_f(
     wi_world = local_to_world(b, wi)
     # Compute overall PDF with all matching BxDFs.
     if !(bxdf.type & BSDF_SPECULAR != 0) && matching_components > 1
-        for i in 1:b.n_bxdfs
-            if b.bxdfs[i] != bxdf && b.bxdfs[i] & type
-                pdf += compute_pdf(b.bxdfs[i], wo, wi)
+        Base.Cartesian.@nexprs 8 i -> begin
+            if i <= bxdfs.last && bxdfs[i] != bxdf && bxdfs[i] & type
+                pdf += compute_pdf(bxdfs[i], wo, wi)
             end
         end
     end
@@ -160,33 +179,35 @@ function sample_f(
     if !(bxdf.type & BSDF_SPECULAR != 0)
         reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
         f = RGBSpectrum(0f0)
-        for i in 1:b.n_bxdfs
-            bxdf = b.bxdfs[i]
-            if ((bxdf & type) && (
-                (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
-                (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
-            ))
+        Base.Cartesian.@nexprs 8 i -> begin
+            bxdf = bxdfs[i]
+            if i <= bxdfs.last && ((bxdf & type) && (
+                    (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
+                    (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
+                ))
                 f += bxdf(wo, wi)
             end
         end
     end
 
-    wi_world, f, pdf, sampled_type
+    return wi_world, f, pdf, sampled_type
 end
 
 function compute_pdf(
-    b::BSDF, wo_world::Vec3f, wi_world::Vec3f, flags::UInt8,
-)::Float32
+        b::BSDF, wo_world::Vec3f, wi_world::Vec3f, flags::UInt8,
+    )::Float32
     b.n_bxdfs == 0 && return 0f0
     wo = world_to_local(b, wo_world)
     wo[3] ≈ 0f0 && return 0f0
     wi = world_to_local(b, wi_world)
     pdf = 0f0
     matching_components = 0
-    for i in 1:b.n_bxdfs
-        if b.bxdfs[i] & flags
+    bxdfs = b.bxdfs
+    Base.Cartesian.@nexprs 8 i -> begin
+        bxdf = bxdfs[i]
+        if i <= bxdfs.last && bxdf & flags
             matching_components += 1
-            pdf += compute_pdf(b.bxdfs[i], wo, wi)
+            pdf += compute_pdf(bxdf, wo, wi)
         end
     end
     matching_components > 0 ? pdf / matching_components : 0f0
@@ -194,8 +215,11 @@ end
 
 function num_components(b::BSDF, flags::UInt8)::Int64
     num = 0
-    for i in 1:b.n_bxdfs
-        (b.bxdfs[i] & flags) && (num += 1)
+    bxdfs = b.bxdfs
+    Base.Cartesian.@nexprs 8 i -> begin
+        if i <= bxdfs.last && (bxdfs[i] & flags)
+            num += 1
+        end
     end
-    num
+    return num
 end

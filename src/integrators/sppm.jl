@@ -215,7 +215,7 @@ function _generate_visible_sppm_points!(
                 end
                 # Process SPPM camera ray intersection.
                 # Compute BSDF at SPPM camera ray intersection.
-                bsdf = compute_scattering!(surface_interaction, ray, true)
+                bsdf = compute_scattering!(pool, surface_interaction, ray, true)
                 if bsdf ≡ nothing
                     ray = spawn_ray(surface_interaction, ray.d)
                     continue
@@ -403,7 +403,7 @@ function _trace_photons!(
             end
             # Sample new photon direction.
             # Compute BSDF at photon intersection point.
-            compute_scattering!(interaction, photon_ray, true, Importance)
+            compute_scattering!(pool, interaction, photon_ray, true, Importance)
             if interaction.bsdf ≡ nothing
                 photon_ray = spawn_ray(interaction, photon_ray.d)
                 continue

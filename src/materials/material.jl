@@ -1,94 +1,68 @@
-struct MatteMaterial <: Material
-    """
-    Spectral diffuse reflection value.
-    """
-    Kd::Texture  # TODO check that texture is spectral
-    """
-    Scalar roughness.
-    """
-    σ::Texture  # TODO check that texture is scalar
-    # TODO bump map
+MATTE_MATERIAL = UInt8(1)
+
+function MatteMaterial(
+        Kd::Texture, σ::Texture,
+    )
+    return UberMaterial(MATTE_MATERIAL; Kd=Kd, σ=σ)
 end
 
 """
 Compute scattering function.
 """
-function (m::MatteMaterial)(
-    si::SurfaceInteraction, ::Bool, ::Type{T},
-) where T<:TransportMode
+function matte_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
-    bsdf = BSDF(si)
+    bsdf = BSDF(pool, si)
     r = clamp(m.Kd(si))
     is_black(r) && return
-
     σ = clamp(m.σ(si), 0f0, 90f0)
+    bsdfs = bsdf.bxdfs
     if σ ≈ 0f0
-        add!(bsdf, LambertianReflection(r))
+        push!(bsdfs, LambertianReflection(r))
     else
-        add!(bsdf, OrenNayar(r, σ))
+        push!(bsdfs, OrenNayar(r, σ))
     end
     return bsdf
 end
 
+const MIRROR_MATERIAL = UInt8(2)
 
-struct MirrorMaterial <: Material
-    Kr::Texture
-    # TODO bump map
+function MirrorMaterial(Kr::Texture)
+    return UberMaterial(MIRROR_MATERIAL; Kr=Kr)
 end
 
-function (m::MirrorMaterial)(
-    si::SurfaceInteraction, ::Bool, ::Type{T},
-) where T<:TransportMode
-    bsdf = BSDF(si)
+function mirror_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
+    bsdf = BSDF(pool, si)
     r = clamp(m.Kr(si))
     is_black(r) && return
-    add!(bsdf, SpecularReflection(r, FresnelNoOp()))
+    push!(bsdf.bxdfs, SpecularReflection(r, FresnelNoOp()))
     return bsdf
 end
 
+const GLASS_MATERIAL = UInt8(3)
 
-struct GlassMaterial <: Material
-    """
-    Spectrum texture.
-    """
-    Kr::Texture
-    """
-    Spectrum texture.
-    """
-    Kt::Texture
-    """
-    Float texture.
-    """
-    u_roughness::Texture
-    """
-    Float texture.
-    """
-    v_roughness::Texture
-    """
-    Float texture.
-    """
-    index::Texture
-
-    remap_roughness::Bool
-    # TODO bump mapping
+function GlassMaterial(
+        Kr::Texture, Kt::Texture, u_roughness::Texture, v_roughness::Texture, index::Texture,
+        remap_roughness::Bool,
+    )
+    return UberMaterial(GLASS_MATERIAL; Kr=Kr, Kt=Kt, u_roughness=u_roughness, v_roughness=v_roughness, index=index, remap_roughness=remap_roughness)
 end
 
-function (g::GlassMaterial)(
-    si::SurfaceInteraction, allow_multiple_lobes::Bool, ::Type{T},
-) where T<:TransportMode
+function glass_material(pool, g::UberMaterial, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
+
     η = g.index(si)
     u_roughness = g.u_roughness(si)
     v_roughness = g.v_roughness(si)
 
-    bsdf = BSDF(si, η)
+    bsdf = BSDF(pool, si, η)
+    bsdfs = bsdf.bxdfs
     r = clamp(g.Kr(si))
     t = clamp(g.Kt(si))
     is_black(r) && is_black(t) && return
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
     if is_specular && allow_multiple_lobes
-        add!(bsdf, FresnelSpecular(r, t, 1f0, η, T))
+        push!(bsdfs, FresnelSpecular(r, t, 1.0f0, η, transport))
         return
     end
 
@@ -103,45 +77,38 @@ function (g::GlassMaterial)(
     if !is_black(r)
         fresnel = FresnelDielectric(1f0, η)
         if is_specular
-            add!(bsdf, SpecularReflection(r, fresnel))
+            push!(bsdfs, SpecularReflection(r, fresnel))
         else
-            add!(bsdf, MicrofacetReflection(r, distribution, fresnel, T))
+            push!(bsdfs, MicrofacetReflection(r, distribution, fresnel, transport))
         end
     end
     if !is_black(t)
         if is_specular
-            add!(bsdf, SpecularTransmission(t, 1f0, η, T))
+            push!(bsdfs, SpecularTransmission(t, 1.0f0, η, transport))
         else
-            add!(bsdf, MicrofacetTransmission(t, distribution, 1f0, η, T))
+            push!(bsdfs, MicrofacetTransmission(t, distribution, 1.0f0, η, transport))
         end
     end
     return bsdf
 end
 
+const PLASTIC_MATERIAL = UInt8(4)
 
-struct PlasticMaterial <: Material
-    """
-    Diffuse component. Spectrum texture.
-    """
-    Kd::Texture
-    """
-    Specular component. Spectrum texture.
-    """
-    Ks::Texture
-    """
-    Float texture
-    """
-    roughness::Texture
-    remap_roughness::Bool
+function PlasticMaterial(
+        Kd::Texture, Ks::Texture, roughness::Texture, remap_roughness::Bool,
+    )
+    return UberMaterial(PLASTIC_MATERIAL; Kd=Kd, Ks=Ks, roughness=roughness, remap_roughness=remap_roughness)
 end
 
-function (p::PlasticMaterial)(
-    si::SurfaceInteraction, ::Bool, ::Type{T},
-) where T<:TransportMode
-    bsdf = BSDF(si)
+function plastic_material(pool, p::UberMaterial,
+        si::SurfaceInteraction, ::Bool, transport,
+    )
+
+    bsdf = BSDF(pool, si)
+    bsdfs = bsdf.bxdfs
     # Initialize diffuse componen of plastic material.
     kd = clamp(p.Kd(si))
-    !is_black(kd) && add!(bsdf, LambertianReflection(kd))
+    !is_black(kd) && push!(bsdfs, LambertianReflection(kd))
     # Initialize specular component.
     ks = clamp(p.Ks(si))
     is_black(ks) && return
@@ -150,6 +117,6 @@ function (p::PlasticMaterial)(
     rough = p.roughness(si)
     p.remap_roughness && (rough = roughness_to_α(rough))
     distribution = TrowbridgeReitzDistribution(rough, rough)
-    add!(bsdf, MicrofacetReflection(ks, distribution, fresnel, T))
+    push!(bsdfs, MicrofacetReflection(ks, distribution, fresnel, transport))
     return bsdf
 end

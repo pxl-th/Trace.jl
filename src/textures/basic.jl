@@ -9,6 +9,8 @@ function (c::ConstantTexture{T})(si::SurfaceInteraction)::T where T<:TextureType
     c.value
 end
 
+Texture() = ConstantTexture(0f0)
+
 struct ScaleTexture{T<:Texture} <: Texture
     texture_1::T
     texture_2::T
