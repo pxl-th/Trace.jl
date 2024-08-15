@@ -1,4 +1,4 @@
-mutable struct Interaction
+struct _Interaction
     """
     Intersection point in world coordinates.
     """
@@ -18,7 +18,9 @@ mutable struct Interaction
     n::Normal3f
 end
 
-mutable struct ShadingInteraction
+const Interaction = MutableRef{_Interaction}
+
+mutable struct _ShadingInteraction
     n::Normal3f
     ∂p∂u::Vec3f
     ∂p∂v::Vec3f
@@ -26,7 +28,9 @@ mutable struct ShadingInteraction
     ∂n∂v::Normal3f
 end
 
-mutable struct SurfaceInteraction{S<:AbstractShape}
+const ShadingInteraction = MutableRef{_ShadingInteraction}
+
+struct _SurfaceInteraction
     core::Interaction
     shading::ShadingInteraction
     uv::Point2f
@@ -36,10 +40,6 @@ mutable struct SurfaceInteraction{S<:AbstractShape}
     ∂n∂u::Normal3f
     ∂n∂v::Normal3f
 
-    shape::Maybe{S}
-    primitive::Maybe{P} where P<:Primitive
-    bsdf::Any # TODO ::Maybe{BSDF}
-
     ∂u∂x::Float32
     ∂u∂y::Float32
     ∂v∂x::Float32
@@ -48,31 +48,34 @@ mutable struct SurfaceInteraction{S<:AbstractShape}
     ∂p∂y::Vec3f
 end
 
+const SurfaceInteraction = MutableRef{_SurfaceInteraction}
+
+
 function SurfaceInteraction(
-    p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
-    ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f,
-    shape::Maybe{S} = nothing, primitive::Maybe{P} = nothing,
-) where S<:AbstractShape where P<:Primitive
+        pool, p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
+        ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f, shape
+    )
+
     n = normalize((∂p∂u × ∂p∂v))
-    if !(shape isa Nothing) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
+
+    if isnothing(shape) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
         n *= -1
     end
 
-    core = Interaction(p, time, wo, n)
-    shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
-    SurfaceInteraction{typeof(shape)}(
-        core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
-        shape, primitive, nothing,
-        0f0, 0f0, 0f0, 0f0, Vec3f(0f0), Vec3f(0f0),
+    core = allocate(pool, Interaction, (p, time, wo, n))
+    shading = allocate(pool, ShadingInteraction, (n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v))
+    return allocate(pool, SurfaceInteraction,
+        (core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+        0f0, 0f0, 0f0, 0f0, Vec3f(0f0), Vec3f(0f0))
     )
 end
 
 function set_shading_geometry!(
-    i::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
+    shape, i::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
     ∂n∂u::Normal3f, ∂n∂v::Normal3f, orientation_is_authoritative::Bool,
 )
     i.shading.n = normalize(tangent × bitangent)
-    if !(i.shape isa Nothing) && (i.shape.core.reverse_orientation ⊻ i.shape.core.transform_swaps_handedness)
+    if !isnothing(shape) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
         i.shading.n *= -1
     end
     if orientation_is_authoritative
@@ -94,6 +97,7 @@ Compute partial derivatives needed for computing sampling rates
 for things like texture antialiasing.
 """
 function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
+
     if !ray.has_differentials
         si.∂u∂x = si.∂v∂x = 0f0
         si.∂u∂y = si.∂v∂y = 0f0
@@ -139,11 +143,11 @@ surface properties and then initializing a representation of the BSDF
 at the point.
 """
 function compute_scattering!(
-    si::SurfaceInteraction, ray::RayDifferentials,
+    primitive, si::SurfaceInteraction, ray::RayDifferentials,
     allow_multiple_lobes::Bool = false, ::Type{T} = Radiance,
 ) where T<:TransportMode
     compute_differentials!(si, ray)
-    compute_scattering!(si.primitive, si, allow_multiple_lobes, T)
+    return compute_scattering!(primitive, si, allow_multiple_lobes, T)
 end
 
 @inline function le(::SurfaceInteraction, ::Vec3f)::RGBSpectrum
@@ -151,31 +155,31 @@ end
     RGBSpectrum(0f0)
 end
 
-function (t::Transformation)(sc::Interaction)
-    Interaction(
-        t(sc.p),
-        sc.time,
-        normalize(t(sc.wo)),
-        normalize(t(sc.n)),
-    )
+function apply!(t::Transformation, si::Interaction)
+    si.p = t(si.p)
+    si.wo = normalize(t(si.wo))
+    si.n = normalize(t(si.n))
+    return si
 end
-function (t::Transformation)(sh::ShadingInteraction)
-    ShadingInteraction(
-        normalize(t(sh.n)),
-        t(sh.∂p∂u), t(sh.∂p∂v),
-        t(sh.∂n∂u), t(sh.∂n∂v),
-    )
+
+function apply!(t::Transformation, si::ShadingInteraction)
+    si.n = normalize(t(si.n))
+    si.∂p∂u = t(si.∂p∂u)
+    si.∂p∂v = t(si.∂p∂v)
+    si.∂n∂u = t(si.∂n∂u)
+    si.∂n∂v = t(si.∂n∂v)
+    return si
 end
-function (t::Transformation)(si::SurfaceInteraction)
+
+function apply!(t::Transformation, si::SurfaceInteraction)
     # TODO compute shading normal separately
-    core = t(si.core)
-    shading = t(si.shading)
-    SurfaceInteraction(
-        core, shading, si.uv,
-        t(si.∂p∂u), t(si.∂p∂v),
-        t(si.∂n∂u), t(si.∂n∂v),
-        si.shape, si.primitive, si.bsdf,
-        si.∂u∂x, si.∂u∂y, si.∂v∂x, si.∂v∂y,
-        t(si.∂p∂x), t(si.∂p∂y),
-    )
+    apply!(t, si.core)
+    apply!(t, si.shading)
+    si.∂p∂u = t(si.∂p∂u)
+    si.∂p∂v = t(si.∂p∂v)
+    si.∂n∂u = t(si.∂n∂u)
+    si.∂n∂v = t(si.∂n∂v)
+    si.∂p∂x = t(si.∂p∂x)
+    si.∂p∂y = t(si.∂p∂y)
+    return si
 end

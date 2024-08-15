@@ -70,7 +70,7 @@ Since it is an orthonormal matrix, its inverse is its transpose.
 end
 # TODO benchmark
 @inline function local_to_world(b::BSDF, v::Vec3f)
-    Mat3f0(b.ss..., b.ts..., b.ns...) * v
+    Mat3f(b.ss..., b.ts..., b.ns...) * v
 end
 
 """

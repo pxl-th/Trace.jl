@@ -47,25 +47,25 @@ due to that light, assuming there are no occluding objects between them.
         shadow ray that must be traced to verify that
         there are no occluding objects between the light and reference point.
 """
-function sample_li(p::PointLight, ref::Interaction, ::Point2f)
+function sample_li(pool, p::PointLight, ref::Interaction, ::Point2f)
     wi = normalize(Vec3f(p.position - ref.p))
     pdf = 1f0
     visibility = VisibilityTester(
-        ref, Interaction(p.position, ref.time, Vec3f(0f0), Normal3f(0f0)),
+        pool, ref, allocate(pool, Interaction, (p.position, ref.time, Vec3f(0f0), Normal3f(0f0))),
     )
     radiance = p.i / distance_squared(p.position, ref.p)
     radiance, wi, pdf, visibility
 end
 
 function sample_le(
-    p::PointLight, u1::Point2f, ::Point2f, ::Float32,
+    pool, p::PointLight, u1::Point2f, ::Point2f, ::Float32,
 )::Tuple{RGBSpectrum,Ray,Normal3f,Float32,Float32}
-    ray = Ray(o = p.position, d = uniform_sample_sphere(u1))
+    ray = default(pool, Ray; o=p.position, d=uniform_sample_sphere(u1))
     @real_assert norm(ray.d) ≈ 1f0
     light_normal = Normal3f(ray.d)
     pdf_pos = 1f0
     pdf_dir = uniform_sphere_pdf()
-    p.i, ray, light_normal, pdf_pos, pdf_dir
+    return p.i, ray, light_normal, pdf_pos, pdf_dir
 end
 
 """

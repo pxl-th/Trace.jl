@@ -34,6 +34,8 @@ end
 
 # GeometryBasics.@fixed_vector Normal StaticVector
 include("typeNormal3f.jl")
+include("mempool.jl")
+
 
 const Maybe{T} = Union{T,Nothing}
 
@@ -174,8 +176,8 @@ include("transformations.jl")
 include("spectrum.jl")
 include("surface_interaction.jl")
 
-struct Scene{P<:Primitive}
-    lights::Vector{L} where L<:Light
+struct Scene{P<:Primitive, L<:NTuple{N, Light} where N}
+    lights::L
     aggregate::P
     bound::Bounds3
 
@@ -183,32 +185,35 @@ struct Scene{P<:Primitive}
         lights::Vector{L}, aggregate::P,
     ) where L<:Light where P<:Primitive
         # TODO preprocess for lights
-        new{P}(lights, aggregate, world_bound(aggregate))
+        ltuple = Tuple(lights)
+        new{P,typeof(ltuple)}(ltuple, aggregate, world_bound(aggregate))
     end
 end
 
-@inline function intersect!(scene::Scene, ray::Union{Ray,RayDifferentials})
-    intersect!(scene.aggregate, ray)
+@inline function intersect!(pool, scene::Scene, ray::Union{Ray,RayDifferentials})
+    intersect!(pool, scene.aggregate, ray)
 end
-@inline function intersect_p(scene::Scene, ray::Union{Ray,RayDifferentials})
-    intersect_p(scene.aggregate, ray)
+@inline function intersect_p(pool, scene::Scene, ray::Union{Ray,RayDifferentials})
+    intersect_p(pool, scene.aggregate, ray)
 end
 
 @inline function spawn_ray(
-    p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
+    pool, p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
 )::Ray
     direction = p1.p - p0.p
     origin = p0.p .+ δ .* direction
-    Ray(o = origin, d = direction, time = p0.time)
+    return allocate(pool, Ray, (origin, direction, Inf32, p0.time))
 end
-@inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
-    spawn_ray(p0.core, p1)
+
+@inline function spawn_ray(pool, p0::SurfaceInteraction, p1::Interaction)::Ray
+    spawn_ray(pool, p0.core, p1)
 end
+
 @inline function spawn_ray(
-    si::SurfaceInteraction, direction::Vec3f, δ::Float32 = 1f-6,
-)::Ray
+        pool, si::SurfaceInteraction, direction::Vec3f, δ::Float32 = 1f-6,
+    )::Ray
     origin = si.core.p .+ δ .* direction
-    Ray(o = origin, d = direction, time = si.core.time)
+    return default(pool, Ray; o=origin, d=direction, time=si.core.time)
 end
 
 include("shapes/Shape.jl")

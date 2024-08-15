@@ -148,7 +148,7 @@ function bounding_sphere(b::Bounds3)::Tuple{Point3f,Float32}
     center, radius
 end
 
-function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool,Float32,Float32}
+function intersect(b::Bounds3, ray::MutableRef{<:AbstractRay})::Tuple{Bool,Float32,Float32}
     t0, t1 = 0f0, ray.t_max
     @inbounds for i in 1:3
         # Update interval for i-th bbox slab.
@@ -178,7 +178,7 @@ end
 dir_is_negative: 1 -- false, 2 -- true
 """
 function intersect_p(
-    b::Bounds3, ray::AbstractRay,
+    pool, b::Bounds3, ray::MutableRef{<:AbstractRay},
     inv_dir::Vec3f, dir_is_negative::Point3{UInt8},
 )::Bool
     tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]

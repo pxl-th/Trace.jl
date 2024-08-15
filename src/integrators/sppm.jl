@@ -215,8 +215,8 @@ function _generate_visible_sppm_points!(
                 end
                 # Process SPPM camera ray intersection.
                 # Compute BSDF at SPPM camera ray intersection.
-                compute_scattering!(surface_interaction, ray, true)
-                if surface_interaction.bsdf ≡ nothing
+                bsdf = compute_scattering!(surface_interaction, ray, true)
+                if bsdf ≡ nothing
                     ray = spawn_ray(surface_interaction, ray.d)
                     continue
                 end
@@ -230,16 +230,16 @@ function _generate_visible_sppm_points!(
                     surface_interaction, scene, tile_sampler,
                 )
                 # Possibly create visible point and end camera path.
-                is_diffuse = num_components(surface_interaction.bsdf,
+                is_diffuse = num_components(bsdf,
                     BSDF_DIFFUSE | BSDF_REFLECTION | BSDF_TRANSMISSION,
                 ) > 0
-                is_glossy = num_components(surface_interaction.bsdf,
+                is_glossy = num_components(bsdf,
                     BSDF_GLOSSY | BSDF_REFLECTION | BSDF_TRANSMISSION,
                 ) > 0
                 if is_diffuse || (is_glossy && depth == i.max_depth)
                     pixel.vp = VisiblePoint(
                         p = surface_interaction.core.p, wo = wo,
-                        bsdf = surface_interaction.bsdf, β = β,
+                        bsdf = bsdf, β = β,
                     )
                     break
                 end
@@ -247,7 +247,7 @@ function _generate_visible_sppm_points!(
                 depth == i.max_depth && (depth += 1; continue)
                 # Spawn ray from SPPM camera path vertex.
                 wi, f, pdf, sampled_type = sample_f(
-                    surface_interaction.bsdf, wo,
+                    bsdf, wo,
                     get_2d(tile_sampler), BSDF_ALL,
                 )
                 (pdf ≈ 0f0 || is_black(f)) && break

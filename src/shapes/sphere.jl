@@ -123,29 +123,30 @@ function ∂n(
 end
 
 function intersect(
-    s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
-)
+    pool, s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+)::Tuple{Bool,Float32,SurfaceInteraction}
     # Transform ray to object space.
-    or = s.core.world_to_object(ray)
+    sf = SurfaceInteraction()
+    or = apply!(s.core.world_to_object, copy(pool, ray))
     # Substitute ray into sphere equation.
     a = norm(or.d)^2
     b = 2 * or.o ⋅ or.d
     c = norm(or.o)^2 - s.radius^2
     # Solve quadratic equation for t.
     exists, t0, t1 = solve_quadratic(a, b, c)
-    !exists && return false, nothing, nothing
-    (t0 > or.t_max || t1 < 0f0) && return false, nothing, nothing
+    !exists && return false, 0.0f0, sf
+    (t0 > or.t_max || t1 < 0.0f0) && return false, 0.0f0, sf
     t0 < 0 && (t0 = t1)
 
     shape_hit = t0
-    hit_point = refine_intersection(or(t0), s)
+    hit_point = refine_intersection(apply(or, t0), s)
     ϕ = compute_ϕ(hit_point)
     # Test sphere intersection against clipping parameters.
     if test_clipping(s, hit_point, ϕ)
         shape_hit = t1
-        hit_point = refine_intersection(or(t1), s)
+        hit_point = refine_intersection(apply(or, t1), s)
         ϕ = compute_ϕ(hit_point)
-        test_clipping(s, hit_point, ϕ) && return false, nothing, nothing
+        test_clipping(s, hit_point, ϕ) && return false, 0.0f0, sf
     end
     # Find parametric representation of hit point.
     u = ϕ / s.ϕ_max
@@ -155,19 +156,20 @@ function intersect(
     sin_ϕ, cos_ϕ = precompute_ϕ(hit_point)
     ∂p∂u, ∂p∂v = ∂p(s, hit_point, θ, sin_ϕ, cos_ϕ)
     ∂n∂u, ∂n∂v = ∂n(s, hit_point, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
-
-    interaction = s.core.object_to_world(SurfaceInteraction(
+    sf = SurfaceInteraction(pool,
         hit_point, ray.time, -ray.d, Point2f(u, v),
         ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, s,
-    ))
-    true, shape_hit, interaction
+    )
+    apply!(s.core.object_to_world, sf)
+    true, shape_hit, sf
 end
 
 function intersect_p(
-    s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
-)::Bool
+        pool, s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool=false,
+    )::Bool
+
     # Transform ray to object space.
-    or = s.core.world_to_object(ray)
+    or = apply!(s.core.world_to_object, copy(pool, ray))
     # Substitute ray into sphere equation.
     a = norm(or.d)^2
     b = 2f0 * or.o ⋅ or.d
@@ -178,12 +180,11 @@ function intersect_p(
     (t0 > or.t_max || t1 < 0f0) && return false
     t0 < 0 && (t0 = t1)
 
-    hit_point = refine_intersection(or(t0), s)
+    hit_point = refine_intersection(apply(or, t0), s)
     ϕ = compute_ϕ(hit_point)
     # Test sphere intersection against clipping parameters.
     if test_clipping(s, hit_point, ϕ)
-        shape_hit = t1
-        hit_point = refine_intersection(or(t1), s)
+        hit_point = refine_intersection(apply(or, t1), s)
         ϕ = compute_ϕ(hit_point)
         test_clipping(s, hit_point, ϕ) && return false
     end

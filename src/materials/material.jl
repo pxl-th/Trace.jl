@@ -18,16 +18,17 @@ function (m::MatteMaterial)(
 ) where T<:TransportMode
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
-    si.bsdf = BSDF(si)
+    bsdf = BSDF(si)
     r = clamp(m.Kd(si))
     is_black(r) && return
 
     σ = clamp(m.σ(si), 0f0, 90f0)
     if σ ≈ 0f0
-        add!(si.bsdf, LambertianReflection(r))
+        add!(bsdf, LambertianReflection(r))
     else
-        add!(si.bsdf, OrenNayar(r, σ))
+        add!(bsdf, OrenNayar(r, σ))
     end
+    return bsdf
 end
 
 
@@ -39,10 +40,11 @@ end
 function (m::MirrorMaterial)(
     si::SurfaceInteraction, ::Bool, ::Type{T},
 ) where T<:TransportMode
-    si.bsdf = BSDF(si)
+    bsdf = BSDF(si)
     r = clamp(m.Kr(si))
     is_black(r) && return
-    add!(si.bsdf, SpecularReflection(r, FresnelNoOp()))
+    add!(bsdf, SpecularReflection(r, FresnelNoOp()))
+    return bsdf
 end
 
 
@@ -79,14 +81,14 @@ function (g::GlassMaterial)(
     u_roughness = g.u_roughness(si)
     v_roughness = g.v_roughness(si)
 
-    si.bsdf = BSDF(si, η)
+    bsdf = BSDF(si, η)
     r = clamp(g.Kr(si))
     t = clamp(g.Kt(si))
     is_black(r) && is_black(t) && return
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
     if is_specular && allow_multiple_lobes
-        add!(si.bsdf, FresnelSpecular(r, t, 1f0, η, T))
+        add!(bsdf, FresnelSpecular(r, t, 1f0, η, T))
         return
     end
 
@@ -101,18 +103,19 @@ function (g::GlassMaterial)(
     if !is_black(r)
         fresnel = FresnelDielectric(1f0, η)
         if is_specular
-            add!(si.bsdf, SpecularReflection(r, fresnel))
+            add!(bsdf, SpecularReflection(r, fresnel))
         else
-            add!(si.bsdf, MicrofacetReflection(r, distribution, fresnel, T))
+            add!(bsdf, MicrofacetReflection(r, distribution, fresnel, T))
         end
     end
     if !is_black(t)
         if is_specular
-            add!(si.bsdf, SpecularTransmission(t, 1f0, η, T))
+            add!(bsdf, SpecularTransmission(t, 1f0, η, T))
         else
-            add!(si.bsdf, MicrofacetTransmission(t, distribution, 1f0, η, T))
+            add!(bsdf, MicrofacetTransmission(t, distribution, 1f0, η, T))
         end
     end
+    return bsdf
 end
 
 
@@ -135,10 +138,10 @@ end
 function (p::PlasticMaterial)(
     si::SurfaceInteraction, ::Bool, ::Type{T},
 ) where T<:TransportMode
-    si.bsdf = BSDF(si)
+    bsdf = BSDF(si)
     # Initialize diffuse componen of plastic material.
     kd = clamp(p.Kd(si))
-    !is_black(kd) && add!(si.bsdf, LambertianReflection(kd))
+    !is_black(kd) && add!(bsdf, LambertianReflection(kd))
     # Initialize specular component.
     ks = clamp(p.Ks(si))
     is_black(ks) && return
@@ -147,5 +150,6 @@ function (p::PlasticMaterial)(
     rough = p.roughness(si)
     p.remap_roughness && (rough = roughness_to_α(rough))
     distribution = TrowbridgeReitzDistribution(rough, rough)
-    add!(si.bsdf, MicrofacetReflection(ks, distribution, fresnel, T))
+    add!(bsdf, MicrofacetReflection(ks, distribution, fresnel, T))
+    return bsdf
 end
