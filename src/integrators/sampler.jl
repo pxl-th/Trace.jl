@@ -75,7 +75,7 @@ function li(
     wo = core.wo
     # Compute scattering functions for surface interaction.
     bsdf = compute_scattering!(pool, primitive, si, ray)
-    if bsdf isa Nothing
+    if bsdf.bxdfs.last == 0
         return li(
             pool, spawn_ray(pool, si, ray.d),
             scene, i.sampler, depth,

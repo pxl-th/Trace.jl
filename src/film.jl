@@ -24,6 +24,8 @@ struct Film{Pixels<:AbstractMatrix{Pixel}}
     """
     filter_table::Matrix{Float32}
     scale::Float32
+    framebuffer::Matrix{RGB{Float32}}
+
     """
     - resolution: full resolution of the image in pixels.
     - crop_bounds: subset of the image to render in [0, 1] range.
@@ -44,16 +46,20 @@ struct Film{Pixels<:AbstractMatrix{Pixel}}
         )
         crop_resolution = Int32.(inclusive_sides(crop_bounds))
         # Allocate film image storage.
-        pixels = StructArray(fill(Pixel(), crop_resolution[end], crop_resolution[end]))
+        pixels = StructArray{Pixel}(undef, crop_resolution[end], crop_resolution[end])
+        pixels.xyz .= (Point3f(0),)
+        pixels.filter_weight_sum .= 0f0
+        pixels.splat_xyz .= (Point3f(0),)
         # Precompute filter weight table.
         r = filter.radius ./ filter_table_width
         for y in 0:filter_table_width-1, x in 0:filter_table_width-1
             p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
             filter_table[y+1, x+1] = filter(p)
         end
+        framebuffer = Matrix{RGB{Float32}}(undef, size(pixels)...)
         new{typeof(pixels)}(
             resolution, crop_bounds, diagonal * 0.001f0, filter, filename,
-            pixels, filter_table_width, filter_table, scale,
+            pixels, filter_table_width, filter_table, scale, framebuffer
         )
     end
 end
@@ -98,11 +104,13 @@ struct FilmTile{Pixels<:AbstractMatrix{<:FilmTilePixel}}
     pixels::Pixels
 
     function FilmTile(
-        bounds::Bounds2, filter_radius::Point2f,
-        filter_table::Matrix{Float32}, filter_table_width::Int32,
-    )
+            bounds::Bounds2, filter_radius::Point2f,
+            filter_table::Matrix{Float32}, filter_table_width::Int32,
+        )
         tile_res = (Int32.(inclusive_sides(bounds)))
-        pixels = StructArray(fill(FilmTilePixel(), (tile_res[2], tile_res[1])))
+        pixels = StructArray{FilmTilePixel{RGBSpectrum}}(undef, tile_res[2], tile_res[1])
+        pixels.contrib_sum .= (RGBSpectrum(),)
+        pixels.filter_weight_sum .= 0.0f0
         new{typeof(pixels)}(
             bounds, filter_radius, 1f0 ./ filter_radius,
             filter_table, filter_table_width,
@@ -129,14 +137,15 @@ Add sample contribution to the film tile.
     And is relative to the film, not the film tile.
 """
 function add_sample!(
-    t::FilmTile, point::Point2f, spectrum::S,
-    sample_weight::Float32 = 1f0,
-) where S<:Spectrum
+        t::FilmTile, point::Point2f, spectrum::S,
+        sample_weight::Float32 = 1f0,
+    ) where S<:Spectrum
+
     # Compute sample's raster bounds.
     discrete_point = point .- 0.5f0
     p0 = ceil.(Int32, discrete_point .- t.filter_radius)
     p1 = floor.(Int32, discrete_point .+ t.filter_radius) .+ 1
-    p0 = Int32.(max.(p0, max.(t.bounds.p_min, Point2(Int32(1)))))
+    p0 = Int32.(max.(p0, max.(t.bounds.p_min, Point2{Int32}(1))))
     p1 = Int32.(min.(p1, t.bounds.p_max))
     # Precompute x & y filter offsets.
     offsets_x = Vector{Int32}(undef, p1[1] - p0[1] + 1)

@@ -68,18 +68,18 @@ function is_degenerate(vs::AbstractVector{Point3f})::Bool
 end
 
 function vertices(t::Triangle)
-    @SVector Point3f[t.mesh.vertices[t.mesh.indices[t.i+j]] for j in 0:2]
+    @inbounds @SVector Point3f[t.mesh.vertices[t.mesh.indices[t.i+j]] for j in 0:2]
 end
 function normals(t::Triangle)
-    @SVector Normal3f[t.mesh.normals[t.mesh.indices[t.i+j]] for j in 0:2]
+    @inbounds @SVector Normal3f[t.mesh.normals[t.mesh.indices[t.i+j]] for j in 0:2]
 end
 function tangents(t::Triangle)
-    @SVector Vec3f[t.mesh.tangents[t.mesh.indices[t.i+j]] for j in 0:2]
+    @inbounds @SVector Vec3f[t.mesh.tangents[t.mesh.indices[t.i+j]] for j in 0:2]
 end
 function uvs(t::Triangle)
     t.mesh.uv isa Nothing &&
         return @SVector [Point2f(0), Point2f(1, 0), Point2f(1, 1)]
-    @SVector [t.mesh.uv[t.i+j] for j in 0:2]
+    @inbounds @SVector [t.mesh.uv[t.i+j] for j in 0:2]
 end
 
 function _edge_function(vs)
@@ -188,8 +188,9 @@ function _init_triangle_shading_geometry!(
 end
 
 function intersect(
-    pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
-)::Tuple{Bool,Float32,SurfaceInteraction}
+        pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+    )::Tuple{Bool,Float32,SurfaceInteraction}
+
     vs = vertices(t)
     sf = SurfaceInteraction()
     is_degenerate(vs) && return false, 0.0f0, sf

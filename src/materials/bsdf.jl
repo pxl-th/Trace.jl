@@ -11,7 +11,7 @@ struct BXDFVector{S<:Spectrum}
 end
 
 Base.Base.@propagate_inbounds function Base.getindex(b::BXDFVector, i::Int)
-    i > b.last && error("Out of bounds $(i)")
+    # i > b.last && error("Out of bounds $(i)")
     return getfield(b, i)
 end
 
@@ -54,6 +54,7 @@ struct BSDF{S}
 end
 
 BSDF() = BSDF{RGBSpectrum}(0f0, Normal3f(0f0), Normal3f(0f0), Vec3f(0f0), Vec3f(0f0), BXDFVector{RGBSpectrum}())
+
 
 function BSDF(si::SurfaceInteraction, sbdfs::Vararg{UberBxDF{S}, N}) where {S<:Spectrum, N}
     BSDF(si, 1f0, sbdfs...)

@@ -44,27 +44,25 @@ function Threads.atomic_add!(a::AtomicVec3f, s::RGBSpectrum)
     Threads.atomic_add!(a.z, s.c[3])
 end
 
-function Base.convert(::Type{Point3f}, a::AtomicVec3f)
-    Point3f(a.x[], a.y[], a.z[])
-end
-
-mutable struct VisiblePoint
+struct VisiblePoint
     p::Point3f
     wo::Vec3f
-    bsdf::Maybe{BSDF}
+    bsdf::BSDF{RGBSpectrum}
     β::RGBSpectrum
 
     function VisiblePoint(;
-        p::Point3f = Point3f(0f0), wo::Vec3f = Vec3f(0f0),
-        bsdf::Maybe{BSDF} = nothing, β::RGBSpectrum = RGBSpectrum(0f0),
-    )
+            p::Point3f = Point3f(0f0), wo::Vec3f = Vec3f(0f0),
+            bsdf::BSDF=BSDF(), β::RGBSpectrum=RGBSpectrum(0.0f0),
+        )
         new(p, wo, bsdf, β)
     end
 end
 
-mutable struct SPPMPixel
+struct SPPMPixel
     Ld::RGBSpectrum
-    ϕ::AtomicVec3f
+    ϕ_x::Float32 # Atomic!!
+    ϕ_y::Float32 # Atomic!!
+    ϕ_z::Float32 # Atomic!!
     """
     Maintains the sum of products of photons with BSDF values.
     Aka. sum of ϕ from all of the iterations, weighted by radius ratio.
@@ -78,30 +76,17 @@ mutable struct SPPMPixel
     """
     radius::Float32
     """Number of photons that contributed during the ith iteration."""
-    M::Threads.Atomic{Int64}
+    M::Int64 # Atomic!!
     """Total number of photons that contributed up to the ith iteration."""
     N::Float64
-    vp::VisiblePoint
 
     function SPPMPixel(;
-        Ld::RGBSpectrum = RGBSpectrum(0f0),
-        ϕ::AtomicVec3f = AtomicVec3f(0f0),
-        τ::RGBSpectrum = RGBSpectrum(0f0),
-        radius::Float32 = 0f0, M::Int64 = 0, N::Int64 = 0,
-        vp::VisiblePoint = VisiblePoint(),
-    )
-        new(Ld, ϕ, τ, radius, Threads.Atomic{Int64}(M), N, vp)
-    end
-end
-
-mutable struct SPPMPixelListNode
-    pixel::SPPMPixel
-    next::Maybe{SPPMPixelListNode}
-
-    function SPPMPixelListNode(
-        pixel::SPPMPixel, next::Maybe{SPPMPixelListNode} = nothing,
-    )
-        new(pixel, next)
+            Ld::RGBSpectrum = RGBSpectrum(0f0),
+            ϕ::Vec3f = Vec3f(0f0),
+            τ::RGBSpectrum = RGBSpectrum(0f0),
+            radius::Float32 = 0f0, M::Int64 = 0, N::Int64 = 0,
+        )
+        new(Ld, ϕ..., τ, radius, M, N)
     end
 end
 
@@ -130,20 +115,17 @@ struct SPPMIntegrator{C<:Camera} <: Integrator
     end
 end
 
-
-
-
 function (i::SPPMIntegrator)(scene::Scene)
 
     pixel_bounds = get_film(i.camera).crop_bounds
 
     b_sides = inclusive_sides(pixel_bounds)
     n_pixels = UInt64(b_sides[1] * b_sides[2])
-    pixels = [
-        SPPMPixel(radius = i.initial_search_radius)
-        for y in 1:b_sides[2], x in 1:b_sides[1]
-    ]
-    grid = Maybe{SPPMPixelListNode}[nothing for _ in 1:n_pixels]
+    pixels = StructArray{SPPMPixel}(undef, Int(b_sides[2]), Int(b_sides[1]))
+    pixels.radius .= i.initial_search_radius
+    visible_points = StructArray{VisiblePoint}(undef, Int(b_sides[2]), Int(b_sides[1]))
+
+    grid = [Int[] for _ in 1:n_pixels]
 
     γ = 2f0 / 3f0
     inv_sqrt_spp = Float32(1f0 / sqrt(i.n_iterations))
@@ -157,18 +139,18 @@ function (i::SPPMIntegrator)(scene::Scene)
     mempools = [MemoryPool(round(Int, 100000)) for _ in 1:Threads.maxthreadid()]
     for iteration in 1:i.n_iterations
         _generate_visible_sppm_points!(
-            mempools, i, pixels, scene,
+            mempools, i, pixels, visible_points, scene,
             n_tiles, tile_size, sampler,
             pixel_bounds, inv_sqrt_spp,
         )
         _clean_grid!(grid)
-        grid_bounds, grid_resolution = _populate_grid!(grid, pixels)
+        grid_bounds, grid_resolution = _populate_grid!(grid, pixels, visible_points)
         _trace_photons!(
-            mempools, i, scene, iteration, light_distribution,
+            mempools, i, pixels, visible_points, scene, iteration, light_distribution,
             grid, grid_bounds, grid_resolution,
             n_pixels,
         )
-        _update_pixels!(pixels, γ)
+        _update_pixels!(pixels, visible_points, γ)
         # Periodically store SPPM image in film and save it.
         if iteration % i.write_frequency == 0 || iteration == i.n_iterations
             image = _sppm_to_image(i, pixels, iteration)
@@ -179,7 +161,9 @@ function (i::SPPMIntegrator)(scene::Scene)
 end
 
 function _generate_visible_sppm_points!(
-        mempools, i::SPPMIntegrator, pixels::Matrix{SPPMPixel}, scene::Scene,
+        mempools, i::SPPMIntegrator,
+        pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint},
+        scene::Scene,
         n_tiles::Point2, tile_size::Int64, sampler::S,
         pixel_bounds::Bounds2, inv_sqrt_spp::Float32,
     ) where S<:AbstractSampler
@@ -188,7 +172,7 @@ function _generate_visible_sppm_points!(
     total_tiles = width * height - 1
 
     bar = get_progress_bar(total_tiles, "Camera pass: ")
-
+    Ld = pixels.Ld
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
@@ -198,6 +182,7 @@ function _generate_visible_sppm_points!(
         tb_max = min.(tb_min .+ (tile_size - 1), pixel_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
         pool = mempools[Threads.threadid()]
+
         for pixel_point in tile_bounds
             free_all(pool)
             start_pixel!(tile_sampler, pixel_point)
@@ -211,15 +196,14 @@ function _generate_visible_sppm_points!(
             scale_differentials!(rayd, inv_sqrt_spp)
             # Follow camera ray path until a visible point is created.
             # Get SPPMPixel for current `pixel`.
-            pixel_point = Int64.(pixel_point)
-            pixel = pixels[pixel_point[2], pixel_point[1]]
+            pixel_idx = reverse(Int64.(pixel_point))
             specular_bounce = false
             depth = 1
             while depth ≤ i.max_depth
                 hit, primitive, surface_interaction = intersect!(pool, scene, rayd)
                 if !hit # Accumulate light contributions to the background.
                     for light in scene.lights
-                        pixel.Ld += β * le(light, rayd)
+                        Ld[pixel_idx...] += β * le(light, rayd)
                     end
                     break
                 end
@@ -234,9 +218,9 @@ function _generate_visible_sppm_points!(
                 # SPPM camera-ray intersection.
                 wo = -rayd.d
                 if depth == 1 || specular_bounce
-                    pixel.Ld += β * le(surface_interaction, wo)
+                    Ld[pixel_idx...] += β * le(surface_interaction, wo)
                 end
-                pixel.Ld += uniform_sample_one_light(
+                Ld[pixel_idx...] += uniform_sample_one_light(
                     pool, bsdf, surface_interaction, scene, tile_sampler,
                 )
                 # Possibly create visible point and end camera path.
@@ -247,7 +231,7 @@ function _generate_visible_sppm_points!(
                     BSDF_GLOSSY | BSDF_REFLECTION | BSDF_TRANSMISSION,
                 ) > 0
                 if is_diffuse || (is_glossy && depth == i.max_depth)
-                    pixel.vp = VisiblePoint(
+                    vps[pixel_idx...] = VisiblePoint(
                         p = surface_interaction.core.p, wo = wo,
                         bsdf = bsdf, β = β,
                     )
@@ -281,23 +265,27 @@ end
 
 @inline function _clean_grid!(grid)
     for i in 1:length(grid)
-        grid[i] = nothing
+        empty!(grid[i])
     end
 end
 
 function _populate_grid!(
-    grid::Vector{Maybe{SPPMPixelListNode}}, pixels::Matrix{SPPMPixel},
-)
+        grid::Vector{Vector{Int}}, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}
+    )
     n_pixels = UInt64(length(pixels))
     # Create grid of all SPPM visible points.
     grid_bounds = Bounds3()
     # Compute grid bounds for SPPM visible points.
     max_radius, min_radius = 0f0, Inf32
-    for pixel in pixels
-        is_black(pixel.vp.β) && continue
-        grid_bounds = grid_bounds ∪ expand(Bounds3(pixel.vp.p), pixel.radius)
-        max_radius = max(max_radius, pixel.radius)
-        min_radius = min(min_radius, pixel.radius)
+    β = vps.β
+    p = vps.p
+    pradius = pixels.radius
+    for i in eachindex(pixels)
+        is_black(β[i]) && continue
+        radius = pradius[i]
+        grid_bounds = grid_bounds ∪ expand(Bounds3(p[i]), radius)
+        max_radius = max(max_radius, radius)
+        min_radius = min(min_radius, radius)
     end
     # Compute resolution of SPPM grid in each dimension.
     diag = diagonal(grid_bounds)
@@ -310,34 +298,28 @@ function _populate_grid!(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
     )
     # Add visible points to SPPM grid.
-    @inbounds for pixel in pixels
-        is_black(pixel.vp.β) && continue
+    @inbounds for (i, pixel) in enumerate(pixels)
+        is_black(β[i]) && continue
         # Add pixel's visible point to applicable grid cells.
-        shift = pixel.radius
-        _, p_min = to_grid(pixel.vp.p .- shift, grid_bounds, grid_resolution)
-        _, p_max = to_grid(pixel.vp.p .+ shift, grid_bounds, grid_resolution)
+        shift = pradius[i]
+        vpp = p[i]
+        _, p_min = to_grid(vpp .- shift, grid_bounds, grid_resolution)
+        _, p_max = to_grid(vpp .+ shift, grid_bounds, grid_resolution)
         for z in p_min[3]:p_max[3], y in p_min[2]:p_max[2], x in p_min[1]:p_max[1]
             # Add visible point to grid cell (x, y, z).
             h = hash(x, y, z, n_pixels)
             # Add `node` to the start of `grid[h]` linked list.
-            node = SPPMPixelListNode(pixel, grid[h])
-            grid[h] = node
+            pushfirst!(grid[h], i)
         end
     end
     grid_bounds, grid_resolution
 end
 
-function trace_photon_kernel()
-
-
-
-end
-
 
 function _trace_photons!(
-        mempools, i::SPPMIntegrator, scene::Scene, iteration::Int64,
+        mempools, i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}, scene::Scene, iteration::Int64,
         light_distribution::Distribution1D,
-        grid::Vector{Maybe{SPPMPixelListNode}},
+        grid::Vector{Vector{Int}},
         grid_bounds::Bounds3, grid_resolution::Point3,
         n_pixels::UInt64,
     )
@@ -348,6 +330,14 @@ function _trace_photons!(
     )
     shutter_open = i.camera.core.core.shutter_open
     shutter_close = i.camera.core.core.shutter_close
+    pϕ_x = pixels.ϕ_x
+    pϕ_y = pixels.ϕ_y
+    pϕ_z = pixels.ϕ_z
+    pM = pixels.M
+    radius = pixels.radius
+    p = vps.p
+    wo = vps.wo
+    bsdfs = vps.bsdf
     Threads.@threads for photon_index in 0:i.photons_per_iteration-1
         pool = mempools[Threads.threadid()]
         # Follow photon path for `photon_index`.
@@ -404,22 +394,23 @@ function _trace_photons!(
                 if in_bounds
                     h = hash(gi[1], gi[2], gi[3], n_pixels)
                     # Add photon contribution to visible points in `grid[h]`.
-                    node::Maybe{SPPMPixelListNode} = grid[h]
-                    while node ≢ nothing
+                    pixel_list::Vector{Int} = grid[h]
+                    for pixel_idx in pixel_list
                         if distance_squared(
-                                node.pixel.vp.p, interaction.core.p,
-                            ) > (node.pixel.radius^2)
-                            node = node.next
+                            p[pixel_idx], interaction.core.p,
+                        ) > (radius[pixel_idx]^2)
                             continue
                         end
                         # Update `pixel`'s ϕ & M for nearby photon.
-                        ϕ = β * node.pixel.vp.bsdf(
-                            node.pixel.vp.wo, -photon_ray.d,
+                        _ϕ = β * bsdfs[pixel_idx](
+                            wo[pixel_idx], -photon_ray.d,
                         )
-                        @real_assert !isnan(ϕ)
-                        Threads.atomic_add!(node.pixel.ϕ, ϕ)
-                        Threads.atomic_add!(node.pixel.M, 1)
-                        node = node.next
+                        @real_assert !isnan(_ϕ)
+                        Atomix.@atomic pϕ_x[pixel_idx] += _ϕ[1]
+                        Atomix.@atomic pϕ_y[pixel_idx] += _ϕ[2]
+                        Atomix.@atomic pϕ_z[pixel_idx] += _ϕ[3]
+
+                        Atomix.@atomic pM[pixel_idx] += 1
                     end
                 end
             end
@@ -458,31 +449,42 @@ function _trace_photons!(
     end
 end
 
-function _update_pixels!(pixels::Matrix{SPPMPixel}, γ::Float32)
+function _update_pixels!(pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}, γ::Float32)
     # Update pixel values from this pass's photons.
-    for pixel in pixels
-        M = pixel.M[]
+    pM = pixels.M
+    pϕ_x = pixels.ϕ_x
+    pϕ_y = pixels.ϕ_y
+    pϕ_z = pixels.ϕ_z
+    pN = pixels.N
+    pradius = pixels.radius
+    pτ = pixels.τ
+    β = vps.β
+    for pixel_idx in eachindex(pixels)
+        M = pM[pixel_idx]
         if M > 0
-            ϕ = convert(Point3f, pixel.ϕ)
+            ϕ = Point3f(pϕ_x[pixel_idx], pϕ_y[pixel_idx], pϕ_z[pixel_idx])
             # Update pixel photon count, search radius and τ from photons.
-            N_new = pixel.N + γ * M
-            radius_new = pixel.radius * √(N_new / (pixel.N + M))
-            pixel.τ = (pixel.τ + ϕ) * (radius_new / pixel.radius)^2
+            n = pN[pixel_idx]
+            N_new = n + γ * M
+            radius = pradius[pixel_idx]
+            radius_new = radius * √(N_new / (n + M))
+            pτ[pixel_idx] = (pτ[pixel_idx] + ϕ) * (radius_new / radius)^2
             # TODO do not multiply by beta?
             # (pixel.τ + pixel.vp.β * pixel.ϕ)
 
-            pixel.radius = radius_new
-            pixel.N = N_new
-            set!(pixel.ϕ, 0f0)
-            pixel.M[] = 0
+            pradius[pixel_idx] = radius_new
+            pN[pixel_idx] = N_new
+            pϕ_x[pixel_idx] = 0.0f0
+            pϕ_y[pixel_idx] = 0.0f0
+            pϕ_z[pixel_idx] = 0.0f0
+            pM[pixel_idx] = 0
         end
-        pixel.vp.β = RGBSpectrum(0f0)
-        pixel.vp.bsdf = nothing
+        β[pixel_idx] = RGBSpectrum(0f0)
     end
 end
 
 function _sppm_to_image(
-    i::SPPMIntegrator, pixels::Matrix{SPPMPixel}, iteration::Int64,
+    i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, iteration::Int64,
 )
     @real_assert iteration > 0
     Np = iteration * i.photons_per_iteration * π

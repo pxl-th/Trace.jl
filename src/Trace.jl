@@ -9,6 +9,7 @@ using LinearAlgebra
 using StaticArrays
 using ProgressMeter
 using StructArrays
+using Atomix
 
 abstract type AbstractRay end
 abstract type Spectrum end
