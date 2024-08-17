@@ -1,28 +1,19 @@
 const SPECULAR_REFLECTION = UInt8(1)
 
-function SpecularReflection(r::S, fresnel::FresnelConductor, type=BSDF_SPECULAR | BSDF_REFLECTION) where {S}
-    UberBxDF{S}(SPECULAR_REFLECTION; r=r, fresnel_con=fresnel, type=type)
+function SpecularReflection(active::Bool, r::S, fresnel::Fresnel, type=BSDF_SPECULAR | BSDF_REFLECTION) where {S}
+    UberBxDF{S}(active, SPECULAR_REFLECTION; r=r, fresnel=fresnel, type=type)
 end
-
-function SpecularReflection(r::S, fresnel::FresnelDielectric, type=BSDF_SPECULAR | BSDF_REFLECTION) where {S}
-    UberBxDF{S}(SPECULAR_REFLECTION; r=r, fresnel_di=fresnel, type=type)
-end
-
-function SpecularReflection(r::S, fresnel::FresnelNoOp, type=BSDF_SPECULAR | BSDF_REFLECTION) where {S}
-    UberBxDF{S}(SPECULAR_REFLECTION; r=r, fresnel_no=fresnel, type=type)
-end
-
 
 const SPECULAR_TRANSMISSION = UInt8(2)
 
 function SpecularTransmission(
-        t::S, η_a::Float32, η_b::Float32, transport
+        active::Bool, t::S, η_a::Float32, η_b::Float32, transport
     ) where {S<:Spectrum}
 
     UberBxDF{S}(
-        SPECULAR_TRANSMISSION;
+        active, SPECULAR_TRANSMISSION;
         t=t, η_a=η_a, η_b=η_b,
-        fresnel_di=FresnelDielectric(η_a, η_b),
+        fresnel=FresnelDielectric(η_a, η_b),
         type=BSDF_SPECULAR | BSDF_TRANSMISSION,
         transport=transport
     )
@@ -31,10 +22,10 @@ end
 const FRESNEL_SPECULAR = UInt8(3)
 
 function FresnelSpecular(
-    r::S, t::S, η_a::Float32, η_b::Float32, transport
+    active::Bool, r::S, t::S, η_a::Float32, η_b::Float32, transport
 ) where {S<:Spectrum}
     UberBxDF{S}(
-        FRESNEL_SPECULAR;
+        active, FRESNEL_SPECULAR;
         r=r, t=t, η_a=η_a, η_b=η_b,
         type=BSDF_SPECULAR | BSDF_TRANSMISSION | BSDF_REFLECTION,
         transport=transport

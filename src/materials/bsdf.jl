@@ -1,4 +1,4 @@
-struct _BXDFVector{S<:Spectrum}
+struct BXDFVector{S<:Spectrum}
     bxdf_1::UberBxDF{S}
     bxdf_2::UberBxDF{S}
     bxdf_3::UberBxDF{S}
@@ -10,8 +10,15 @@ struct _BXDFVector{S<:Spectrum}
     last::UInt8
 end
 
-const BXDFVector{S} = MutableRef{_BXDFVector{S}}
+Base.Base.@propagate_inbounds function Base.getindex(b::BXDFVector, i::Int)
+    i > b.last && error("Out of bounds $(i)")
+    return getfield(b, i)
+end
 
+@inline function BXDFVector{S}(sbdfs::Vararg{UberBxDF{S}, N}) where {S<:Spectrum, N}
+    missing_bxdf = ntuple(i -> UberBxDF{S}(), 8 - N)
+    return BXDFVector{S}(sbdfs..., missing_bxdf..., UInt8(N))
+end
 
 struct BSDF{S}
     """
@@ -44,19 +51,23 @@ struct BSDF{S}
     Individual BxDF components. Maximum allowed number of components is 8.
     """
     bxdfs::BXDFVector{S}
-
-    function BSDF(pool, si::SurfaceInteraction, η::Float32 = 1f0)
-        ng = si.core.n
-        ns = si.shading.n
-        ss = normalize(si.shading.∂p∂u)
-        ts = ns × ss
-        bsdfs = allocate(pool, BXDFVector{RGBSpectrum})
-        bsdfs.last = 0
-        new{RGBSpectrum}(
-            η, ng, ns, ss, ts, bsdfs,
-        )
-    end
 end
+
+function BSDF(si::SurfaceInteraction, sbdfs::Vararg{UberBxDF{S}, N}) where {S<:Spectrum, N}
+    BSDF(si, 1f0, sbdfs...)
+end
+
+function BSDF(si::SurfaceInteraction, η::Float32, sbdfs::Vararg{UberBxDF{S},N}) where {S<:Spectrum, N}
+    ng = si.core.n
+    ns = si.shading.n
+    ss = normalize(si.shading.∂p∂u)
+    ts = ns × ss
+    bsdfs = BXDFVector{RGBSpectrum}(sbdfs...)
+    BSDF{RGBSpectrum}(
+        η, ng, ns, ss, ts, bsdfs,
+    )
+end
+
 
 """
 Given the orthonormal vectors s, t, n in world space, the matrix `M`
@@ -130,12 +141,14 @@ function sample_f(
     bxdf = nothing
     bxdfs = b.bxdfs
     Base.Cartesian.@nexprs 8 i -> begin
-        _bxdf = bxdfs[i]
-        if _bxdf & type
-            if count == 1
-                bxdf = _bxdf
+        if i <= bxdfs.last
+            _bxdf = bxdfs[i]
+            if _bxdf & type
+                if count == 1
+                    bxdf = _bxdf
+                end
+                count -= 1
             end
-            count -= 1
         end
     end
     @real_assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
@@ -173,12 +186,14 @@ function sample_f(
         reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
         f = RGBSpectrum(0f0)
         Base.Cartesian.@nexprs 8 i -> begin
-            bxdf = bxdfs[i]
-            if i <= bxdfs.last && ((bxdf & type) && (
-                    (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
-                    (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
-                ))
-                f += bxdf(wo, wi)
+            if i <= bxdfs.last
+                bxdf = bxdfs[i]
+                if  ((bxdf & type) && (
+                        (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
+                        (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
+                    ))
+                    f += bxdf(wo, wi)
+                end
             end
         end
     end

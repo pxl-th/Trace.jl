@@ -138,10 +138,6 @@ function Base.getindex(mref::MutableRef{T}) where {T}
     return unsafe_load(Ptr{T}(getfield(mref, :ptr)))
 end
 
-function Base.show(io::IO, mref::MutableRef)
-    show(io, mref[])
-end
-
 function LifeCycle(f::Function, pool)
     try
         f(pool)

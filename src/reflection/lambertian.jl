@@ -1,13 +1,13 @@
 const LAMBERTIAN_REFLECTION = UInt8(4)
 
-function LambertianReflection(r::S) where {S<:Spectrum}
-    UberBxDF{S}(LAMBERTIAN_REFLECTION; r=r, type=BSDF_DIFFUSE | BSDF_REFLECTION)
+function LambertianReflection(active::Bool, r::S) where {S<:Spectrum}
+    UberBxDF{S}(active, LAMBERTIAN_REFLECTION; r=r, type=BSDF_DIFFUSE | BSDF_REFLECTION)
 end
 
 const LAMENTIAN_TRANSMISSION = UInt8(5)
 
-function LambertianTransmission(t::S) where {S<:Spectrum}
-    UberBxDF{S}(LAMENTIAN_TRANSMISSION; t=t, type=BSDF_DIFFUSE | BSDF_TRANSMISSION)
+function LambertianTransmission(active::Bool, t::S) where {S<:Spectrum}
+    UberBxDF{S}(active, LAMENTIAN_TRANSMISSION; t=t, type=BSDF_DIFFUSE | BSDF_TRANSMISSION)
 end
 
 """

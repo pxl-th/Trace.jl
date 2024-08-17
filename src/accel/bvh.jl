@@ -220,7 +220,7 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
-    to_visit_offset, current_node_i = 1, 1
+    to_visit_offset::Int32, current_node_i::Int32 = 1, 1
     @inbounds nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
     nodes_to_visit .= 0
     @inbounds while true
@@ -230,7 +230,7 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives-1
                     tmp_primitive = bvh.primitives[ln.primitives_offset+i]
-                    tmp_hit, tmp_interaction = intersect!(
+                    tmp_hit, tmp_interaction = intersect_p!(
                         pool, tmp_primitive, ray,
                     )
                     if tmp_hit && !(tmp_interaction isa Vec3)
@@ -244,7 +244,7 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
                 current_node_i = nodes_to_visit[to_visit_offset]
             else
                 if dir_is_neg[ln.split_axis] == 2
-                    nodes_to_visit[to_visit_offset] = current_node_i + 1
+                    nodes_to_visit[to_visit_offset] = current_node_i + Int32(1)
                     current_node_i = ln.second_child_offset
                 else
                     nodes_to_visit[to_visit_offset] = ln.second_child_offset

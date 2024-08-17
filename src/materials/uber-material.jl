@@ -69,51 +69,47 @@ struct UberBxDF{S<:Spectrum}
     transport::UInt8
     type::UInt8
     bxdf_type::UInt8
+    active::Bool
 end
 
-function UberBxDF{S}(bxdf_type::UInt8;
+function Base.:&(b::UberBxDF, type::UInt8)::Bool
+    return b.active && ((b.type & type) == b.type)
+end
+
+UberBxDF{S}() where {S} = UberBxDF{S}(false, UInt8(0))
+
+function UberBxDF{S}(active::Bool, bxdf_type::UInt8;
         r=Trace.RGBSpectrum(1f0), t=Trace.RGBSpectrum(1f0),
         a=0f0, b=0f0, η_a=0f0, η_b=0f0,
         distribution=TrowbridgeReitzDistribution(),
-        fresnel_con=nothing,
-        fresnel_di=nothing,
-        fresnel_no=nothing,
+        fresnel=nothing,
         type=UInt8(0),
         transport=UInt8(0)
     ) where {S<:Spectrum}
     used_fresnel = UInt8(0)
-    _fresnel_con = if isnothing(fresnel_con)
-        FresnelConductor()
-    else
-        used_fresnel = UInt8(1)
-        fresnel_con
+    fresnel_con = FresnelConductor()
+    fresnel_di = FresnelDielectric()
+    fresnel_no = FresnelNoOp()
+
+    if !isnothing(fresnel)
+        if fresnel isa FresnelConductor
+            fresnel_con = fresnel
+            used_fresnel = UInt8(1)
+        elseif fresnel isa FresnelDielectric
+            fresnel_di = fresnel
+            used_fresnel = UInt8(2)
+        elseif fresnel isa FresnelNoOp
+            fresnel_no = fresnel
+            used_fresnel = UInt8(3)
+        end
     end
-    _fresnel_di = if isnothing(fresnel_di)
-        FresnelDielectric()
-    else
-        used_fresnel = UInt8(2)
-        fresnel_di
-    end
-    _fresnel_no = if isnothing(fresnel_no)
-        FresnelNoOp()
-    else
-        used_fresnel = UInt8(3)
-        fresnel_no
-    end
-    return UberBxDF{S}(_fresnel_con, _fresnel_di, _fresnel_no, used_fresnel, r, t, a, b, η_a, η_b, distribution, transport, type, bxdf_type)
+    _distribution = distribution isa TrowbridgeReitzDistribution ? distribution : TrowbridgeReitzDistribution()
+    return UberBxDF{S}(fresnel_con, fresnel_di, fresnel_no, used_fresnel, r, t, a, b, η_a, η_b, _distribution, transport, type, bxdf_type, active)
 end
 
 fresnel(f::UberBxDF)= getfield(f, Int(f.which_fresnel))
 
-# @inline function sample_f(
-#     b::UberBxDF, wo::Vec3f, sample::Point2f,
-# )::Tuple{Vec3f,Float32,RGBSpectrum,UInt8}
-#     wi::Vec3f = cosine_sample_hemisphere(sample)
-#     # Flipping the direction if necessary.
-#     wo[3] < 0 && (wi = Vec3f(wi[1], wi[2], -wi[3]))
-#     pdf::Float32 = compute_pdf(b, wo, wi)
-#     wi, pdf, b(wo, wi), UInt8(0)
-# end
+
 @inline function sample_f(s::UberBxDF, wo::Vec3f, sample::Point2f)::Tuple{Vec3f,Float32,RGBSpectrum,UInt8}
     if s.bxdf_type === SPECULAR_REFLECTION
         return sample_specular_reflection(s, wo, sample)
@@ -135,16 +131,12 @@ fresnel(f::UberBxDF)= getfield(f, Int(f.which_fresnel))
     return wi, pdf, s(wo, wi), UInt8(0)
 end
 
-# """
-# Compute PDF value for the given directions.
-# In comparison, `sample_f` computes PDF value for the incident directions *it*
-# chooses given the outgoing direction, while this returns a value of PDF
-# for the given pair of directions.
-# """
-# @inline function compute_pdf(::UberBxDF, wo::Vec3f, wi::Vec3f)::Float32
-#     same_hemisphere(wo, wi) ? abs(cos_θ(wi)) * (1.0f0 / π) : 0.0f0
-# end
-
+"""
+Compute PDF value for the given directions.
+In comparison, `sample_f` computes PDF value for the incident directions *it*
+chooses given the outgoing direction, while this returns a value of PDF
+for the given pair of directions.
+"""
 @inline function compute_pdf(s::UberBxDF, wo::Vec3f, wi::Vec3f)::Float32
     if s.bxdf_type === FRESNEL_SPECULAR
         pdf_fresnel_specular(s, wo, wi)

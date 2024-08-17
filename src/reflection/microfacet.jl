@@ -1,42 +1,41 @@
 const MICROFACET_REFLECTION = UInt8(7)
 
 function MicrofacetReflection(
-    r::S, distribution::MicrofacetDistribution, fresnel::Fresnel, transport,
+    active::Bool, r::S, distribution::Union{Nothing, MicrofacetDistribution}, fresnel::Fresnel, transport,
     ) where {S<:Spectrum}
 
     UberBxDF{S}(
-        MICROFACET_REFLECTION; r=r, distribution=distribution,
-        fresnel_con=fresnel, type=BSDF_REFLECTION | BSDF_GLOSSY, transport=transport
+        active, MICROFACET_REFLECTION; r=r, distribution=distribution,
+        fresnel=fresnel, type=BSDF_REFLECTION | BSDF_GLOSSY, transport=transport
     )
 end
 
 const MICROFACET_TRANSMISSION = UInt8(8)
 
 function MicrofacetTransmission(
-        t::S, distribution::MicrofacetDistribution, η_a::Float32, η_b::Float32, transport,
+        active::Bool, t::S, distribution::Union{Nothing, MicrofacetDistribution}, η_a::Float32, η_b::Float32, transport,
     ) where {S<:Spectrum}
 
     UberBxDF{S}(
-        MICROFACET_TRANSMISSION;
-        t=t, distribution=distribution, η_a=η_a, η_b=η_b, fresnel_di=FresnelDielectric(η_a, η_b),
+        active, MICROFACET_TRANSMISSION;
+        t=t, distribution=distribution, η_a=η_a, η_b=η_b, fresnel=FresnelDielectric(η_a, η_b),
         type=BSDF_TRANSMISSION | BSDF_GLOSSY, transport=transport
     )
 end
 
 const OREN_NAYAR = UInt8(6)
 
-function OrenNayar(r::S, σ::Float32) where {S<:Spectrum}
+function OrenNayar(active::Bool, r::S, σ::Float32) where {S<:Spectrum}
 
     σ = deg2rad(σ)
     σ2 = σ * σ
     a = 1.0f0 - (σ2 / (2.0f0 * (σ2 + 0.33f0)))
     b = 0.45f0 * σ2 / (σ2 + 0.09f0)
 
-    return UberBxDF{S}(OREN_NAYAR; r=r, a=a, b=b, type=BSDF_DIFFUSE | BSDF_REFLECTION)
+    return UberBxDF{S}(active, OREN_NAYAR; r=r, a=a, b=b, type=BSDF_DIFFUSE | BSDF_REFLECTION)
 end
 
 function distribution_orennayar(o::UberBxDF{S}, wo::Vec3f, wi::Vec3f)::S where {S}
-
     sin_θi = sin_θ(wi)
     sin_θo = sin_θ(wo)
     # Compute cosine term of Oren-Nayar model.

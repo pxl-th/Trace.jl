@@ -9,9 +9,9 @@ struct GeometricPrimitive{T<:AbstractShape,M<:UberMaterial} <: Primitive
     end
 end
 
-function intersect!(
+function intersect_p!(
         pool, p::GeometricPrimitive{T}, ray::Union{Ray,RayDifferentials},
-    ) where T<:AbstractShape
+    )::Tuple{Bool, SurfaceInteraction} where T<:AbstractShape
 
     shape = p.shape
     intersects, t_hit, interaction = intersect(pool, shape, ray)
@@ -20,7 +20,7 @@ function intersect!(
     return true, interaction
 end
 
-@inline function intersect_p(
+@noinline function intersect_p(
         pool, p::GeometricPrimitive, ray::Union{Ray,RayDifferentials},
     )
     intersect_p(pool, p.shape, ray)

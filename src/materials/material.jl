@@ -13,18 +13,11 @@ Compute scattering function.
 Base.Base.@propagate_inbounds  function matte_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
-    bsdf = BSDF(pool, si)
     r = clamp(m.Kd(si))
     is_black(r) && return
     σ = clamp(m.σ(si), 0f0, 90f0)
-    bsdfs = bsdf.bxdfs
-    if σ ≈ 0f0
-        bsdfs[1] = LambertianReflection(r)
-    else
-        bsdfs[1] = OrenNayar(r, σ)
-    end
-    bsdfs.last = 1
-    return bsdf
+    lambertian = (σ ≈ 0.0f0)
+    return BSDF(si, LambertianReflection(lambertian, r), OrenNayar(!lambertian, r, σ))
 end
 
 const MIRROR_MATERIAL = UInt8(2)
@@ -34,13 +27,9 @@ function MirrorMaterial(Kr::Texture)
 end
 
 Base.Base.@propagate_inbounds function mirror_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
-    bsdf = BSDF(pool, si)
     r = clamp(m.Kr(si))
     is_black(r) && return
-    bxdfs = bsdf.bxdfs
-    bxdfs[1] = SpecularReflection(r, FresnelNoOp())
-    bxdfs.last = 1
-    return bsdf
+    return BSDF(si, SpecularReflection(!is_black(r), r, FresnelNoOp()))
 end
 
 const GLASS_MATERIAL = UInt8(3)
@@ -58,17 +47,15 @@ Base.Base.@propagate_inbounds function glass_material(pool, g::UberMaterial, si:
     u_roughness = g.u_roughness(si)
     v_roughness = g.v_roughness(si)
 
-    bsdf = BSDF(pool, si, η)
-    bsdfs = bsdf.bxdfs
     r = clamp(g.Kr(si))
     t = clamp(g.Kt(si))
-    is_black(r) && is_black(t) && return
+    r_black = is_black(r)
+    t_black = is_black(t)
+    r_black && t_black && return BSDF(pool, si, η)
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
     if is_specular && allow_multiple_lobes
-        bsdfs[1] = FresnelSpecular(r, t, 1.0f0, η, transport)
-        bsdfs.last = 1
-        return
+        return BSDF(si, η, FresnelSpecular(true, r, t, 1.0f0, η, transport))
     end
 
     if g.remap_roughness
@@ -78,26 +65,14 @@ Base.Base.@propagate_inbounds function glass_material(pool, g::UberMaterial, si:
     distribution = is_specular ? nothing : TrowbridgeReitzDistribution(
         u_roughness, v_roughness,
     )
-    last = 0
-    if !is_black(r)
-        fresnel = FresnelDielectric(1f0, η)
-        if is_specular
-            bsdfs[1] = SpecularReflection(r, fresnel)
-        else
-            bsdfs[1] = MicrofacetReflection(r, distribution, fresnel, transport)
-        end
-        last = 1
-    end
-    if !is_black(t)
-        last += 1
-        if is_specular
-            bsdfs[last] = SpecularTransmission(t, 1.0f0, η, transport)
-        else
-            bsdfs[last] = MicrofacetTransmission(t, distribution, 1.0f0, η, transport)
-        end
-    end
-    bsdfs.last = last
-    return bsdf
+    fresnel = FresnelDielectric(1f0, η)
+    return BSDF(
+        si, η,
+        SpecularReflection(!r_black && is_specular, r, fresnel),
+        MicrofacetReflection(!r_black && !is_specular, r, distribution, fresnel, transport),
+        SpecularTransmission(!t_black && is_specular, t, 1.0f0, η, transport),
+        MicrofacetTransmission(!t_black && !is_specular, t, distribution, 1.0f0, η, transport)
+    )
 end
 
 const PLASTIC_MATERIAL = UInt8(4)
@@ -111,25 +86,17 @@ end
 Base.Base.@propagate_inbounds function plastic_material(pool, p::UberMaterial,
         si::SurfaceInteraction, ::Bool, transport,
     )
-    bsdf = BSDF(pool, si)
-    bsdfs = bsdf.bxdfs
     # Initialize diffuse componen of plastic material.
     kd = clamp(p.Kd(si))
-    last = 0
-    if !is_black(kd)
-        bsdfs[1] = LambertianReflection(kd)
-        last += 1
-    end
+    bsdf_1 = LambertianReflection(!is_black(kd), kd)
     # Initialize specular component.
     ks = clamp(p.Ks(si))
-    is_black(ks) && return
+    is_black(ks) && return BSDF(si, bsdf_1)
     # Create microfacet distribution for plastic material.
     fresnel = FresnelDielectric(1.5f0, 1f0)
     rough = p.roughness(si)
     p.remap_roughness && (rough = roughness_to_α(rough))
     distribution = TrowbridgeReitzDistribution(rough, rough)
-    last += 1
-    bsdfs[last] = MicrofacetReflection(ks, distribution, fresnel, transport)
-    bsdfs.last = last
-    return bsdf
+    bsdf_2 = MicrofacetReflection(true, ks, distribution, fresnel, transport)
+    return BSDF(si, bsdf_1, bsdf_2)
 end
