@@ -91,6 +91,7 @@ function (b::BSDF)(
 
     output = RGBSpectrum(0f0)
     bxdfs = b.bxdfs
+    bxdfs.last == 0 && return output
     Base.Cartesian.@nexprs 8 i -> begin
         @assert i <= bxdfs.last
         bxdf = bxdfs[i]

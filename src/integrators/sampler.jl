@@ -22,7 +22,7 @@ function (i::SamplerIntegrator)(scene::Scene)
     bar = Progress(total_tiles, 1)
 
     @info "Utilizing $(Threads.nthreads()) threads"
-    mempools = [MemoryPool(round(Int, 16384)) for _ in 1:Threads.maxthreadid()]
+    mempools = [MemoryPool(round(Int, 2*16384)) for _ in 1:Threads.maxthreadid()]
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
@@ -38,17 +38,16 @@ function (i::SamplerIntegrator)(scene::Scene)
         for pixel in tile_bounds
             start_pixel!(t_sampler, pixel)
             while has_next_sample(t_sampler)
-                LifeCycle(pool) do pool
-                    camera_sample = get_camera_sample(t_sampler, pixel)
-                    ray, ω = generate_ray_differential(pool, i.camera, camera_sample)
-                    scale_differentials!(ray, spp_sqr)
-                    l = RGBSpectrum(0f0)
-                    ω > 0.0f0 && (l = li(pool, i, ray, scene, 1))
-                    # TODO check l for invalid values
-                    isnan(l) && (l = RGBSpectrum(0f0))
-                    add_sample!(film_tile, camera_sample.film, l, ω)
-                    start_next_sample!(t_sampler)
-                end
+                free_all(pool) # clear memory pool
+                camera_sample = get_camera_sample(t_sampler, pixel)
+                ray, ω = generate_ray_differential(pool, i.camera, camera_sample)
+                scale_differentials!(ray, spp_sqr)
+                l = RGBSpectrum(0f0)
+                ω > 0.0f0 && (l = li(pool, i, ray, scene, 1))
+                # TODO check l for invalid values
+                isnan(l) && (l = RGBSpectrum(0f0))
+                add_sample!(film_tile, camera_sample.film, l, ω)
+                start_next_sample!(t_sampler)
             end
         end
         merge_film_tile!(get_film(i.camera), film_tile)

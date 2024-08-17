@@ -58,11 +58,11 @@ function generate_ray_differential(
     )
     ray_x, wt_x = generate_ray(pool, camera, shifted_x)
     ray_y, wt_y = generate_ray(pool, camera, shifted_y)
-    ray = allocate(pool, RayDifferentials,
+    rayd = allocate(pool, RayDifferentials,
         (ray.o, ray.d, ray.t_max, ray.time,
         true, ray_x.o, ray_y.o, ray_x.d, ray_y.d)
     )
-    ray, wt
+    rayd, wt
 end
 
 include("perspective.jl")

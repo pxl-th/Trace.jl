@@ -51,13 +51,14 @@ struct BVHAccel <: AccelPrimitive
     primitives::Vector{P} where P<:Primitive
     max_node_primitives::UInt8
     nodes::Vector{LinearBVH}
+    nodes_to_visit::Vector{Vector{Int32}}
 
     function BVHAccel(
         primitives::Vector{P}, max_node_primitives::Integer = 1,
     ) where P<:Primitive
         max_node_primitives = min(255, max_node_primitives)
         length(primitives) == 0 && return new(primitives, max_node_primitives)
-
+        nodes_to_visit = [zeros(Int32, 64) for _ in 1:Threads.maxthreadid()]
         primitives_info = [
             BVHPrimitiveInfo(i, world_bound(p))
             for (i, p) in enumerate(primitives)
@@ -75,7 +76,7 @@ struct BVHAccel <: AccelPrimitive
         _unroll(flattened, root, offset)
         @real_assert total_nodes[] + 1 == offset[]
 
-        new(ordered_primitives, max_node_primitives, flattened)
+        new(ordered_primitives, max_node_primitives, flattened, nodes_to_visit)
     end
 end
 
@@ -220,9 +221,9 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
     dir_is_neg = is_dir_negative(ray.d)
 
     to_visit_offset, current_node_i = 1, 1
-    nodes_to_visit = zeros(Int32, 64)
-
-    while true
+    @inbounds nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
+    nodes_to_visit .= 0
+    @inbounds while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(pool, ln.bounds, ray, inv_dir, dir_is_neg)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
@@ -268,7 +269,8 @@ function intersect_p(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
     dir_is_neg = is_dir_negative(ray.d)
 
     to_visit_offset, current_node_i = 1, 1
-    nodes_to_visit = zeros(Int32, 64)
+    @inbounds nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
+    nodes_to_visit .= 0
 
     while true
         ln = bvh.nodes[current_node_i]

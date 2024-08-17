@@ -19,9 +19,8 @@ abstract type Material end
 abstract type BxDF end
 abstract type Integrator end
 
-const Radiance = Val{:Radiance}
-const Importance = Val{:Importance}
-const TransportMode = Union{Radiance,Importance}
+const Radiance = UInt8(1)
+const Importance = UInt8(2)
 
 const DO_ASSERTS = false
 macro real_assert(expr, msg="")

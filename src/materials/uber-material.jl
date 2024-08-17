@@ -38,6 +38,14 @@ struct FresnelNoOp <: Fresnel end
 
 struct UberBxDF{S<:Spectrum}
     """
+    Describes fresnel properties.
+    """
+    fresnel_con::FresnelConductor{S}
+    fresnel_di::FresnelDielectric
+    fresnel_no::FresnelNoOp
+    which_fresnel::UInt8 # selected fresnel
+
+    """
     Spectrum used to scale the reflected color.
     """
     r::S
@@ -57,13 +65,8 @@ struct UberBxDF{S<:Spectrum}
     η_b::Float32
 
     distribution::TrowbridgeReitzDistribution
-    """
-    Describes fresnel properties.
-    """
-    fresnel_con::FresnelConductor{S}
-    fresnel_di::FresnelDielectric
-    fresnel_no::FresnelNoOp
 
+    transport::UInt8
     type::UInt8
     bxdf_type::UInt8
 end
@@ -72,14 +75,35 @@ function UberBxDF{S}(bxdf_type::UInt8;
         r=Trace.RGBSpectrum(1f0), t=Trace.RGBSpectrum(1f0),
         a=0f0, b=0f0, η_a=0f0, η_b=0f0,
         distribution=TrowbridgeReitzDistribution(),
-        fresnel_con=FresnelConductor(),
-        fresnel_di=FresnelDielectric(),
-        fresnel_no=FresnelNoOp(),
-        type=UInt8(0)
+        fresnel_con=nothing,
+        fresnel_di=nothing,
+        fresnel_no=nothing,
+        type=UInt8(0),
+        transport=UInt8(0)
     ) where {S<:Spectrum}
-    return UberBxDF{S}(r, t, a, b, η_a, η_b, distribution, fresnel_con, fresnel_di, fresnel_no, type, bxdf_type)
+    used_fresnel = UInt8(0)
+    _fresnel_con = if isnothing(fresnel_con)
+        FresnelConductor()
+    else
+        used_fresnel = UInt8(1)
+        fresnel_con
+    end
+    _fresnel_di = if isnothing(fresnel_di)
+        FresnelDielectric()
+    else
+        used_fresnel = UInt8(2)
+        fresnel_di
+    end
+    _fresnel_no = if isnothing(fresnel_no)
+        FresnelNoOp()
+    else
+        used_fresnel = UInt8(3)
+        fresnel_no
+    end
+    return UberBxDF{S}(_fresnel_con, _fresnel_di, _fresnel_no, used_fresnel, r, t, a, b, η_a, η_b, distribution, transport, type, bxdf_type)
 end
 
+fresnel(f::UberBxDF)= getfield(f, Int(f.which_fresnel))
 
 # @inline function sample_f(
 #     b::UberBxDF, wo::Vec3f, sample::Point2f,
@@ -155,64 +179,91 @@ end
     error("Unknown BxDF type $(s.bxdf_type)")
 end
 
-struct UberMaterial
+struct UberMaterial{STAType,FTAType}
     """
     Spectral diffuse reflection value.
     """
-    Kd::Texture
+    Kd::Texture{RGBSpectrum, 2, STAType}
     """
     Specular component. Spectrum texture.
     """
-    Ks::Texture
+    Ks::Texture{RGBSpectrum,2,STAType}
     """
     Spectrum texture.
     """
-    Kr::Texture
+    Kr::Texture{RGBSpectrum,2,STAType}
     """
     Spectrum texture.
     """
-    Kt::Texture
+    Kt::Texture{RGBSpectrum,2,STAType}
+
     """
     Scalar roughness.
     """
-    σ::Texture
+    σ::Texture{Float32,2,FTAType}
+
     """
     Float texture
     """
-    roughness::Texture
+    roughness::Texture{Float32,2,FTAType}
     """
     Float texture.
     """
-    u_roughness::Texture
+    u_roughness::Texture{Float32,2,FTAType}
 
     """
     Float texture.
     """
-    v_roughness::Texture
+    v_roughness::Texture{Float32,2,FTAType}
+    """
+    Float texture.
+    """
+    index::Texture{Float32,2,FTAType}
 
     remap_roughness::Bool
-    """
-    Float texture.
-    """
-    index::Texture
+
     type::UInt8
 end
 
-function UberMaterial(type; Kd=Texture(),
-        Ks=Texture(),
-        Kr=Texture(),
-        Kt=Texture(),
-        σ=Texture(),
-        roughness=Texture(),
-        u_roughness=Texture(),
-        v_roughness=Texture(),
+function UberMaterial(type;
         remap_roughness=false,
-        index=Texture(),
+        args...
     )
-    return UberMaterial(Kd, Ks, Kr, Kt, σ, roughness, u_roughness, v_roughness, remap_roughness, index, type)
+    fields = [
+        :Kd,
+        :Ks,
+        :Kr,
+        :Kt,
+        :σ,
+        :roughness,
+        :u_roughness,
+        :v_roughness,
+        :index
+    ]
+
+    FType = Matrix{Float32}
+    SType = Matrix{RGBSpectrum}
+
+    values = map(fields) do field
+        if haskey(args, field)
+            arg = args[field]
+            if eltype(arg) === Float32
+                FType = typeof(arg)
+            elseif eltype(arg) === RGBSpectrum
+                SType = typeof(arg)
+            end
+            return arg
+        else
+            NoTexture()
+        end
+    end
+    return UberMaterial{SType,FType}(values..., remap_roughness, type)
 end
 
-@inline function (m::UberMaterial)(pool, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
+const NO_MATERIAL = UInt8(0)
+NoMaterial() = UberMaterial(NO_MATERIAL)
+
+Base.Base.@propagate_inbounds function (m::UberMaterial)(pool, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
     if m.type === MATTE_MATERIAL
         return matte_material(pool, m, si, allow_multiple_lobes, transport)
     elseif m.type === MIRROR_MATERIAL
@@ -221,5 +272,7 @@ end
         return glass_material(pool, m, si, allow_multiple_lobes, transport)
     elseif m.type === PLASTIC_MATERIAL
         return plastic_material(pool, m, si, allow_multiple_lobes, transport)
+    else
+        return nothing
     end
 end

@@ -1,12 +1,12 @@
 const MICROFACET_REFLECTION = UInt8(7)
 
 function MicrofacetReflection(
-        r::S, distribution::MicrofacetDistribution, fresnel::Fresnel, transmission,
+    r::S, distribution::MicrofacetDistribution, fresnel::Fresnel, transport,
     ) where {S<:Spectrum}
 
     UberBxDF{S}(
         MICROFACET_REFLECTION; r=r, distribution=distribution,
-        fresnel_con=fresnel, type=BSDF_REFLECTION | BSDF_GLOSSY
+        fresnel_con=fresnel, type=BSDF_REFLECTION | BSDF_GLOSSY, transport=transport
     )
 end
 
@@ -19,7 +19,7 @@ function MicrofacetTransmission(
     UberBxDF{S}(
         MICROFACET_TRANSMISSION;
         t=t, distribution=distribution, η_a=η_a, η_b=η_b, fresnel_di=FresnelDielectric(η_a, η_b),
-        type=BSDF_TRANSMISSION | BSDF_GLOSSY,
+        type=BSDF_TRANSMISSION | BSDF_GLOSSY, transport=transport
     )
 end
 
@@ -264,9 +264,7 @@ function distribution_microfacet_transmission(m::UberBxDF{S}, wo::Vec3f, wi::Vec
 
     f = m.fresnel(d_o)
     denom = d_o + η * d_i
-    # TODO
-    # factor = T isa Radiance ? (1.0f0 / η) : 1.0f0
-    factor = true ? (1.0f0 / η) : 1.0f0
+    factor = m.transport === Radiance ? (1.0f0 / η) : 1.0f0
 
     dd, dg = D(m.distribution, wh), G(m.distribution, wo, wi)
     return (S(1f0) - f) * m.t * abs(

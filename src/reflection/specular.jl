@@ -24,6 +24,7 @@ function SpecularTransmission(
         t=t, η_a=η_a, η_b=η_b,
         fresnel_di=FresnelDielectric(η_a, η_b),
         type=BSDF_SPECULAR | BSDF_TRANSMISSION,
+        transport=transport
     )
 end
 
@@ -36,6 +37,7 @@ function FresnelSpecular(
         FRESNEL_SPECULAR;
         r=r, t=t, η_a=η_a, η_b=η_b,
         type=BSDF_SPECULAR | BSDF_TRANSMISSION | BSDF_REFLECTION,
+        transport=transport
     )
 end
 
@@ -57,7 +59,7 @@ and return the value of BxDF for the pair of directions.
         s::UberBxDF{S}, wo::Vec3f, ::Point2f,
     )::Tuple{Vec3f,Float32,S,UInt8} where {S<:Spectrum}
     wi = Vec3f(-wo[1], -wo[2], wo[3])
-    wisp = s.fresnel_no(cos_θ(wi)) * s.r / abs(cos_θ(wi))
+    wisp = fresnel(s)(cos_θ(wi)) * s.r / abs(cos_θ(wi))
     return wi, 1.0f0, wisp, UInt8(0)
 end
 
@@ -91,9 +93,9 @@ and return the value of BxDF for the pair of directions.
     pdf = 1f0
 
     cos_wi = cos_θ(wi)
-    ft = s.t * (S(1.0f0) - s.fresnel_no(cos_wi))
+    ft = s.t * (S(1.0f0) - fresnel(s)(cos_wi))
     # Account for non-symmetry with transmission to different medium.
-    # T isa Radiance && (ft *= (η_i^2) / (η_t^2))
+    s.transport === Radiance && (ft *= (η_i^2) / (η_t^2))
     return wi, pdf, ft / abs(cos_wi), UInt8(0)
 end
 
@@ -131,7 +133,7 @@ and return the value of BxDF for the pair of directions.
     pdf = 1f0 - fd
     ft = f.t * pdf
     # Account for non-symmetry with transmission to different medium.
-    # T isa Radiance && (ft *= (η_i^2) / (η_t^2))
+    f.transport === Radiance && (ft *= (η_i^2) / (η_t^2))
     sampled_type = BSDF_SPECULAR | BSDF_TRANSMISSION
     return wi, pdf, ft / abs(cos_θ(wi)), sampled_type
 end

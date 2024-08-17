@@ -7,6 +7,10 @@ function MemoryPool(max_size::Int)
     MemoryPool(Vector{UInt8}(undef, max_size), Base.RefValue(0))
 end
 
+function free_all(pool::MemoryPool)
+    pool.last_alloc[] = 0
+end
+
 last_alloc(pool::MemoryPool) = pool.last_alloc[]
 
 # pointer need to be byte8 aligned, so our views need to start at 8 aligned indices
@@ -83,7 +87,7 @@ end
     segment = next_free_segment(pool, nbytes)
     # If pool is not big enough, we do a gc tracked allocation
     if isnothing(segment)
-        # error("Out of mem")
+        error("Out of mem")
         return MutableRef{T}(C_NULL)
     else
         return MutableRef{T}(pointer(pool.bytes, segment[1]))
@@ -117,7 +121,7 @@ end
 Base.@propagate_inbounds function Base.getproperty(mref::MutableRef{T}, field::Symbol) where {T}
     idx = findfirst(x -> x === field, fieldnames(T))
     if isnothing(idx)
-        # error("Field $field not found in type $T")
+        error("Field $field not found in type $T")
     end
     return mref[idx]
 end
