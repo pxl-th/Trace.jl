@@ -53,6 +53,8 @@ struct BSDF{S}
     bxdfs::BXDFVector{S}
 end
 
+BSDF() = BSDF{RGBSpectrum}(0f0, Normal3f(0f0), Normal3f(0f0), Vec3f(0f0), Vec3f(0f0), BXDFVector{RGBSpectrum}())
+
 function BSDF(si::SurfaceInteraction, sbdfs::Vararg{UberBxDF{S}, N}) where {S<:Spectrum, N}
     BSDF(si, 1f0, sbdfs...)
 end

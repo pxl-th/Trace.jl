@@ -81,6 +81,13 @@ end
     end
 end
 
+function allocate(pool, obj::T) where {T}
+    mem = allocate(pool, T)
+    ptr = type_pointer(mem)
+    unsafe_store!(ptr, obj)
+    return mem
+end
+
 @inline function allocate(pool::MemoryPool, ::Type{T}) where {T}
     @assert isbitstype(T) "$T"
     nbytes = sizeof(T)

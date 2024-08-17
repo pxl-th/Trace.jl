@@ -118,6 +118,7 @@ struct SPPMIntegrator{C<:Camera} <: Integrator
         n_iterations::Int64, photons_per_iteration::Int64 = -1,
         write_frequency::Int64 = 1,
     ) where C<:Camera
+
         photons_per_iteration = (
             photons_per_iteration > 0
             ? photons_per_iteration : area(get_film(camera).crop_bounds)
@@ -129,7 +130,11 @@ struct SPPMIntegrator{C<:Camera} <: Integrator
     end
 end
 
+
+
+
 function (i::SPPMIntegrator)(scene::Scene)
+
     pixel_bounds = get_film(i.camera).crop_bounds
 
     b_sides = inclusive_sides(pixel_bounds)
@@ -149,7 +154,7 @@ function (i::SPPMIntegrator)(scene::Scene)
     n_tiles::Point2 = Int64.(floor.((pixel_extent .+ tile_size) ./ tile_size))
 
     sampler = UniformSampler(1)
-    mempools = [MemoryPool(round(Int, 100_000)) for _ in 1:Threads.maxthreadid()]
+    mempools = [MemoryPool(round(Int, 100000)) for _ in 1:Threads.maxthreadid()]
     for iteration in 1:i.n_iterations
         _generate_visible_sppm_points!(
             mempools, i, pixels, scene,
@@ -322,13 +327,20 @@ function _populate_grid!(
     grid_bounds, grid_resolution
 end
 
+function trace_photon_kernel()
+
+
+
+end
+
+
 function _trace_photons!(
-    mempools, i::SPPMIntegrator, scene::Scene, iteration::Int64,
-    light_distribution::Distribution1D,
-    grid::Vector{Maybe{SPPMPixelListNode}},
-    grid_bounds::Bounds3, grid_resolution::Point3,
-    n_pixels::UInt64,
-)
+        mempools, i::SPPMIntegrator, scene::Scene, iteration::Int64,
+        light_distribution::Distribution1D,
+        grid::Vector{Maybe{SPPMPixelListNode}},
+        grid_bounds::Bounds3, grid_resolution::Point3,
+        n_pixels::UInt64,
+    )
     # Trace photons and accumulate contributions.
     halton_base = UInt64(iteration - 1) * UInt64(i.photons_per_iteration)
     bar = get_progress_bar(
@@ -377,7 +389,11 @@ function _trace_photons!(
 
         # Follow photon path through scene and record intersections.
         depth = 1
+        _photon_ray = photon_ray[] # load it from mempool
         while depth ≤ i.max_depth
+            free_all(pool)
+            # put it back after free
+            photon_ray = allocate(pool, _photon_ray)
             hit, primitive, interaction = intersect!(pool, scene, photon_ray)
             !hit && break
             if depth > 1
@@ -435,7 +451,7 @@ function _trace_photons!(
             end
             halton_dim += 1
             # β = β_new / (1f0 - q)
-            photon_ray = allocate(pool, RayDifferentials, spawn_ray(pool, interaction, wi))
+            _photon_ray = allocate(pool, RayDifferentials, spawn_ray(pool, interaction, wi))[]
             depth += 1
         end
         next!(bar)
