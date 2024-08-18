@@ -6,15 +6,14 @@ struct WhittedIntegrator{C<: Camera, S <: AbstractSampler} <: SamplerIntegrator
     max_depth::Int64
 end
 
-@noinline function sample_kernel_inner(pool, i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
+@noinline function sample_kernel_inner(i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
     while has_next_sample(t_sampler)
-        free_all(pool) # clear memory pool
         camera_sample = get_camera_sample(t_sampler, pixel)
-        ray, ω = generate_ray_differential(pool, camera, camera_sample)
-        scale_differentials!(ray, spp_sqr)
+        ray, ω = generate_ray_differential(camera, camera_sample)
+        ray = scale_differentials(ray, spp_sqr)
         l = RGBSpectrum(0f0)
         if ω > 0.0f0
-            l = li(pool, i, ray, scene, 1)
+            l = li(i, ray, scene, 1)
         end
         # TODO check l for invalid values
         if isnan(l)
@@ -25,14 +24,12 @@ end
     end
 end
 
-@noinline function sample_kernel(mempools, i, camera, scene, film, film_tile, tile_bounds)
-
-    pool = mempools[Threads.threadid()]
+@noinline function sample_kernel(i, camera, scene, film, film_tile, tile_bounds)
     t_sampler = deepcopy(i.sampler)
     spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
     for pixel in tile_bounds
         start_pixel!(t_sampler, pixel)
-        sample_kernel_inner(pool, i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
+        sample_kernel_inner(i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
     end
     merge_film_tile!(film, film_tile)
 end
@@ -51,7 +48,6 @@ function (i::SamplerIntegrator)(scene::Scene)
     total_tiles = width * height - 1
     bar = Progress(total_tiles, 1)
     @info "Utilizing $(Threads.nthreads()) threads"
-    mempools = [MemoryPool(round(Int, 3*16384)) for _ in 1:Threads.maxthreadid()]
     film = get_film(i.camera)
     camera = i.camera
     filter_radius = film.filter.radius
@@ -70,7 +66,7 @@ function (i::SamplerIntegrator)(scene::Scene)
             tile_bounds = Bounds2(tb_min, tb_max)
             film_tile = filmtiles[Threads.threadid()]
             film_tile = update_bounds!(film, film_tile, tile_bounds)
-            sample_kernel(mempools, i, camera, scene, film, film_tile, tile_bounds)
+            sample_kernel(i, camera, scene, film, film_tile, tile_bounds)
         end
         next!(bar)
     end
@@ -78,12 +74,12 @@ function (i::SamplerIntegrator)(scene::Scene)
 end
 
 function li(
-        pool, i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
+        i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
     )::RGBSpectrum
 
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
-    hit, primitive, si = intersect!(pool, scene, ray)
+    hit, primitive, si = intersect!(scene, ray)
     if !hit
         for light in scene.lights
             l += le(light, ray)
@@ -96,10 +92,10 @@ function li(
     n = si.shading.n
     wo = core.wo
     # Compute scattering functions for surface interaction.
-    si, bsdf = compute_scattering!(pool, primitive, si, ray)
+    si, bsdf = compute_scattering!(primitive, si, ray)
     if bsdf.bxdfs.last == 0
         return li(
-            pool, spawn_ray(pool, si, ray.d),
+            spawn_ray(si, ray.d),
             scene, i.sampler, depth,
         )
     end
@@ -108,7 +104,7 @@ function li(
     # Add contribution of each light source.
     for light in scene.lights
         sampled_li, wi, pdf, visibility_tester = sample_li(
-            pool, light, core, get_2d(i.sampler),
+            light, core, get_2d(i.sampler),
         )
         (is_black(sampled_li) || pdf ≈ 0f0) && continue
         f = bsdf(wo, wi)
@@ -118,14 +114,14 @@ function li(
     end
     if depth + 1 ≤ i.max_depth
         # Trace rays for specular reflection & refraction.
-        l += specular_reflect(pool, bsdf, i, ray, si, scene, depth)
-        l += specular_transmit(pool, bsdf, i, ray, si, scene, depth)
+        l += specular_reflect(bsdf, i, ray, si, scene, depth)
+        l += specular_transmit(bsdf, i, ray, si, scene, depth)
     end
     l
 end
 
 function specular_reflect(
-        pool, bsdf, i::I, ray::RayDifferentials,
+        bsdf, i::I, ray::RayDifferentials,
         surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
     ) where I<:SamplerIntegrator
 
@@ -142,11 +138,10 @@ function specular_reflect(
         return RGBSpectrum(0f0)
     end
     # Compute ray differential for specular reflection.
-    rd = allocate(pool, RayDifferentials, spawn_ray(pool, surface_intersect, wi))
+    rd = RayDifferentials(spawn_ray(surface_intersect, wi))
     if ray.has_differentials
-        rd.has_differentials = true
-        rd.rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
-        rd.ry_origin = surface_intersect.core.p + surface_intersect.∂p∂y
+        rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
+        ry_origin = surface_intersect.core.p + surface_intersect.∂p∂y
         # Compute differential reflected directions.
         ∂n∂x = (
             surface_intersect.shading.∂n∂u * surface_intersect.∂u∂x
@@ -162,14 +157,15 @@ function specular_reflect(
         ∂wo∂y = -ray.ry_direction - wo
         ∂dn∂x = ∂wo∂x ⋅ ns + wo ⋅ ∂n∂x
         ∂dn∂y = ∂wo∂y ⋅ ns + wo ⋅ ∂n∂y
-        rd.rx_direction = wi - ∂wo∂x + 2f0 * (wo ⋅ ns) * ∂n∂x + ∂dn∂x * ns
-        rd.ry_direction = wi - ∂wo∂y + 2f0 * (wo ⋅ ns) * ∂n∂y + ∂dn∂y * ns
+        rx_direction = wi - ∂wo∂x + 2f0 * (wo ⋅ ns) * ∂n∂x + ∂dn∂x * ns
+        ry_direction = wi - ∂wo∂y + 2f0 * (wo ⋅ ns) * ∂n∂y + ∂dn∂y * ns
+        rd = RayDifferentials(rd, rx_origin=rx_origin, ry_origin=ry_origin, rx_direction=rx_direction, ry_direction=ry_direction)
     end
-    return f * li(pool, i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
+    return f * li(i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
 end
 
 function specular_transmit(
-        pool, bsdf, i::S, ray::RayDifferentials,
+        bsdf, i::S, ray::RayDifferentials,
         surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
     ) where S<:SamplerIntegrator
 
@@ -185,11 +181,10 @@ function specular_transmit(
         return RGBSpectrum(0f0)
     end
     # TODO shift in ray direction instead of normal?
-    rd = allocate(pool, RayDifferentials, spawn_ray(pool, surface_intersect, wi))
+    rd = RayDifferentials(spawn_ray(surface_intersect, wi))
     if ray.has_differentials
-        rd.has_differentials = true
-        rd.rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
-        rd.ry_origin = surface_intersect.core.p + surface_intersect.∂p∂y
+        rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
+        ry_origin = surface_intersect.core.p + surface_intersect.∂p∂y
         # Compute differential transmitted directions.
         ∂n∂x = (
             surface_intersect.shading.∂n∂u * surface_intersect.∂u∂x
@@ -219,8 +214,9 @@ function specular_transmit(
         ν = η - (η^2 * (wo ⋅ ns)) / abs(wi ⋅ ns)
         ∂μ∂x = ν * ∂dn∂x
         ∂μ∂y = ν * ∂dn∂y
-        rd.rx_direction = wi - η * ∂wo∂x + μ * ∂n∂x + ∂μ∂x * ns
-        rd.ry_direction = wi - η * ∂wo∂y + μ * ∂n∂y + ∂μ∂y * ns
+        rx_direction = wi - η * ∂wo∂x + μ * ∂n∂x + ∂μ∂x * ns
+        ry_direction = wi - η * ∂wo∂y + μ * ∂n∂y + ∂μ∂y * ns
+        rd = RayDifferentials(rd, rx_origin=rx_origin, ry_origin=ry_origin, rx_direction=rx_direction, ry_direction=ry_direction)
     end
-    f * li(pool, i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
+    f * li(i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
 end

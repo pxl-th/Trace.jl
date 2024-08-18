@@ -82,15 +82,13 @@ end
 
 @inline get_film(c::PerspectiveCamera)::Film = c.core.core.film
 
-function generate_ray(
-    pool::MemoryPool,
-    camera::PerspectiveCamera, sample::CameraSample,
-)::Tuple{Ray,Float32}
+@inline function generate_ray(
+        camera::PerspectiveCamera, sample::CameraSample,
+    )::Tuple{Ray,Float32}
     # Compute raster & camera sample positions.
     p_film = Point3f(sample.film[1], sample.film[2], 0f0)
     p_camera = camera.core.raster_to_camera(p_film)
-
-    ray = default(pool, Ray; o=Point3f(0), d=normalize(Vec3f(p_camera)))
+    ray = Ray(o=Point3f(0), d=normalize(Vec3f(p_camera)))
     # Modify ray for depth of field.
     if camera.core.lens_radius > 0
         # Sample points on lens.
@@ -103,13 +101,13 @@ function generate_ray(
         ray.d = normalize(Vec3f(p_focus - ray.o))
     end
 
-    ray.time = lerp(
+    time = lerp(
         camera.core.core.shutter_open,
         camera.core.core.shutter_close,
         sample.time,
     )
     # TODO add medium
-    apply!(camera.core.core.camera_to_world, ray)
-    ray.d = normalize(ray.d)
+    ray = apply(camera.core.core.camera_to_world, ray)
+    Ray(ray, d=normalize(ray.d))
     ray, 1f0
 end

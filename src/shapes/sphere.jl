@@ -123,11 +123,11 @@ function ∂n(
 end
 
 function intersect(
-        pool, s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+        s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
     )::Tuple{Bool,Float32,SurfaceInteraction}
     # Transform ray to object space.
     sf = SurfaceInteraction()
-    or = apply!(s.core.world_to_object, copy(pool, ray))
+    or = apply(s.core.world_to_object, ray)
     # Substitute ray into sphere equation.
     a = norm(or.d)^2
     b = 2 * or.o ⋅ or.d
@@ -157,7 +157,7 @@ function intersect(
     ∂p∂u, ∂p∂v = ∂p(s, hit_point, θ, sin_ϕ, cos_ϕ)
     ∂n∂u, ∂n∂v = ∂n(s, hit_point, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
     reverse_normal = (s.core.reverse_orientation ⊻ s.core.transform_swaps_handedness)
-    si = SurfaceInteraction(pool,
+    si = SurfaceInteraction(
         hit_point, ray.time, -ray.d, Point2f(u, v),
         ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, reverse_normal
     )
@@ -166,11 +166,11 @@ function intersect(
 end
 
 function intersect_p(
-        pool, s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool=false,
+        s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool=false,
     )::Bool
 
     # Transform ray to object space.
-    or = apply!(s.core.world_to_object, copy(pool, ray))
+    or = apply(s.core.world_to_object, ray)
     # Substitute ray into sphere equation.
     a = norm(or.d)^2
     b = 2f0 * or.o ⋅ or.d

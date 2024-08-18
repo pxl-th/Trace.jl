@@ -210,12 +210,12 @@ end
     length(bvh.nodes) > 0 ? bvh.nodes[1].bounds : Bounds3()
 end
 
-function intersect!(pool, bvh::BVHAccel{P}, ray::MutableRef{<:AbstractRay})::Tuple{Bool, P, SurfaceInteraction} where P
+function intersect!(bvh::BVHAccel{P}, ray::AbstractRay)::Tuple{Bool,P,SurfaceInteraction} where {P}
     hit = false
     interaction = SurfaceInteraction()
     isempty(bvh.nodes) && return hit, nothing, interaction
 
-    check_direction!(ray)
+    ray = check_direction(ray)
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
@@ -227,13 +227,13 @@ function intersect!(pool, bvh::BVHAccel{P}, ray::MutableRef{<:AbstractRay})::Tup
     primitive::P = first(bvh.primitives)
     @inbounds while true
         ln = bvh.nodes[current_node_i]
-        if intersect_p(pool, ln.bounds, ray, inv_dir, dir_is_neg)
+        if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives-1
                     tmp_primitive = bvh.primitives[ln.primitives_offset+i]
-                    tmp_hit, tmp_interaction = intersect_p!(
-                        pool, tmp_primitive, ray,
+                    tmp_hit, ray, tmp_interaction = intersect_p!(
+                        tmp_primitive, ray,
                     )
                     if tmp_hit && !(tmp_interaction isa Vec3)
                         hit = tmp_hit
@@ -263,10 +263,10 @@ function intersect!(pool, bvh::BVHAccel{P}, ray::MutableRef{<:AbstractRay})::Tup
     return hit, primitive, interaction
 end
 
-function intersect_p(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
+function intersect_p(bvh::BVHAccel, ray::AbstractRay)
     length(bvh.nodes) == 0 && return false
 
-    check_direction!(ray)
+    ray = check_direction(ray)
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
@@ -276,11 +276,11 @@ function intersect_p(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
 
     while true
         ln = bvh.nodes[current_node_i]
-        if intersect_p(pool, ln.bounds, ray, inv_dir, dir_is_neg)
+        if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 for i in 0:ln.n_primitives-1
                     intersect_p(
-                        pool, bvh.primitives[ln.primitives_offset+i], ray,
+                        bvh.primitives[ln.primitives_offset+i], ray,
                     ) && return true
                 end
                 to_visit_offset == 1 && break

@@ -239,15 +239,15 @@ end
 const NO_MATERIAL = UInt8(0)
 NoMaterial() = UberMaterial(NO_MATERIAL)
 
-Base.Base.@propagate_inbounds function (m::UberMaterial)(pool, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
+Base.Base.@propagate_inbounds function (m::UberMaterial)(si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
     if m.type === MATTE_MATERIAL
-        return matte_material(pool, m, si, allow_multiple_lobes, transport)
+        return matte_material(m, si, allow_multiple_lobes, transport)
     elseif m.type === MIRROR_MATERIAL
-        return mirror_material(pool, m, si, allow_multiple_lobes, transport)
+        return mirror_material(m, si, allow_multiple_lobes, transport)
     elseif m.type === GLASS_MATERIAL
-        return glass_material(pool, m, si, allow_multiple_lobes, transport)
+        return glass_material(m, si, allow_multiple_lobes, transport)
     elseif m.type === PLASTIC_MATERIAL
-        return plastic_material(pool, m, si, allow_multiple_lobes, transport)
+        return plastic_material(m, si, allow_multiple_lobes, transport)
     else
         return nothing
     end

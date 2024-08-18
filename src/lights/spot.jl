@@ -19,11 +19,11 @@ struct SpotLight{S<:Spectrum} <: Light
     end
 end
 
-function sample_li(pool, s::SpotLight, ref::Interaction, ::Point2f)
+function sample_li(s::SpotLight, ref::Interaction, ::Point2f)
     wi = normalize(Vec3f(s.position - ref.p))
     pdf = 1f0
     visibility = VisibilityTester(
-        pool, ref, allocate(pool, Interaction, (s.position, ref.time, Vec3f(0f0), Normal3f(0f0))),
+        ref, Interaction(s.position, ref.time, Vec3f(0f0), Normal3f(0f0)),
     )
     radiance = s.i * falloff(s, -wi) / distance_squared(s.position, ref.p)
     radiance, wi, pdf, visibility
@@ -44,11 +44,11 @@ end
 end
 
 function sample_le(
-        pool, s::SpotLight, u1::Point2f, ::Point2f, ::Float32,
+        s::SpotLight, u1::Point2f, ::Point2f, ::Float32,
     )::Tuple{RGBSpectrum,Ray,Normal3f,Float32,Float32}
 
     w = s.light_to_world(uniform_sample_cone(u1, s.cos_total_width))
-    ray = default(pool, Ray; o=s.position, d=w)
+    ray = Ray(o=s.position, d=w)
     light_normal = Normal3f(ray.d)
     pdf_pos = 1f0
     pdf_dir = uniform_cone_pdf(s.cos_total_width)

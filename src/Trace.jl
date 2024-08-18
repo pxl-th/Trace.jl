@@ -189,30 +189,30 @@ struct Scene{P<:Primitive, L<:NTuple{N, Light} where N}
     end
 end
 
-@inline function intersect!(pool, scene::Scene, ray::Union{Ray,RayDifferentials})
-    intersect!(pool, scene.aggregate, ray)
+@inline function intersect!(scene::Scene, ray::AbstractRay)
+    intersect!(scene.aggregate, ray)
 end
-@inline function intersect_p(pool, scene::Scene, ray::Union{Ray,RayDifferentials})
-    intersect_p(pool, scene.aggregate, ray)
+@inline function intersect_p(scene::Scene, ray::AbstractRay)
+    intersect_p(scene.aggregate, ray)
 end
 
 @inline function spawn_ray(
-    pool, p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
-)::Ray
+        p0::Interaction, p1::Interaction, δ::Float32 = 1f-6,
+    )::Ray
     direction = p1.p - p0.p
     origin = p0.p .+ δ .* direction
-    return allocate(pool, Ray, (origin, direction, Inf32, p0.time))
+    return Ray(origin, direction, Inf32, p0.time)
 end
 
-@inline function spawn_ray(pool, p0::SurfaceInteraction, p1::Interaction)::Ray
-    spawn_ray(pool, p0.core, p1)
+@inline function spawn_ray(p0::SurfaceInteraction, p1::Interaction)::Ray
+    spawn_ray(p0.core, p1)
 end
 
 @inline function spawn_ray(
-        pool, si::SurfaceInteraction, direction::Vec3f, δ::Float32 = 1f-6,
+        si::SurfaceInteraction, direction::Vec3f, δ::Float32 = 1f-6,
     )::Ray
     origin = si.core.p .+ δ .* direction
-    return default(pool, Ray; o=origin, d=direction, time=si.core.time)
+    return Ray(o=origin, d=direction, time=si.core.time)
 end
 
 include("shapes/Shape.jl")

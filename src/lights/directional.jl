@@ -37,12 +37,12 @@ end
 end
 
 function sample_li(
-        pool, d::DirectionalLight{S}, ref::Interaction, u::Point2f,
+        d::DirectionalLight{S}, ref::Interaction, u::Point2f,
     )::Tuple{S,Vec3f,Float32,VisibilityTester} where S<:Spectrum
 
     outside_point = ref.p .+ d.direction .* (2 * d.world_radius)
     tester = VisibilityTester(
-        pool, ref, Interaction(outside_point, ref.time, Vec3f(0f0), Normal3f(0f0)),
+        ref, Interaction(outside_point, ref.time, Vec3f(0f0), Normal3f(0f0)),
     )
     d.i, d.direction, 1f0, tester
 end

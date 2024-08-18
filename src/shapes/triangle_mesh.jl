@@ -301,7 +301,7 @@ end
 
 
 function intersect(
-        pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+        t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
     )::Tuple{Bool,Float32,SurfaceInteraction}
 
     vs = vertices(t)
@@ -358,7 +358,7 @@ function intersect(
 end
 
 function intersect_p(
-        pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+        t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
     )::Bool
 
     vs = vertices(t)

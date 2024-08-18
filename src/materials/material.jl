@@ -10,7 +10,7 @@ end
 """
 Compute scattering function.
 """
-Base.Base.@propagate_inbounds  function matte_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
+Base.Base.@propagate_inbounds  function matte_material(m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
     r = clamp(m.Kd(si))
@@ -26,7 +26,7 @@ function MirrorMaterial(Kr::Texture)
     return UberMaterial(MIRROR_MATERIAL; Kr=Kr)
 end
 
-Base.Base.@propagate_inbounds function mirror_material(pool, m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
+Base.Base.@propagate_inbounds function mirror_material(m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     r = clamp(m.Kr(si))
     is_black(r) && return
     return BSDF(si, SpecularReflection(!is_black(r), r, FresnelNoOp()))
@@ -41,7 +41,7 @@ function GlassMaterial(
     return UberMaterial(GLASS_MATERIAL; Kr=Kr, Kt=Kt, u_roughness=u_roughness, v_roughness=v_roughness, index=index, remap_roughness=remap_roughness)
 end
 
-Base.Base.@propagate_inbounds function glass_material(pool, g::UberMaterial, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
+Base.Base.@propagate_inbounds function glass_material(g::UberMaterial, si::SurfaceInteraction, allow_multiple_lobes::Bool, transport)
 
     η = g.index(si)
     u_roughness = g.u_roughness(si)
@@ -51,7 +51,7 @@ Base.Base.@propagate_inbounds function glass_material(pool, g::UberMaterial, si:
     t = clamp(g.Kt(si))
     r_black = is_black(r)
     t_black = is_black(t)
-    r_black && t_black && return BSDF(pool, si, η)
+    r_black && t_black && return BSDF(si, η)
 
     is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
     if is_specular && allow_multiple_lobes
@@ -83,7 +83,7 @@ function PlasticMaterial(
     return UberMaterial(PLASTIC_MATERIAL; Kd=Kd, Ks=Ks, roughness=roughness, remap_roughness=remap_roughness)
 end
 
-Base.Base.@propagate_inbounds function plastic_material(pool, p::UberMaterial,
+Base.Base.@propagate_inbounds function plastic_material(p::UberMaterial,
         si::SurfaceInteraction, ::Bool, transport,
     )
     # Initialize diffuse componen of plastic material.

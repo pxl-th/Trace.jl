@@ -142,10 +142,8 @@ function (t::Transformation)(b::Bounds3)
     mapreduce(i -> Bounds3(t(corner(b, i))), ∪, 1:8)
 end
 
-function apply!(t::Transformation, r::Ray)
-    r.o = t(r.o)
-    r.d = t(r.d)
-    return r
+function apply(t::Transformation, r::Ray)
+    return Ray(r, o=t(r.o), d=t(r.d))
 end
 
 function apply!(t::Transformation, r::RayDifferentials)
@@ -155,7 +153,13 @@ function apply!(t::Transformation, r::RayDifferentials)
     r.ry_origin = t(r.ry_origin)
     r.rx_direction = t(r.rx_direction)
     r.ry_direction = t(r.ry_direction)
-    return r
+    return RayDifferential(r;
+        o=t(r.o), d=t(r.d),
+        rx_origin=t(r.rx_origin),
+        ry_origin=t(r.ry_origin),
+        rx_direction=t(r.rx_direction),
+        ry_direction=t(r.ry_direction)
+    )
 end
 
 function has_scale(t::Transformation)

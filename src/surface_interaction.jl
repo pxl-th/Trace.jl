@@ -186,11 +186,11 @@ surface properties and then initializing a representation of the BSDF
 at the point.
 """
 function compute_scattering!(
-        pool, primitive, si::SurfaceInteraction, ray::RayDifferentials,
+        primitive, si::SurfaceInteraction, ray::RayDifferentials,
         allow_multiple_lobes::Bool = false, transport = Radiance,
     )
     si = compute_differentials(si, ray)
-    return si, compute_scattering!(pool, primitive, si, allow_multiple_lobes, transport)
+    return si, compute_scattering!(primitive, si, allow_multiple_lobes, transport)
 end
 
 @inline function le(::SurfaceInteraction, ::Vec3f)::RGBSpectrum
@@ -198,7 +198,7 @@ end
     RGBSpectrum(0f0)
 end
 
-function apply(t::Transformation, si::Interaction)
+@inline function apply(t::Transformation, si::Interaction)
     return Interaction(
         t(si.p),
         si.time,
@@ -207,7 +207,7 @@ function apply(t::Transformation, si::Interaction)
     )
 end
 
-function apply(t::Transformation, si::ShadingInteraction)
+@inline function apply(t::Transformation, si::ShadingInteraction)
     n = normalize(t(si.n))
     ∂p∂u = t(si.∂p∂u)
     ∂p∂v = t(si.∂p∂v)
@@ -216,7 +216,7 @@ function apply(t::Transformation, si::ShadingInteraction)
     return ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
 end
 
-function apply(t::Transformation, si::SurfaceInteraction)
+@inline function apply(t::Transformation, si::SurfaceInteraction)
     # TODO compute shading normal separately
     core = apply(t, si.core)
     shading = apply(t, si.shading)
