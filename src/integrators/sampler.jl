@@ -11,6 +11,7 @@ end
 Render scene.
 """
 function (i::SamplerIntegrator)(scene::Scene)
+
     sample_bounds = get_sample_bounds(get_film(i.camera))
     sample_extent = diagonal(sample_bounds)
     tile_size = 16
@@ -23,6 +24,7 @@ function (i::SamplerIntegrator)(scene::Scene)
 
     @info "Utilizing $(Threads.nthreads()) threads"
     mempools = [MemoryPool(round(Int, 2*16384)) for _ in 1:Threads.maxthreadid()]
+    film = get_film(i.camera)
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
@@ -32,7 +34,7 @@ function (i::SamplerIntegrator)(scene::Scene)
         tb_max = min.(tb_min .+ (tile_size - 1), sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
 
-        film_tile = FilmTile(get_film(i.camera), tile_bounds)
+        film_tile = FilmTile(film, tile_bounds)
         spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
         pool = mempools[Threads.threadid()]
         for pixel in tile_bounds
@@ -46,7 +48,7 @@ function (i::SamplerIntegrator)(scene::Scene)
                 ω > 0.0f0 && (l = li(pool, i, ray, scene, 1))
                 # TODO check l for invalid values
                 isnan(l) && (l = RGBSpectrum(0f0))
-                add_sample!(film_tile, camera_sample.film, l, ω)
+                add_sample!(film, film_tile, camera_sample.film, l, ω)
                 start_next_sample!(t_sampler)
             end
         end
@@ -108,6 +110,7 @@ function specular_reflect(
 ) where I<:SamplerIntegrator
 
     # Compute specular reflection direction `wi` and BSDF value.
+
     wo = surface_intersect.core.wo
     type = BSDF_REFLECTION | BSDF_SPECULAR
     wi, f, pdf, sampled_type = sample_f(

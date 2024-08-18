@@ -53,12 +53,12 @@ const SurfaceInteraction = MutableRef{_SurfaceInteraction}
 
 function SurfaceInteraction(
         pool, p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
-        ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f, shape
+        ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f, reverse_normal::Bool
     )
 
     n = normalize((∂p∂u × ∂p∂v))
 
-    if isnothing(shape) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
+    if reverse_normal
         n *= -1
     end
 

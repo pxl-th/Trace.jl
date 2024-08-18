@@ -1,30 +1,28 @@
 struct TriangleMesh
-    n_triangles::UInt32
-    n_vertices::UInt32
     vertices::Vector{Point3f}
     # For the i-th triangle, its 3 vertex positions are:
     # [vertices[indices[3 * i + j]] for j in 0:2].
     indices::Vector{UInt32}
     # Optional normal vectors, one per vertex.
-    normals::Maybe{Vector{Normal3f}}
+    normals::Vector{Normal3f}
     # Optional tangent vectors, one per vertex.
-    tangents::Maybe{Vector{Vec3f}}
+    tangents::Vector{Vec3f}
     # Optional parametric (u, v) values, one for each vertex.
-    uv::Maybe{Vector{Point2f}}
+    uv::Vector{Point2f}
 
     function TriangleMesh(
-        object_to_world::Transformation,
-        n_triangles::Integer, indices::Vector{UInt32},
-        n_vertices::Integer, vertices::Vector{Point3f},
-        normals::Maybe{Vector{Normal3f}} = nothing,
-        tangents::Maybe{Vector{Vec3f}} = nothing,
-        uv::Maybe{Vector{Point2f}} = nothing,
-    )
+            object_to_world::Transformation,
+            indices::Vector{UInt32},
+            vertices::Vector{Point3f},
+            normals::Vector{Normal3f} = Normal3f[],
+            tangents::Vector{Vec3f} = Vec3f[],
+            uv::Vector{Point2f} = Point2f[],
+        )
         vertices = object_to_world.(vertices)
-        new(
-            n_triangles, n_vertices, vertices,
-            maybe_copy(indices), maybe_copy(normals),
-            maybe_copy(tangents), maybe_copy(uv),
+        return new(
+            vertices,
+            copy(indices), copy(normals),
+            copy(tangents), copy(uv),
         )
     end
 end
@@ -37,25 +35,41 @@ struct Triangle <: AbstractShape
     i::UInt32
 
     # i maps from 0 based indexing to 1 based.
-    function Triangle(core::ShapeCore, mesh::TriangleMesh, i::UInt32)
+    function Triangle(core::ShapeCore, mesh::TriangleMesh, i::Integer)
         new(core, mesh, i * 3 + 1)
     end
 end
 
 function create_triangle_mesh(
     core::ShapeCore,
-    n_triangles::Integer, indices::Vector{UInt32},
-    n_vertices::Integer, vertices::Vector{Point3f},
-    normals::Maybe{Vector{Normal3f}} = nothing,
-    tangents::Maybe{Vector{Vec3f}} = nothing,
-    uv::Maybe{Vector{Point2f}} = nothing,
+    indices::Vector{UInt32},
+    vertices::Vector{Point3f},
+    normals::Vector{Normal3f} = Normal3f[],
+    tangents::Vector{Vec3f} = Vec3f[],
+    uv::Vector{Point2f} = Point2f[],
 )
     mesh = TriangleMesh(
-        core.object_to_world, n_triangles, indices, n_vertices, vertices,
+        core.object_to_world, indices, vertices,
         normals, tangents, uv,
     )
-    [Triangle(core, mesh, i) for i in UnitRange{UInt32}(0:n_triangles-1)]
+    ntriangles = length(indices) ÷ 3
+    [Triangle(core, mesh, i-1) for i in 1:ntriangles]
 end
+
+function create_triangle_mesh(mesh::GeometryBasics.Mesh, core::ShapeCore)
+    fs = decompose(TriangleFace{UInt32}, mesh)
+    vertices = decompose(Point3f, mesh)
+    normals = Normal3f.(decompose_normals(mesh))
+    uvs = Point2f.(GeometryBasics.decompose_uv(mesh))
+    indices = collect(reinterpret(UInt32, fs))
+    mesh = TriangleMesh(
+        core.object_to_world, indices, vertices,
+        normals, Vec3f[], uvs,
+    )
+    ntriangles = length(fs)
+    [Triangle(core, mesh, i) for i in UnitRange{UInt32}(0:ntriangles-1)]
+end
+
 
 function area(t::Triangle)
     vs = vertices(t)
@@ -77,9 +91,11 @@ function tangents(t::Triangle)
     @inbounds @SVector Vec3f[t.mesh.tangents[t.mesh.indices[t.i+j]] for j in 0:2]
 end
 function uvs(t::Triangle)
-    t.mesh.uv isa Nothing &&
+    if isempty(t.mesh.uv) &&
         return @SVector [Point2f(0), Point2f(1, 0), Point2f(1, 1)]
-    @inbounds @SVector [t.mesh.uv[t.i+j] for j in 0:2]
+    end
+    idxs = t.mesh.indices
+    @inbounds @SVector [t.mesh.uv[idxs[t.i+j]] for j in 0:2]
 end
 
 function _edge_function(vs)
@@ -97,8 +113,8 @@ object_bound(t::Triangle) = mapreduce(
 world_bound(t::Triangle) = reduce(∪, Bounds3.(vertices(t)))
 
 function _to_ray_coordinate_space(
-    vertices::AbstractVector{Point3f}, ray::Union{Ray,RayDifferentials},
-)
+        vertices::AbstractVector{Point3f}, ray::Union{Ray,RayDifferentials},
+    )
     # Compute permutation.
     kz = argmax(abs.(ray.d))
     kx = kz + 1
@@ -122,19 +138,20 @@ function _to_ray_coordinate_space(
             0.0f0,
         )
     end
-    SVector(tvs), shear
+    return SVector(tvs), shear
 end
 
 function ∂p(
-    ::Triangle, vs::AbstractVector{Point3f}, uv::AbstractVector{Point2f},
-)::Tuple{Vec3f,Vec3f,Vec3f,Vec3f}
+        ::Triangle, vs::AbstractVector{Point3f}, uv::AbstractVector{Point2f},
+    )::Tuple{Vec3f,Vec3f,Vec3f,Vec3f}
+
     # Compute deltas for partial derivative matrix.
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
     δp_13, δp_23 = Vec3f(vs[1] - vs[3]), Vec3f(vs[2] - vs[3])
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
     if det ≈ 0
         v = normalize((vs[3] - vs[1]) × (vs[2] - vs[1]))
-        _, ∂p∂u, ∂p∂v = coordinate_system(v)
+        _, ∂p∂u, ∂p∂v = coordinate_system(Vec3f(v))
         return ∂p∂u, ∂p∂v, δp_13, δp_23
     end
     inv_det = 1f0 / det
@@ -144,8 +161,9 @@ function ∂p(
 end
 
 function ∂n(
-    t::Triangle, uv::AbstractVector{Point2f},
-)::Tuple{Normal3f,Normal3f}
+        t::Triangle, uv::AbstractVector{Point2f},
+    )::Tuple{Normal3f,Normal3f}
+
     t.mesh.normals isa Nothing && return Normal3f(0), Normal3f(0)
     t_normals = normals(t)
     # Compute deltas for partial detivatives of normal.
@@ -161,17 +179,17 @@ function ∂n(
 end
 
 function _init_triangle_shading_geometry!(
-    t::Triangle, interaction::SurfaceInteraction,
-    barycentric::Point3f, uv::AbstractVector{Point2f},
-)
-    !(t.mesh.normals ≢ nothing || t.mesh.tangents ≢ nothing) && return
+        t::Triangle, interaction::SurfaceInteraction,
+        barycentric::Point3f, uv::AbstractVector{Point2f},
+    )
+    !(!isempty(t.mesh.normals) || !isempty(t.mesh.tangents)) && return
     # Initialize triangle shading geometry.
     # Compute shading normal, tangent & bitangent.
     ns = interaction.core.n
-    if t.mesh.normals ≢ nothing
+    if !isempty(t.mesh.normals)
         ns = normalize(sum_mul(barycentric, normals(t)))
     end
-    if t.mesh.tangents ≢ nothing
+    if !isempty(t.mesh.tangents)
         ss = normalize(sum_mul(barycentric, tangents(t)))
     else
         ss = normalize(interaction.∂p∂u)
@@ -192,8 +210,8 @@ function intersect(
     )::Tuple{Bool,Float32,SurfaceInteraction}
 
     vs = vertices(t)
-    sf = SurfaceInteraction()
-    is_degenerate(vs) && return false, 0.0f0, sf
+    si = SurfaceInteraction()
+    is_degenerate(vs) && return false, 0.0f0, si
     t_vs, shear = _to_ray_coordinate_space(vs, ray)
     # Compute edge function coefficients.
     edges = _edge_function(t_vs)
@@ -202,9 +220,9 @@ function intersect(
     end
     # Perform triangle edge & determinant tests.
     # Point is inside a triangle if all edges have the same sign.
-    any(edges .< 0) && any(edges .> 0) && return false, 0f0, sf
+    any(edges .< 0) && any(edges .> 0) && return false, 0f0, si
     det = sum(edges)
-    det ≈ 0 && return false, 0f0, sf
+    det ≈ 0 && return false, 0f0, si
     # Compute scaled hit distance to triangle.
     shear_z = shear[3]
     t_scaled = (
@@ -214,9 +232,9 @@ function intersect(
     )
     # Test against t_max range.
     det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) &&
-        return false, 0f0, sf
+        return false, 0f0, si
     det > 0 && (t_scaled <= 0 || t_scaled > ray.t_max * det) &&
-        return false, 0f0, sf
+        return false, 0f0, si
     # Compute barycentric coordinates and t value for triangle intersection.
     inv_det = 1f0 / det
     barycentric = edges .* inv_det
@@ -228,23 +246,25 @@ function intersect(
     hit_point = sum_mul(barycentric, vs)
     uv_hit = sum_mul(barycentric, uv)
 
-    sf = SurfaceInteraction(pool,
+    reverse_normal = (t.core.reverse_orientation ⊻ t.core.transform_swaps_handedness)
+    si = SurfaceInteraction(pool,
         hit_point, ray.time, -ray.d, uv_hit,
-        ∂p∂u, ∂p∂v, Normal3f(0), Normal3f(0), t
+        ∂p∂u, ∂p∂v, Normal3f(0), Normal3f(0), reverse_normal
     )
-    sf.core.n = sf.shading.n = normalize(δp_13 × δp_23)
-    t.mesh isa Nothing && return true, t_hit, sf
-    _init_triangle_shading_geometry!(t, sf, barycentric, uv)
+    si.core.n = si.shading.n = normalize(δp_13 × δp_23)
+    t.mesh isa Nothing && return true, t_hit, si
+
+    _init_triangle_shading_geometry!(t, si, barycentric, uv)
     # Ensure correct orientation of the geometric normal.
-    if t.mesh.normals ≢ nothing
-        sf.core.n = face_forward(
-            sf.core.n, sf.shading.n,
+    if !isempty(t.mesh.normals)
+        si.core.n = face_forward(
+            si.core.n, si.shading.n,
         )
     elseif t.core.reverse_orientation ⊻ t.core.transform_swaps_handedness
-        sf.core.n = sf.shading.n = -sf.core.n
+        si.core.n = si.shading.n = -si.core.n
     end
     # TODO test against alpha texture if present.
-    true, t_hit, sf
+    true, t_hit, si
 end
 
 function intersect_p(

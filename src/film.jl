@@ -99,21 +99,20 @@ struct FilmTile{Pixels<:AbstractMatrix{<:FilmTilePixel}}
     bounds::Bounds2
     filter_radius::Point2f
     inv_filter_radius::Point2f
-    filter_table::Matrix{Float32}
     filter_table_width::Int32
     pixels::Pixels
 
     function FilmTile(
             bounds::Bounds2, filter_radius::Point2f,
-            filter_table::Matrix{Float32}, filter_table_width::Int32,
+            filter_table_width::Int32,
         )
         tile_res = (Int32.(inclusive_sides(bounds)))
-        pixels = StructArray{FilmTilePixel{RGBSpectrum}}(undef, tile_res[2], tile_res[1])
-        pixels.contrib_sum .= (RGBSpectrum(),)
-        pixels.filter_weight_sum .= 0.0f0
+        contrib_sum = fill(RGBSpectrum(), tile_res[2], tile_res[1])
+        filter_weight_sum = fill(0.0f0, tile_res[2], tile_res[1])
+        pixels = StructArray{FilmTilePixel{RGBSpectrum}}((contrib_sum, filter_weight_sum))
         new{typeof(pixels)}(
             bounds, filter_radius, 1f0 ./ filter_radius,
-            filter_table, filter_table_width,
+            filter_table_width,
             pixels,
         )
     end
@@ -126,7 +125,30 @@ function FilmTile(f::Film, sample_bounds::Bounds2)
     p0 = ceil.(sample_bounds.p_min .- 0.5f0 .- f.filter.radius)
     p1 = floor.(sample_bounds.p_max .- 0.5f0 .+ f.filter.radius) .+ 1f0
     tile_bounds = Bounds2(p0, p1) ∩ f.crop_bounds
-    FilmTile(tile_bounds, f.filter.radius, f.filter_table, f.filter_table_width)
+    FilmTile(tile_bounds, f.filter.radius, f.filter_table_width)
+end
+
+function filter_offset!(offsets, start, stop, discrete_point, inv_filter_radius, filter_table_width)
+    @inbounds for (i, x) in enumerate(Int(start):Int(stop))
+        fx = abs((x - discrete_point[1]) * inv_filter_radius * filter_table_width)
+        offsets[i] = clamp(ceil(fx), 1, filter_table_width)  # TODO is clipping ok?
+    end
+end
+
+@inline function filter_offset(x, discrete_point, inv_filter_radius, filter_table_width)
+    fx = abs((x - discrete_point[1]) * inv_filter_radius * filter_table_width)
+    return clamp(ceil(Int32, fx), Int32(1), Int32(filter_table_width))  # TODO is clipping ok?
+end
+
+function filter_offsets(start, stop, discrete_point, inv_filter_radius, filter_table_width)::NTuple{8, Int32}
+    range = Int32(start):Int32(stop)
+    return ntuple(8) do i
+        if i <= length(range)
+            filter_offset(range[i], discrete_point, inv_filter_radius, filter_table_width)::Int32
+        else
+            Int32(0)
+        end
+    end
 end
 
 """
@@ -137,33 +159,26 @@ Add sample contribution to the film tile.
     And is relative to the film, not the film tile.
 """
 function add_sample!(
-        t::FilmTile, point::Point2f, spectrum::S,
+        film::Film, t::FilmTile, point::Point2f, spectrum::S,
         sample_weight::Float32 = 1f0,
     ) where S<:Spectrum
 
     # Compute sample's raster bounds.
     discrete_point = point .- 0.5f0
     p0 = ceil.(Int32, discrete_point .- t.filter_radius)
-    p1 = floor.(Int32, discrete_point .+ t.filter_radius) .+ 1
+    p1 = floor.(Int32, discrete_point .+ t.filter_radius) .+ Int32(1)
     p0 = Int32.(max.(p0, max.(t.bounds.p_min, Point2{Int32}(1))))
     p1 = Int32.(min.(p1, t.bounds.p_max))
     # Precompute x & y filter offsets.
-    offsets_x = Vector{Int32}(undef, p1[1] - p0[1] + 1)
-    offsets_y = Vector{Int32}(undef, p1[2] - p0[2] + 1)
-    @inbounds for (i, x) in enumerate(p0[1]:p1[1])
-        fx = abs((x - discrete_point[1]) * t.inv_filter_radius[1] * t.filter_table_width)
-        offsets_x[i] = clamp(ceil(fx), 1, t.filter_table_width)  # TODO is clipping ok?
-    end
-    @inbounds for (i, y) in enumerate(p0[2]:p1[2])
-        fy = abs((y - discrete_point[2]) * t.inv_filter_radius[2] * t.filter_table_width)
-        offsets_y[i] = clamp(floor(fy), 1, t.filter_table_width)
-    end
+    offsets_x = filter_offsets(p0[1], p1[1], discrete_point, t.inv_filter_radius[1], t.filter_table_width)
+    offsets_y = filter_offsets(p0[2], p1[2], discrete_point, t.inv_filter_radius[2], t.filter_table_width)
     # Loop over filter support & add sample to pixel array.
     pixels = t.pixels
     contrib_sum = pixels.contrib_sum
     filter_weight_sum = pixels.filter_weight_sum
-    @inbounds for (j, y) in enumerate(p0[2]:p1[2]), (i, x) in enumerate(p0[1]:p1[1])
-        w = t.filter_table[offsets_y[j], offsets_x[i]]
+    filter_table = film.filter_table
+    @inbounds for (j, y) in enumerate(Int(p0[2]):Int(p1[2])), (i, x) in enumerate(Int(p0[1]):Int(p1[1]))
+        w = filter_table[offsets_y[j], offsets_x[i]]
         @real_assert sample_weight <= 1
         @real_assert w <= 1
         idx = get_pixel_index(t, Point2(x, y))
@@ -196,7 +211,7 @@ function merge_film_tile!(f::Film, ft::FilmTile)
     f_xyz = f.pixels.xyz
     f_filter_weight_sum = f.pixels.filter_weight_sum
     @inbounds for y in y_range, x in x_range
-        pixel = Point2(x, y)
+        pixel = Point2{Int32}(x, y)
         ft_idx = get_pixel_index(ft, pixel)
         f_idx = get_pixel_index(f, pixel)
         f_xyz[f_idx] += to_XYZ(ft_contrib_sum[ft_idx])
@@ -212,21 +227,28 @@ function set_image!(f::Film, spectrum::Matrix{S}) where {S<:Spectrum}
 end
 
 function save(film::Film, splat_scale::Float32 = 1f0)
-    image = Array{Float32}(undef, size(film.pixels)..., 3)
-    for y in 1:size(film.pixels)[1], x in 1:size(film.pixels)[2]
-        pixel = film.pixels[y, x]
-        image[y, x, :] .= XYZ_to_RGB(pixel.xyz)
+    image = film.framebuffer
+    xyz = film.pixels.xyz
+    filter_weight_sum = film.pixels.filter_weight_sum
+    splat_xyz = film.pixels.splat_xyz
+
+    @inbounds for idx in eachindex(film.pixels)
+        rgb = XYZ_to_RGB(xyz[idx])
         # Normalize pixel with weight sum.
-        filter_weight_sum = pixel.filter_weight_sum
-        if filter_weight_sum != 0
-            inv_weight = 1f0 / filter_weight_sum
-            image[y, x, :] .= max.(0f0, image[y, x, :] .* inv_weight)
+        fws = filter_weight_sum[idx]
+        if fws != 0
+            inv_weight = 1.0f0 / fws
+            rgb = max.(0.0f0, rgb .* inv_weight)
         end
         # Add splat value at pixel & scale.
-        splat_rgb = XYZ_to_RGB(pixel.splat_xyz)
-        image[y, x, :] .+= splat_scale .* splat_rgb
-        image[y, x, :] .*= film.scale
+        splat_rgb = XYZ_to_RGB(splat_xyz[idx])
+        rgb = rgb .+ splat_scale .* splat_rgb
+        rgb = rgb .* film.scale
+        rgb = map(rgb) do c
+            c = ifelse(isfinite(c), c, 0.0f0)
+            return clamp(c, 0.0f0, 1.0f0)
+        end
+        image[idx] = RGB(rgb...)
     end
-    clamp!(image, 0f0, 1f0) # TODO remap instead of clamping?
-    FileIO.save(film.filename, image[end:-1:begin, :, :])
+    FileIO.save(film.filename, @view image[end:-1:begin, :])
 end

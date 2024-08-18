@@ -156,9 +156,10 @@ function intersect(
     sin_ϕ, cos_ϕ = precompute_ϕ(hit_point)
     ∂p∂u, ∂p∂v = ∂p(s, hit_point, θ, sin_ϕ, cos_ϕ)
     ∂n∂u, ∂n∂v = ∂n(s, hit_point, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
+    reverse_normal = (s.core.reverse_orientation ⊻ s.core.transform_swaps_handedness)
     sf = SurfaceInteraction(pool,
         hit_point, ray.time, -ray.d, Point2f(u, v),
-        ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, s,
+        ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, reverse_normal
     )
     apply!(s.core.object_to_world, sf)
     true, shape_hit, sf

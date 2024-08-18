@@ -31,9 +31,9 @@ function compute_scattering!(
         pool, p::GeometricPrimitive, si::SurfaceInteraction,
         allow_multiple_lobes::Bool, transport::UInt8,
     )
+    @real_assert (si.core.n ⋅ si.shading.n) ≥ 0f0
     if p.material.type !== NO_MATERIAL
         return p.material(pool, si, allow_multiple_lobes, transport)
     end
-    # @real_assert (si.core.n ⋅ si.shading.n) ≥ 0f0
     return BSDF()
 end

@@ -213,28 +213,28 @@ function distribution_microfacet_reflection(m::UberBxDF{S}, wo::Vec3f, wi::Vec3f
     (cosθi ≈ 0 || cosθo ≈ 0) && return S(0f0)
     wh ≈ Vec3f(0) && return S(0f0)
     wh = normalize(wh)
-    f = m.fresnel(wi ⋅ face_forward(wh, Vec3f(0, 0, 1)))
-    m.r * D(m.distribution, wh) * G(m.distribution, wo, wi) *
-    return f / (4f0 * cosθi * cosθo)
+    f = fresnel(m)(wi ⋅ face_forward(wh, Vec3f(0, 0, 1)))
+    return m.r * D(m.distribution, wh) * G(m.distribution, wo, wi) *
+        f / (4f0 * cosθi * cosθo)
 end
 
 @inline function sample_microfacet_reflection(
         m::UberBxDF{S}, wo::Vec3f, u::Point2f,
     )::Tuple{Vec3f,Float32,RGBSpectrum,UInt8} where {S<:Spectrum}
 
-    wo[3] ≈ 0 && return Vec3f(0f0), 0f0, S(0f0), nothing
+    wo[3] ≈ 0 && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
 
     # Sample microfacet orientation `wh` and reflected direction `wi`.
 
     wh = sample_wh(m.distribution, wo, u)
-    (wo ⋅ wh) < 0 && return Vec3f(0f0), 0f0, S(0f0), nothing
+    (wo ⋅ wh) < 0 && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
 
     wi = reflect(wo, wh)
-    !same_hemisphere(wo, wi) && return Vec3f(0f0), 0f0, S(0f0), nothing
+    !same_hemisphere(wo, wi) && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
     # Copmute PDF of `wi` for microfacet reflection.
 
     pdf = pdf_microfacet_reflection(m, wo, wh)
-    wi, pdf, m(wo, wi), nothing
+    wi, pdf, m(wo, wi), UInt8(0)
 end
 
 @inline function pdf_microfacet_reflection(
