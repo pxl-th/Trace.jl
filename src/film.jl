@@ -102,30 +102,47 @@ struct FilmTile{Pixels<:AbstractMatrix{<:FilmTilePixel}}
     filter_table_width::Int32
     pixels::Pixels
 
-    function FilmTile(
-            bounds::Bounds2, filter_radius::Point2f,
-            filter_table_width::Int32,
-        )
-        tile_res = (Int32.(inclusive_sides(bounds)))
-        contrib_sum = fill(RGBSpectrum(), tile_res[2], tile_res[1])
-        filter_weight_sum = fill(0.0f0, tile_res[2], tile_res[1])
-        pixels = StructArray{FilmTilePixel{RGBSpectrum}}((contrib_sum, filter_weight_sum))
-        new{typeof(pixels)}(
-            bounds, filter_radius, 1f0 ./ filter_radius,
-            filter_table_width,
-            pixels,
-        )
-    end
+end
+
+function FilmTile(
+        bounds::Bounds2, filter_radius::Point2f,
+        filter_table_width::Int32,
+    )
+    tile_res = (Int32.(inclusive_sides(bounds))) .+ 2
+    contrib_sum = fill(RGBSpectrum(), tile_res[2], tile_res[1])
+    filter_weight_sum = fill(0.0f0, tile_res[2], tile_res[1])
+    pixels = StructArray{FilmTilePixel{RGBSpectrum}}((contrib_sum, filter_weight_sum))
+    FilmTile{typeof(pixels)}(
+        bounds, filter_radius, 1.0f0 ./ filter_radius,
+        filter_table_width,
+        pixels,
+    )
 end
 
 """
 Bounds should start from 1 not 0.
 """
-function FilmTile(f::Film, sample_bounds::Bounds2)
-    p0 = ceil.(sample_bounds.p_min .- 0.5f0 .- f.filter.radius)
-    p1 = floor.(sample_bounds.p_max .- 0.5f0 .+ f.filter.radius) .+ 1f0
+function FilmTile(f::Film, sample_bounds::Bounds2, radius)
+    p0 = ceil.(sample_bounds.p_min .- 0.5f0 .- radius)
+    p1 = floor.(sample_bounds.p_max .- 0.5f0 .+ radius) .+ 1f0
     tile_bounds = Bounds2(p0, p1) ∩ f.crop_bounds
-    FilmTile(tile_bounds, f.filter.radius, f.filter_table_width)
+    FilmTile(tile_bounds, radius, f.filter_table_width)
+end
+
+function reset!(tile::FilmTile)
+    tile.pixels.contrib_sum .= (RGBSpectrum(0f0),)
+    tile.pixels.filter_weight_sum .= 0f0
+end
+
+function update_bounds!(f::Film, tile::FilmTile, sample_bounds::Bounds2)
+    reset!(tile)
+    radius = tile.filter_radius
+    p0 = ceil.(sample_bounds.p_min .- 0.5f0 .- radius)
+    p1 = floor.(sample_bounds.p_max .- 0.5f0 .+ radius) .+ 1.0f0
+    bounds = Bounds2(p0, p1) ∩ f.crop_bounds
+    tile_res = (Int32.(inclusive_sides(bounds)))
+    @assert all(reverse(tile_res) .<= size(tile.pixels)) "$(reverse(tile_res)) != $(size(tile.pixels)) $(sample_bounds)"
+    FilmTile(bounds, radius, tile.inv_filter_radius, tile.filter_table_width, tile.pixels)
 end
 
 function filter_offset!(offsets, start, stop, discrete_point, inv_filter_radius, filter_table_width)

@@ -19,32 +19,36 @@ struct TrowbridgeReitzDistribution <: MicrofacetDistribution
 end
 
 
-abstract type Fresnel end
-struct FresnelConductor{S<:Spectrum} <: Fresnel
-    ηi::S
-    ηt::S
-    k::S
+const FRESNEL_CONDUCTOR = UInt8(1)
+const FRESNEL_DIELECTRIC = UInt8(2)
+const FRESNEL_NO_OP = UInt8(3)
+
+struct Fresnel
+    ηi::RGBSpectrum
+    ηt::RGBSpectrum
+    k::RGBSpectrum
+    type::UInt8
 end
-FresnelConductor() = FresnelConductor(RGBSpectrum(0f0), RGBSpectrum(0f0), RGBSpectrum(0f0))
-struct FresnelDielectric <: Fresnel
-    ηi::Float32
-    ηt::Float32
+
+FresnelConductor(ni, nt, k) = Fresnel(ni, nt, k, FRESNEL_CONDUCTOR)
+FresnelDielectric(ni::Float32, nt::Float32) = Fresnel(RGBSpectrum(ni), RGBSpectrum(nt), RGBSpectrum(0.0f0), FRESNEL_DIELECTRIC)
+FresnelNoOp() = Fresnel(RGBSpectrum(0.0f0), RGBSpectrum(0.0f0), RGBSpectrum(0.0f0), FRESNEL_NO_OP)
+
+function (f::Fresnel)(cos_θi::Float32)
+    if f.type === FRESNEL_CONDUCTOR
+        return fresnel_conductor(cos_θi, f.ηi, f.ηt, f.k)
+    elseif f.type === FRESNEL_DIELECTRIC
+        return fresnel_dielectric(cos_θi, f.ηi[1], f.ηt[1])
+    end
+    return RGBSpectrum(1.0f0)
 end
-FresnelDielectric() = FresnelDielectric(0f0, 0f0)
-struct FresnelNoOp <: Fresnel end
-(f::FresnelConductor)(cos_θi::Float32) = fresnel_conductor(cos_θi, f.ηi, f.ηt, f.k)
-(f::FresnelDielectric)(cos_θi::Float32) = fresnel_dielectric(cos_θi, f.ηi, f.ηt)
-(f::FresnelNoOp)(::Float32) = RGBSpectrum(1.0f0)
+
 
 struct UberBxDF{S<:Spectrum}
     """
     Describes fresnel properties.
     """
-    fresnel_con::FresnelConductor{S}
-    fresnel_di::FresnelDielectric
-    fresnel_no::FresnelNoOp
-    which_fresnel::UInt8 # selected fresnel
-
+    fresnel::Fresnel
     """
     Spectrum used to scale the reflected color.
     """
@@ -82,33 +86,13 @@ function UberBxDF{S}(active::Bool, bxdf_type::UInt8;
         r=Trace.RGBSpectrum(1f0), t=Trace.RGBSpectrum(1f0),
         a=0f0, b=0f0, η_a=0f0, η_b=0f0,
         distribution=TrowbridgeReitzDistribution(),
-        fresnel=nothing,
+        fresnel=FresnelNoOp(),
         type=UInt8(0),
         transport=UInt8(0)
     ) where {S<:Spectrum}
-    used_fresnel = UInt8(0)
-    fresnel_con = FresnelConductor()
-    fresnel_di = FresnelDielectric()
-    fresnel_no = FresnelNoOp()
-
-    if !isnothing(fresnel)
-        if fresnel isa FresnelConductor
-            fresnel_con = fresnel
-            used_fresnel = UInt8(1)
-        elseif fresnel isa FresnelDielectric
-            fresnel_di = fresnel
-            used_fresnel = UInt8(2)
-        elseif fresnel isa FresnelNoOp
-            fresnel_no = fresnel
-            used_fresnel = UInt8(3)
-        end
-    end
     _distribution = distribution isa TrowbridgeReitzDistribution ? distribution : TrowbridgeReitzDistribution()
-    return UberBxDF{S}(fresnel_con, fresnel_di, fresnel_no, used_fresnel, r, t, a, b, η_a, η_b, _distribution, transport, type, bxdf_type, active)
+    return UberBxDF{S}(fresnel, r, t, a, b, η_a, η_b, _distribution, transport, type, bxdf_type, active)
 end
-
-fresnel(f::UberBxDF)= getfield(f, Int(f.which_fresnel))
-
 
 @inline function sample_f(s::UberBxDF, wo::Vec3f, sample::Point2f)::Tuple{Vec3f,Float32,RGBSpectrum,UInt8}
     if s.bxdf_type === SPECULAR_REFLECTION

@@ -90,11 +90,15 @@ function area(b::Bounds2)
 end
 
 @inline function sides(b::Union{Bounds2,Bounds3})
-    [abs(b1 - b0) for (b1, b0) in zip(b.p_max, b.p_min)]
+    return map(b.p_max, b.p_min) do b1, b0
+        return abs(b1 - b0)
+    end
 end
 
 @inline function inclusive_sides(b::Union{Bounds2,Bounds3})
-    [abs(b1 - (b0 - 1f0)) for (b1, b0) in zip(b.p_max, b.p_min)]
+    return map(b.p_max, b.p_min) do b1, b0
+        abs(b1 - (b0 - 1.0f0))
+    end
 end
 
 function volume(b::Bounds3)

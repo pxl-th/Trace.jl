@@ -213,7 +213,7 @@ function distribution_microfacet_reflection(m::UberBxDF{S}, wo::Vec3f, wi::Vec3f
     (cosθi ≈ 0 || cosθo ≈ 0) && return S(0f0)
     wh ≈ Vec3f(0) && return S(0f0)
     wh = normalize(wh)
-    f = fresnel(m)(wi ⋅ face_forward(wh, Vec3f(0, 0, 1)))
+    f = m.fresnel(wi ⋅ face_forward(wh, Vec3f(0, 0, 1)))
     return m.r * D(m.distribution, wh) * G(m.distribution, wo, wi) *
         f / (4f0 * cosθi * cosθo)
 end

@@ -1,61 +1,78 @@
 abstract type SamplerIntegrator <: Integrator end
 
-struct WhittedIntegrator <: SamplerIntegrator
-    camera::C where C<:Camera
-    sampler::S where S<:AbstractSampler
+struct WhittedIntegrator{C<: Camera, S <: AbstractSampler} <: SamplerIntegrator
+    camera::C
+    sampler::S
     max_depth::Int64
 end
 
+@noinline function sample_kernel_inner(pool, i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
+    while has_next_sample(t_sampler)
+        free_all(pool) # clear memory pool
+        camera_sample = get_camera_sample(t_sampler, pixel)
+        ray, ω = generate_ray_differential(pool, camera, camera_sample)
+        scale_differentials!(ray, spp_sqr)
+        l = RGBSpectrum(0f0)
+        if ω > 0.0f0
+            l = li(pool, i, ray, scene, 1)
+        end
+        # TODO check l for invalid values
+        if isnan(l)
+            l = RGBSpectrum(0f0)
+        end
+        add_sample!(film, film_tile, camera_sample.film, l, ω)
+        start_next_sample!(t_sampler)
+    end
+end
+
+@noinline function sample_kernel(mempools, i, camera, scene, film, film_tile, tile_bounds)
+    pool = mempools[Threads.threadid()]
+    t_sampler = deepcopy(i.sampler)
+    spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
+    for pixel in tile_bounds
+        start_pixel!(t_sampler, pixel)
+        sample_kernel_inner(pool, i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
+    end
+    merge_film_tile!(film, film_tile)
+end
 
 """
 Render scene.
 """
 function (i::SamplerIntegrator)(scene::Scene)
-
     sample_bounds = get_sample_bounds(get_film(i.camera))
     sample_extent = diagonal(sample_bounds)
     tile_size = 16
-    n_tiles::Point2 = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
-
+    n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
     # TODO visualize tile bounds to see if they overlap
     width, height = n_tiles
     total_tiles = width * height - 1
     bar = Progress(total_tiles, 1)
-
     @info "Utilizing $(Threads.nthreads()) threads"
-    mempools = [MemoryPool(round(Int, 2*16384)) for _ in 1:Threads.maxthreadid()]
+    mempools = [MemoryPool(round(Int, 3*16384)) for _ in 1:Threads.maxthreadid()]
     film = get_film(i.camera)
+    camera = i.camera
+    filter_radius = film.filter.radius
+
+    _tile = Point2f(0f0)
+    _tb_min = sample_bounds.p_min .+ _tile .* tile_size
+    _tb_max = min.(_tb_min .+ (tile_size - 1), sample_bounds.p_max)
+    _tile_bounds = Bounds2(_tb_min, _tb_max)
+    filmtiles = [FilmTile(film, _tile_bounds, filter_radius) for _ in 1:Threads.maxthreadid()]
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
-        t_sampler = deepcopy(i.sampler)
-
         tb_min = sample_bounds.p_min .+ tile .* tile_size
         tb_max = min.(tb_min .+ (tile_size - 1), sample_bounds.p_max)
-        tile_bounds = Bounds2(tb_min, tb_max)
-
-        film_tile = FilmTile(film, tile_bounds)
-        spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
-        pool = mempools[Threads.threadid()]
-        for pixel in tile_bounds
-            start_pixel!(t_sampler, pixel)
-            while has_next_sample(t_sampler)
-                free_all(pool) # clear memory pool
-                camera_sample = get_camera_sample(t_sampler, pixel)
-                ray, ω = generate_ray_differential(pool, i.camera, camera_sample)
-                scale_differentials!(ray, spp_sqr)
-                l = RGBSpectrum(0f0)
-                ω > 0.0f0 && (l = li(pool, i, ray, scene, 1))
-                # TODO check l for invalid values
-                isnan(l) && (l = RGBSpectrum(0f0))
-                add_sample!(film, film_tile, camera_sample.film, l, ω)
-                start_next_sample!(t_sampler)
-            end
+        if tb_min[1] < tb_max[1] && tb_min[2] < tb_max[2]
+            tile_bounds = Bounds2(tb_min, tb_max)
+            film_tile = filmtiles[Threads.threadid()]
+            film_tile = update_bounds!(film, film_tile, tile_bounds)
+            sample_kernel(mempools, i, camera, scene, film, film_tile, tile_bounds)
         end
-        merge_film_tile!(get_film(i.camera), film_tile)
         next!(bar)
     end
-    save(get_film(i.camera))
+    save(film)
 end
 
 function li(

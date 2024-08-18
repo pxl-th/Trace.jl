@@ -47,8 +47,8 @@ struct LinearBVHInterior <: LinearNode
 end
 const LinearBVH = Union{LinearBVHLeaf,LinearBVHInterior}
 
-struct BVHAccel <: AccelPrimitive
-    primitives::Vector{P} where P<:Primitive
+struct BVHAccel{P <: Primitive} <: AccelPrimitive
+    primitives::Vector{P}
     max_node_primitives::UInt8
     nodes::Vector{LinearBVH}
     nodes_to_visit::Vector{Vector{Int32}}
@@ -57,7 +57,7 @@ struct BVHAccel <: AccelPrimitive
         primitives::Vector{P}, max_node_primitives::Integer = 1,
     ) where P<:Primitive
         max_node_primitives = min(255, max_node_primitives)
-        length(primitives) == 0 && return new(primitives, max_node_primitives)
+        isempty(primitives) && return new{P}(primitives, max_node_primitives)
         nodes_to_visit = [zeros(Int32, 64) for _ in 1:Threads.maxthreadid()]
         primitives_info = [
             BVHPrimitiveInfo(i, world_bound(p))
@@ -65,7 +65,7 @@ struct BVHAccel <: AccelPrimitive
         ]
 
         total_nodes = Ref(0)
-        ordered_primitives = Vector{P}(undef, 0)
+        ordered_primitives = P[]
         root = _init(
             primitives, primitives_info, 1, length(primitives),
             total_nodes, ordered_primitives, max_node_primitives,
@@ -76,7 +76,7 @@ struct BVHAccel <: AccelPrimitive
         _unroll(flattened, root, offset)
         @real_assert total_nodes[] + 1 == offset[]
 
-        new(ordered_primitives, max_node_primitives, flattened, nodes_to_visit)
+        new{P}(ordered_primitives, max_node_primitives, flattened, nodes_to_visit)
     end
 end
 
@@ -210,11 +210,10 @@ end
     length(bvh.nodes) > 0 ? bvh.nodes[1].bounds : Bounds3()
 end
 
-function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
+function intersect!(pool, bvh::BVHAccel{P}, ray::MutableRef{<:AbstractRay})::Tuple{Bool, P, SurfaceInteraction} where P
     hit = false
     interaction = SurfaceInteraction()
-    primitive::Maybe{GeometricPrimitive} = nothing
-    length(bvh.nodes) == 0 && return hit, primitive, interaction
+    isempty(bvh.nodes) && return hit, nothing, interaction
 
     check_direction!(ray)
     inv_dir = 1f0 ./ ray.d
@@ -222,7 +221,10 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
 
     to_visit_offset::Int32, current_node_i::Int32 = 1, 1
     @inbounds nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
-    nodes_to_visit .= 0
+    @inbounds for i in eachindex(nodes_to_visit)
+        nodes_to_visit[i] = Int32(0)
+    end
+    primitive::P = first(bvh.primitives)
     @inbounds while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(pool, ln.bounds, ray, inv_dir, dir_is_neg)
@@ -240,7 +242,7 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
                     end
                 end
                 to_visit_offset == 1 && break
-                to_visit_offset -= 1
+                to_visit_offset -= Int32(1)
                 current_node_i = nodes_to_visit[to_visit_offset]
             else
                 if dir_is_neg[ln.split_axis] == 2
@@ -248,13 +250,13 @@ function intersect!(pool, bvh::BVHAccel, ray::MutableRef{<:AbstractRay})
                     current_node_i = ln.second_child_offset
                 else
                     nodes_to_visit[to_visit_offset] = ln.second_child_offset
-                    current_node_i += 1
+                    current_node_i += Int32(1)
                 end
-                to_visit_offset += 1
+                to_visit_offset += Int32(1)
             end
         else
             to_visit_offset == 1 && break
-            to_visit_offset -= 1
+            to_visit_offset -= Int32(1)
             current_node_i = nodes_to_visit[to_visit_offset]
         end
     end

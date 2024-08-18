@@ -50,7 +50,7 @@ and return the value of BxDF for the pair of directions.
         s::UberBxDF{S}, wo::Vec3f, ::Point2f,
     )::Tuple{Vec3f,Float32,S,UInt8} where {S<:Spectrum}
     wi = Vec3f(-wo[1], -wo[2], wo[3])
-    wisp = fresnel(s)(cos_θ(wi)) * s.r / abs(cos_θ(wi))
+    wisp = s.fresnel(cos_θ(wi)) * s.r / abs(cos_θ(wi))
     return wi, 1.0f0, wisp, UInt8(0)
 end
 
@@ -84,7 +84,7 @@ and return the value of BxDF for the pair of directions.
     pdf = 1f0
 
     cos_wi = cos_θ(wi)
-    ft = s.t * (S(1.0f0) - fresnel(s)(cos_wi))
+    ft = s.t * (S(1.0f0) - s.fresnel(cos_wi))
     # Account for non-symmetry with transmission to different medium.
     s.transport === Radiance && (ft *= (η_i^2) / (η_t^2))
     return wi, pdf, ft / abs(cos_wi), UInt8(0)
