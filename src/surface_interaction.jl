@@ -1,4 +1,4 @@
-struct _Interaction
+struct Interaction
     """
     Intersection point in world coordinates.
     """
@@ -18,9 +18,7 @@ struct _Interaction
     n::Normal3f
 end
 
-const Interaction = MutableRef{_Interaction}
-
-struct _ShadingInteraction
+struct ShadingInteraction
     n::Normal3f
     ∂p∂u::Vec3f
     ∂p∂v::Vec3f
@@ -28,9 +26,7 @@ struct _ShadingInteraction
     ∂n∂v::Normal3f
 end
 
-const ShadingInteraction = MutableRef{_ShadingInteraction}
-
-struct _SurfaceInteraction
+struct SurfaceInteraction
     core::Interaction
     shading::ShadingInteraction
     uv::Point2f
@@ -46,13 +42,24 @@ struct _SurfaceInteraction
     ∂v∂y::Float32
     ∂p∂x::Vec3f
     ∂p∂y::Vec3f
+
+    SurfaceInteraction() = new()
+
+    function SurfaceInteraction(
+            core::Interaction, shading::ShadingInteraction, uv,
+            ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+            ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y,
+            ∂p∂x, ∂p∂y,
+        )
+        new(
+            core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+            ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂p∂x, ∂p∂y
+        )
+    end
 end
 
-const SurfaceInteraction = MutableRef{_SurfaceInteraction}
-
-
-function SurfaceInteraction(
-        pool, p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
+@inline function SurfaceInteraction(
+        p::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
         ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f, reverse_normal::Bool
     )
 
@@ -62,58 +69,93 @@ function SurfaceInteraction(
         n *= -1
     end
 
-    core = allocate(pool, Interaction, (p, time, wo, n))
-    shading = allocate(pool, ShadingInteraction, (n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v))
-    return allocate(pool, SurfaceInteraction,
-        (core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
-        0f0, 0f0, 0f0, 0f0, Vec3f(0f0), Vec3f(0f0))
+    core = Interaction(p, time, wo, n)
+    shading = ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
+    return SurfaceInteraction(
+        core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+        0f0, 0f0, 0f0, 0f0, Vec3f(0f0), Vec3f(0f0)
     )
 end
 
-function set_shading_geometry!(
-    shape, i::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
-    ∂n∂u::Normal3f, ∂n∂v::Normal3f, orientation_is_authoritative::Bool,
-)
-    i.shading.n = normalize(tangent × bitangent)
+@inline function SurfaceInteraction(
+        normal, hitpoint::Point3f, time::Float32, wo::Vec3f, uv::Point2f,
+        ∂p∂u::Vec3f, ∂p∂v::Vec3f, ∂n∂u::Normal3f, ∂n∂v::Normal3f
+    )
+    core = Interaction(hitpoint, time, wo, normal)
+    shading = ShadingInteraction(normal, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
+    return SurfaceInteraction(
+        core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+        0.0f0, 0.0f0, 0.0f0, 0.0f0, Vec3f(0.0f0), Vec3f(0.0f0)
+    )
+end
+
+
+
+@inline function set_shading_geometry(
+        shape, si::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
+        ∂n∂u::Normal3f, ∂n∂v::Normal3f, orientation_is_authoritative::Bool,
+    )
+    shading_n = normalize(tangent × bitangent)
     if !isnothing(shape) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
-        i.shading.n *= -1
+        shading_n *= -1
     end
+    core_n = si.core.n
     if orientation_is_authoritative
-        i.core.n = face_forward(i.core.n, i.shading.n)
+        core_n = face_forward(si.core.n, si.shading.n)
     else
-        i.shading.n = face_forward(i.shading.n, i.core.n)
+        shading_n = face_forward(si.shading.n, si.core.n)
     end
 
-    i.shading.∂p∂u = tangent
-    i.shading.∂p∂v = bitangent
-    i.shading.∂n∂u = ∂n∂u
-    i.shading.∂n∂v = ∂n∂v
+    core_n, shading_n = shading_normal(shape, core_n, shading_n)
+
+    shading = ShadingInteraction(shading_n, tangent, bitangent, ∂n∂u, ∂n∂v)
+    core = Interaction(si.core.p, si.core.time, si.core.wo, core_n)
+    return SurfaceInteraction(si; shading=shading, core=core)
 end
 
 is_surface_interaction(i::Interaction) = i.n != Normal3f(0)
+
+function SurfaceInteraction(si::SurfaceInteraction; args...)
+    SurfaceInteraction(
+        get(args, :core, si.core),
+        get(args, :shading, si.shading),
+        get(args, :uv, si.uv),
+        get(args, :∂p∂u, si.∂p∂u),
+        get(args, :∂p∂v, si.∂p∂v),
+        get(args, :∂n∂u, si.∂n∂u),
+        get(args, :∂n∂v, si.∂n∂v),
+        get(args, :∂u∂x, si.∂u∂x),
+        get(args, :∂u∂y, si.∂u∂y),
+        get(args, :∂v∂x, si.∂v∂x),
+        get(args, :∂v∂y, si.∂v∂y),
+        get(args, :∂p∂x, si.∂p∂x),
+        get(args, :∂p∂y, si.∂p∂y),
+    )
+end
 
 """
 Compute partial derivatives needed for computing sampling rates
 for things like texture antialiasing.
 """
-function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
+function compute_differentials(si::SurfaceInteraction, ray::RayDifferentials)
 
     if !ray.has_differentials
-        si.∂u∂x = si.∂v∂x = 0f0
-        si.∂u∂y = si.∂v∂y = 0f0
-        si.∂p∂x = si.∂p∂y = Vec3f(0f0)
-        return
+        return SurfaceInteraction(si;
+            ∂u∂x=0.0f0, ∂v∂x=0.0f0, ∂u∂y=0.0f0, ∂v∂y=0f0, ∂p∂x=Vec3f(0.0f0), ∂p∂y=Vec3f(0.0f0)
+        )
     end
+
     # Estimate screen change in p and (u, v).
     # Compute auxiliary intersection points with plane.
+
     d = -(si.core.n ⋅ si.core.p)
     tx = (-(si.core.n ⋅ ray.rx_origin) - d) / (si.core.n ⋅ ray.rx_direction)
     ty = (-(si.core.n ⋅ ray.ry_origin) - d) / (si.core.n ⋅ ray.ry_direction)
     px = ray.rx_origin + tx * ray.rx_direction
     py = ray.ry_origin + ty * ray.ry_direction
 
-    si.∂p∂x = px - si.core.p
-    si.∂p∂y = py - si.core.p
+    ∂p∂x = px - si.core.p
+    ∂p∂y = py - si.core.p
     # Compute (u, v) offsets at auxiliary points.
     # Choose two dimensions for ray offset computation.
     n = abs.(si.core.n)
@@ -125,14 +167,15 @@ function compute_differentials!(si::SurfaceInteraction, ray::RayDifferentials)
         dim = Point2(1, 2)
     end
     # Initialization for offset computation.
-    a = Mat2f0(dim[1], dim[1], dim[2], dim[2])
+    a = Mat2f(dim[1], dim[1], dim[2], dim[2])
     bx = Point2f(px[dim[1]] - si.core.p[dim[1]], px[dim[2]] - si.core.p[dim[2]])
     by = Point2f(py[dim[1]] - si.core.p[dim[1]], py[dim[2]] - si.core.p[dim[2]])
     sx = a \ bx
     sy = a \ by
 
-    si.∂u∂x, si.∂v∂x = any(isnan.(sx)) ? (0f0, 0f0) : sx
-    si.∂u∂y, si.∂v∂y = any(isnan.(sy)) ? (0f0, 0f0) : sy
+    ∂u∂x, ∂v∂x = any(isnan.(sx)) ? (0f0, 0f0) : sx
+    ∂u∂y, ∂v∂y = any(isnan.(sy)) ? (0f0, 0f0) : sy
+    return SurfaceInteraction(si; ∂u∂x, ∂v∂x, ∂u∂y, ∂v∂y, ∂p∂x, ∂p∂y)
 end
 
 """
@@ -146,8 +189,8 @@ function compute_scattering!(
         pool, primitive, si::SurfaceInteraction, ray::RayDifferentials,
         allow_multiple_lobes::Bool = false, transport = Radiance,
     )
-    compute_differentials!(si, ray)
-    return compute_scattering!(pool, primitive, si, allow_multiple_lobes, transport)
+    si = compute_differentials(si, ray)
+    return si, compute_scattering!(pool, primitive, si, allow_multiple_lobes, transport)
 end
 
 @inline function le(::SurfaceInteraction, ::Vec3f)::RGBSpectrum
@@ -155,31 +198,36 @@ end
     RGBSpectrum(0f0)
 end
 
-function apply!(t::Transformation, si::Interaction)
-    si.p = t(si.p)
-    si.wo = normalize(t(si.wo))
-    si.n = normalize(t(si.n))
-    return si
+function apply(t::Transformation, si::Interaction)
+    return Interaction(
+        t(si.p),
+        si.time,
+        normalize(t(si.wo)),
+        normalize(t(si.n)),
+    )
 end
 
-function apply!(t::Transformation, si::ShadingInteraction)
-    si.n = normalize(t(si.n))
-    si.∂p∂u = t(si.∂p∂u)
-    si.∂p∂v = t(si.∂p∂v)
-    si.∂n∂u = t(si.∂n∂u)
-    si.∂n∂v = t(si.∂n∂v)
-    return si
+function apply(t::Transformation, si::ShadingInteraction)
+    n = normalize(t(si.n))
+    ∂p∂u = t(si.∂p∂u)
+    ∂p∂v = t(si.∂p∂v)
+    ∂n∂u = t(si.∂n∂u)
+    ∂n∂v = t(si.∂n∂v)
+    return ShadingInteraction(n, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v)
 end
 
-function apply!(t::Transformation, si::SurfaceInteraction)
+function apply(t::Transformation, si::SurfaceInteraction)
     # TODO compute shading normal separately
-    apply!(t, si.core)
-    apply!(t, si.shading)
-    si.∂p∂u = t(si.∂p∂u)
-    si.∂p∂v = t(si.∂p∂v)
-    si.∂n∂u = t(si.∂n∂u)
-    si.∂n∂v = t(si.∂n∂v)
-    si.∂p∂x = t(si.∂p∂x)
-    si.∂p∂y = t(si.∂p∂y)
-    return si
+    core = apply(t, si.core)
+    shading = apply(t, si.shading)
+    ∂p∂u = t(si.∂p∂u)
+    ∂p∂v = t(si.∂p∂v)
+    ∂n∂u = t(si.∂n∂u)
+    ∂n∂v = t(si.∂n∂v)
+    ∂p∂x = t(si.∂p∂x)
+    ∂p∂y = t(si.∂p∂y)
+    return SurfaceInteraction(
+        core, shading, si.uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+        si.∂u∂x, si.∂u∂y, si.∂v∂x, si.∂v∂y, ∂p∂x, ∂p∂y
+    )
 end

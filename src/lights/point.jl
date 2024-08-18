@@ -51,7 +51,7 @@ function sample_li(pool, p::PointLight, ref::Interaction, ::Point2f)
     wi = normalize(Vec3f(p.position - ref.p))
     pdf = 1f0
     visibility = VisibilityTester(
-        pool, ref, allocate(pool, Interaction, (p.position, ref.time, Vec3f(0f0), Normal3f(0f0))),
+        pool, ref, Interaction(p.position, ref.time, Vec3f(0f0), Normal3f(0f0)),
     )
     radiance = p.i / distance_squared(p.position, ref.p)
     radiance, wi, pdf, visibility

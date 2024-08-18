@@ -26,6 +26,7 @@ end
 end
 
 @noinline function sample_kernel(mempools, i, camera, scene, film, film_tile, tile_bounds)
+
     pool = mempools[Threads.threadid()]
     t_sampler = deepcopy(i.sampler)
     spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
@@ -40,6 +41,7 @@ end
 Render scene.
 """
 function (i::SamplerIntegrator)(scene::Scene)
+
     sample_bounds = get_sample_bounds(get_film(i.camera))
     sample_extent = diagonal(sample_bounds)
     tile_size = 16
@@ -76,8 +78,9 @@ function (i::SamplerIntegrator)(scene::Scene)
 end
 
 function li(
-    pool, i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
-)::RGBSpectrum
+        pool, i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
+    )::RGBSpectrum
+
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
     hit, primitive, si = intersect!(pool, scene, ray)
@@ -93,7 +96,7 @@ function li(
     n = si.shading.n
     wo = core.wo
     # Compute scattering functions for surface interaction.
-    bsdf = compute_scattering!(pool, primitive, si, ray)
+    si, bsdf = compute_scattering!(pool, primitive, si, ray)
     if bsdf.bxdfs.last == 0
         return li(
             pool, spawn_ray(pool, si, ray.d),
@@ -122,9 +125,9 @@ function li(
 end
 
 function specular_reflect(
-    pool, bsdf, i::I, ray::RayDifferentials,
-    surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
-) where I<:SamplerIntegrator
+        pool, bsdf, i::I, ray::RayDifferentials,
+        surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
+    ) where I<:SamplerIntegrator
 
     # Compute specular reflection direction `wi` and BSDF value.
 
@@ -166,9 +169,10 @@ function specular_reflect(
 end
 
 function specular_transmit(
-    pool, bsdf, i::S, ray::RayDifferentials,
-    surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
-) where S<:SamplerIntegrator
+        pool, bsdf, i::S, ray::RayDifferentials,
+        surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
+    ) where S<:SamplerIntegrator
+
     # Compute specular reflection direction `wi` and BSDF value.
     wo = surface_intersect.core.wo
     type = BSDF_TRANSMISSION | BSDF_SPECULAR

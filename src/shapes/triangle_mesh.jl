@@ -40,6 +40,17 @@ struct Triangle <: AbstractShape
     end
 end
 
+@inline function shading_normal(shape::Triangle, core_n, shading_n)
+    if !isempty(shape.mesh.normals)
+        core_n = face_forward(
+            core_n, shading_n,
+        )
+    elseif shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness
+        core_n = shading_n = -core_n
+    end
+    return core_n, shading_n
+end
+
 function create_triangle_mesh(
     core::ShapeCore,
     indices::Vector{UInt32},
@@ -178,21 +189,21 @@ function ∂n(
     ∂n∂u, ∂n∂v
 end
 
-function _init_triangle_shading_geometry!(
-        t::Triangle, interaction::SurfaceInteraction,
+function _init_triangle_shading_geometry(
+        t::Triangle, si::SurfaceInteraction,
         barycentric::Point3f, uv::AbstractVector{Point2f},
     )
-    !(!isempty(t.mesh.normals) || !isempty(t.mesh.tangents)) && return
+    !(!isempty(t.mesh.normals) || !isempty(t.mesh.tangents)) && return si
     # Initialize triangle shading geometry.
     # Compute shading normal, tangent & bitangent.
-    ns = interaction.core.n
+    ns = si.core.n
     if !isempty(t.mesh.normals)
         ns = normalize(sum_mul(barycentric, normals(t)))
     end
     if !isempty(t.mesh.tangents)
         ss = normalize(sum_mul(barycentric, tangents(t)))
     else
-        ss = normalize(interaction.∂p∂u)
+        ss = normalize(si.∂p∂u)
     end
     ts = ns × ss
     if (ts ⋅ ts) > 0
@@ -202,8 +213,92 @@ function _init_triangle_shading_geometry!(
         _, ss, ts = coordinate_system(ns)
     end
     ∂n∂u, ∂n∂v = ∂n(t, uv)
-    set_shading_geometry!(t, interaction, ss, ts, ∂n∂u, ∂n∂v, true)
+
+    return set_shading_geometry(t, si, ss, ts, ∂n∂u, ∂n∂v, true)
 end
+
+function create_surface_interaction(
+        t, normal, ray, hitpoint, uvs, uv, barycentric, ∂p∂u, ∂p∂v,
+        orientation_is_authoritative, reverse_normal)
+
+    ∂n∂u = Normal3f(0)
+    ∂n∂v = Normal3f(0)
+    time = ray.time
+    wo = -ray.d
+    core_n = normal
+    shading_n = normal
+    shading_∂p∂u = ∂p∂u
+    shading_∂p∂v = ∂p∂v
+    shading_∂n∂u = ∂n∂u
+    shading_∂n∂v = ∂n∂v
+
+    if t.mesh isa Nothing || !(!isempty(t.mesh.normals) || !isempty(t.mesh.tangents))
+        return SurfaceInteraction(
+            Interaction(hitpoint, time, wo, core_n),
+            ShadingInteraction(shading_n, shading_∂p∂u, shading_∂p∂v, shading_∂n∂u, shading_∂n∂v),
+            uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v,
+            0.0f0, 0.0f0, 0.0f0, 0.0f0, Vec3f(0.0f0), Vec3f(0.0f0)
+        )
+    end
+
+    # Initialize triangle shading geometry.
+    # Compute shading normal, tangent & bitangent.
+
+    ns = core_n
+    if !isempty(t.mesh.normals)
+        ns = normalize(sum_mul(barycentric, normals(t)))
+    end
+    if !isempty(t.mesh.tangents)
+        ss = normalize(sum_mul(barycentric, tangents(t)))
+    else
+        ss = normalize(∂p∂u)
+    end
+    ts = ns × ss
+    if (ts ⋅ ts) > 0
+        ts = Vec3f(normalize(ts))
+        ss = Vec3f(ts × ns)
+    else
+        _, ss, ts = coordinate_system(ns)
+    end
+    ∂n∂u, ∂n∂v = ∂n(t, uvs)
+
+    shading_n = normalize(∂n∂v × ∂n∂v)
+    if reverse_normal
+        shading_n *= -1
+    end
+    if orientation_is_authoritative
+        core_n = face_forward(core_n, shading_n)
+    else
+        shading_n = face_forward(shading_n, core_n)
+    end
+
+    shading_∂p∂u = ∂n∂u
+    shading_∂p∂v = ∂n∂v
+    shading_∂n∂u = ∂n∂u
+    shading_∂n∂v = ∂n∂v
+
+    # Ensure correct orientation of the geometric normal.
+    if !isempty(t.mesh.normals)
+        core_n = face_forward(core_n, shading_n)
+    elseif t.core.reverse_orientation ⊻ t.core.transform_swaps_handedness
+        core_n = shading_n = -core_n
+    end
+    return SurfaceInteraction(
+
+        Interaction(hitpoint, time, wo, core_n),
+
+        ShadingInteraction(shading_n, shading_∂p∂u, shading_∂p∂v, shading_∂n∂u, shading_∂n∂v),
+        uv,
+
+        ∂p∂u,
+        ∂p∂v,
+        ∂n∂u,
+        ∂n∂v,
+
+        0f0, 0f0, 0f0, 0f0, Vec3f(0f0), Vec3f(0f0)
+    )
+end
+
 
 function intersect(
         pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
@@ -213,10 +308,12 @@ function intersect(
     si = SurfaceInteraction()
     is_degenerate(vs) && return false, 0.0f0, si
     t_vs, shear = _to_ray_coordinate_space(vs, ray)
+
     # Compute edge function coefficients.
+
     edges = _edge_function(t_vs)
     if iszero(edges) # Fall-back to double precision.
-        edges = _edge_function((x -> x .|> Float64).(t_vs))
+        edges = _edge_function(Float64.(t_vs))
     end
     # Perform triangle edge & determinant tests.
     # Point is inside a triangle if all edges have the same sign.
@@ -245,31 +342,25 @@ function intersect(
     # Interpolate (u, v) paramteric coordinates and hit point.
     hit_point = sum_mul(barycentric, vs)
     uv_hit = sum_mul(barycentric, uv)
+    normal = normalize(δp_13 × δp_23)
 
-    reverse_normal = (t.core.reverse_orientation ⊻ t.core.transform_swaps_handedness)
-    si = SurfaceInteraction(pool,
-        hit_point, ray.time, -ray.d, uv_hit,
-        ∂p∂u, ∂p∂v, Normal3f(0), Normal3f(0), reverse_normal
+    si = SurfaceInteraction(
+        normal, hit_point, ray.time, -ray.d, uv_hit,
+        ∂p∂u, ∂p∂v, Normal3f(0), Normal3f(0)
     )
-    si.core.n = si.shading.n = normalize(δp_13 × δp_23)
-    t.mesh isa Nothing && return true, t_hit, si
-
-    _init_triangle_shading_geometry!(t, si, barycentric, uv)
-    # Ensure correct orientation of the geometric normal.
-    if !isempty(t.mesh.normals)
-        si.core.n = face_forward(
-            si.core.n, si.shading.n,
-        )
-    elseif t.core.reverse_orientation ⊻ t.core.transform_swaps_handedness
-        si.core.n = si.shading.n = -si.core.n
+    if t.mesh isa Nothing
+        return true, t_hit, si
     end
+
+    si = _init_triangle_shading_geometry(t, si, barycentric, uv)
     # TODO test against alpha texture if present.
-    true, t_hit, si
+    return true, t_hit, si
 end
 
 function intersect_p(
-    pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
-)::Bool
+        pool, t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+    )::Bool
+
     vs = vertices(t)
     is_degenerate(vs) && return false
     t_vs, shear = _to_ray_coordinate_space(vs, ray)

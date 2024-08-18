@@ -1,6 +1,5 @@
 module Trace
 
-# using Assimp
 import FileIO
 using ImageCore
 using ImageIO

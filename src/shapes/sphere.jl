@@ -123,8 +123,8 @@ function ∂n(
 end
 
 function intersect(
-    pool, s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
-)::Tuple{Bool,Float32,SurfaceInteraction}
+        pool, s::Sphere, ray::Union{Ray,RayDifferentials}, ::Bool = false,
+    )::Tuple{Bool,Float32,SurfaceInteraction}
     # Transform ray to object space.
     sf = SurfaceInteraction()
     or = apply!(s.core.world_to_object, copy(pool, ray))
@@ -157,11 +157,11 @@ function intersect(
     ∂p∂u, ∂p∂v = ∂p(s, hit_point, θ, sin_ϕ, cos_ϕ)
     ∂n∂u, ∂n∂v = ∂n(s, hit_point, sin_ϕ, cos_ϕ, ∂p∂u, ∂p∂v)
     reverse_normal = (s.core.reverse_orientation ⊻ s.core.transform_swaps_handedness)
-    sf = SurfaceInteraction(pool,
+    si = SurfaceInteraction(pool,
         hit_point, ray.time, -ray.d, Point2f(u, v),
         ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, reverse_normal
     )
-    apply!(s.core.object_to_world, sf)
+    si = apply(s.core.object_to_world, si)
     true, shape_hit, sf
 end
 
