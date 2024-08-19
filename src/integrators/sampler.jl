@@ -6,7 +6,7 @@ struct WhittedIntegrator{C<: Camera, S <: AbstractSampler} <: SamplerIntegrator
     max_depth::Int64
 end
 
-@noinline function sample_kernel_inner(i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
+function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E, camera::F, pixel::G, spp_sqr::H) where {A, B, C, D, E, F, G, H}
     while has_next_sample(t_sampler)
         camera_sample = get_camera_sample(t_sampler, pixel)
         ray, ω = generate_ray_differential(camera, camera_sample)
@@ -57,7 +57,7 @@ function (i::SamplerIntegrator)(scene::Scene)
     _tb_max = min.(_tb_min .+ (tile_size - 1), sample_bounds.p_max)
     _tile_bounds = Bounds2(_tb_min, _tb_max)
     filmtiles = [FilmTile(film, _tile_bounds, filter_radius) for _ in 1:Threads.maxthreadid()]
-    Threads.@threads for k in 0:total_tiles
+    Threads.@threads :greedy for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
         tb_min = sample_bounds.p_min .+ tile .* tile_size

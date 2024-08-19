@@ -225,7 +225,7 @@ function compute_pdf(
     matching_components > 0 ? pdf / matching_components : 0f0
 end
 
-function num_components(b::BSDF, flags::UInt8)::Int64
+@inline function num_components(b::BSDF, flags::UInt8)::Int64
     num = 0
     bxdfs = b.bxdfs
     Base.Cartesian.@nexprs 8 i -> begin

@@ -108,6 +108,5 @@ end
     )
     # TODO add medium
     ray = apply(camera.core.core.camera_to_world, ray)
-    Ray(ray, d=normalize(ray.d))
-    ray, 1f0
+    return Ray(ray, d=normalize(ray.d), time=time), 1.0f0
 end

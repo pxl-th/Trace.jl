@@ -108,6 +108,7 @@ function FilmTile(
         bounds::Bounds2, filter_radius::Point2f,
         filter_table_width::Int32,
     )
+    # Include some padding for over rounding (since we re-use the tiles)
     tile_res = (Int32.(inclusive_sides(bounds))) .+ 2
     contrib_sum = fill(RGBSpectrum(), tile_res[2], tile_res[1])
     filter_weight_sum = fill(0.0f0, tile_res[2], tile_res[1])

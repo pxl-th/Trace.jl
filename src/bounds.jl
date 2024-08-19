@@ -181,7 +181,7 @@ end
 """
 dir_is_negative: 1 -- false, 2 -- true
 """
-function intersect_p(
+@inline function intersect_p(
         b::Bounds3, ray::AbstractRay,
         inv_dir::Vec3f, dir_is_negative::Point3{UInt8},
     )::Bool

@@ -45,7 +45,7 @@ for t in floor_triangles
     push!(primitives, Trace.GeometricPrimitive(t, plastic))
 end
 
-bvh = Trace.BVHAccel(primitives, 1);
+bvh = Trace.BVHAccel(map(identity, primitives), 1);
 
 from, to = Point3f(0, 2, 0), Point3f(-5, 0, 5)
 cone_angle, cone_δ_angle = 30f0, 10f0
@@ -73,7 +73,6 @@ lights = [
 
 scene = Trace.Scene(lights, bvh)
 
-resolution = Point2f(1024)
 n_samples = 8
 ray_depth = 5
 
@@ -81,6 +80,7 @@ look_point = Point3f(-3, 0, -91)
 screen = Trace.Bounds2(Point2f(-1f0), Point2f(1f0))
 filter = Trace.LanczosSincFilter(Point2f(1f0), 3f0)
 
+resolution = Point2f(1024)
 ir = Int64.(resolution)
 film = Trace.Film(
     resolution, Trace.Bounds2(Point2f(0), Point2f(1)),
@@ -92,5 +92,6 @@ camera = Trace.PerspectiveCamera(
     screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
 )
 
-integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 10)
-integrator(scene)
+integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 1)
+@profview_allocs integrator(scene)
+@time integrator(scene)

@@ -14,7 +14,7 @@ Base.Base.@propagate_inbounds  function matte_material(m::UberMaterial, si::Surf
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
     r = clamp(m.Kd(si))
-    is_black(r) && return
+    is_black(r) && return BSDF()
     σ = clamp(m.σ(si), 0f0, 90f0)
     lambertian = (σ ≈ 0.0f0)
     return BSDF(si, LambertianReflection(lambertian, r), OrenNayar(!lambertian, r, σ))
@@ -28,7 +28,7 @@ end
 
 Base.Base.@propagate_inbounds function mirror_material(m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     r = clamp(m.Kr(si))
-    is_black(r) && return
+    is_black(r) && return BSDF()
     return BSDF(si, SpecularReflection(!is_black(r), r, FresnelNoOp()))
 end
 

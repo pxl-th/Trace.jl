@@ -1,49 +1,3 @@
-struct AtomicVec3f
-    x::Threads.Atomic{Float32}
-    y::Threads.Atomic{Float32}
-    z::Threads.Atomic{Float32}
-end
-
-function AtomicVec3f(x::Float32 = 0f0)
-    AtomicVec3f(
-        Threads.Atomic{Float32}(x),
-        Threads.Atomic{Float32}(x),
-        Threads.Atomic{Float32}(x),
-    )
-end
-
-function AtomicVec3f(p::Point3f)
-    AtomicVec3f(
-        Threads.Atomic{Float32}(p[1]),
-        Threads.Atomic{Float32}(p[2]),
-        Threads.Atomic{Float32}(p[3]),
-    )
-end
-
-function set!(a::AtomicVec3f, v::Float32)
-    a.x[] = v
-    a.y[] = v
-    a.z[] = v
-end
-
-function set!(a::AtomicVec3f, p::Point3f)
-    a.x[] = p[1]
-    a.y[] = p[2]
-    a.z[] = p[3]
-end
-
-function Threads.atomic_add!(a::AtomicVec3f, p::Point3f)
-    Threads.atomic_add!(a.x, p[1])
-    Threads.atomic_add!(a.y, p[2])
-    Threads.atomic_add!(a.z, p[3])
-end
-
-function Threads.atomic_add!(a::AtomicVec3f, s::RGBSpectrum)
-    Threads.atomic_add!(a.x, s.c[1])
-    Threads.atomic_add!(a.y, s.c[2])
-    Threads.atomic_add!(a.z, s.c[3])
-end
-
 struct VisiblePoint
     p::Point3f
     wo::Vec3f
@@ -123,7 +77,18 @@ function (i::SPPMIntegrator)(scene::Scene)
     n_pixels = UInt64(b_sides[1] * b_sides[2])
     pixels = StructArray{SPPMPixel}(undef, Int(b_sides[2]), Int(b_sides[1]))
     pixels.radius .= i.initial_search_radius
+    pixels.Ld .= (RGBSpectrum(0.0f0),)
+    pixels.ϕ_x .= 0f0
+    pixels.ϕ_y .= 0f0
+    pixels.ϕ_z .= 0f0
+    pixels.τ .= (RGBSpectrum(0.0f0),)
+    pixels.M .= 0
+    pixels.N .= 0
     visible_points = StructArray{VisiblePoint}(undef, Int(b_sides[2]), Int(b_sides[1]))
+    visible_points.p .= (Point3f(0f0),)
+    visible_points.wo .= (Vec3f(0f0),)
+    visible_points.β .= (RGBSpectrum(0f0),)
+
 
     grid = [Int[] for _ in 1:n_pixels]
 
@@ -136,17 +101,16 @@ function (i::SPPMIntegrator)(scene::Scene)
     n_tiles::Point2 = Int64.(floor.((pixel_extent .+ tile_size) ./ tile_size))
 
     sampler = UniformSampler(1)
-    mempools = [MemoryPool(round(Int, 100000)) for _ in 1:Threads.maxthreadid()]
     for iteration in 1:i.n_iterations
         _generate_visible_sppm_points!(
-            mempools, i, pixels, visible_points, scene,
+            i, pixels, visible_points, scene,
             n_tiles, tile_size, sampler,
             pixel_bounds, inv_sqrt_spp,
         )
         _clean_grid!(grid)
         grid_bounds, grid_resolution = _populate_grid!(grid, pixels, visible_points)
         _trace_photons!(
-            mempools, i, pixels, visible_points, scene, iteration, light_distribution,
+            i, pixels, visible_points, scene, iteration, light_distribution,
             grid, grid_bounds, grid_resolution,
             n_pixels,
         )
@@ -160,8 +124,93 @@ function (i::SPPMIntegrator)(scene::Scene)
     end
 end
 
+
+function inner_kernel(
+        scene::Scene, tile_sampler::S,
+        inv_sqrt_spp::Float32,
+        vps::AbstractMatrix{VisiblePoint},
+        pixel_point::Point2f, camera, max_depth,
+        Ld
+    ) where S<:AbstractSampler
+
+    camera_sample = get_camera_sample(tile_sampler, pixel_point)
+    rayd, _β = generate_ray_differential(camera, camera_sample)
+    _β ≈ 0.0f0 && return
+
+    β = RGBSpectrum(_β)
+    @real_assert !isnan(β)
+    rayd = scale_differentials(rayd, inv_sqrt_spp)
+    # Follow camera ray path until a visible point is created.
+    # Get SPPMPixel for current `pixel`.
+    pixel_idx = reverse(Int64.(pixel_point))
+    specular_bounce = false
+    depth = 1
+    while depth ≤ max_depth
+        hit, primitive, si = intersect!(scene, rayd)
+        if !hit # Accumulate light contributions to the background.
+            for light in scene.lights
+                Ld[pixel_idx...] += β * le(light, rayd)
+            end
+            return
+        end
+        # Process SPPM camera ray intersection.
+        # Compute BSDF at SPPM camera ray intersection.
+        si, bsdf = compute_scattering!(primitive, si, rayd, true)
+        if bsdf.bxdfs.last == 0
+            rayd = RayDifferentials(spawn_ray(si, rayd.d))
+            continue
+        end
+        # Accumulate direct illumination at
+        # SPPM camera-ray intersection.
+        wo = -rayd.d
+        if depth == 1 || specular_bounce
+            Ld[pixel_idx...] += β * le(si, wo)
+        end
+        Ld[pixel_idx...] += uniform_sample_one_light(
+            bsdf, si, scene, tile_sampler,
+        )
+        # Possibly create visible point and end camera path.
+        is_diffuse = num_components(bsdf,
+            BSDF_DIFFUSE | BSDF_REFLECTION | BSDF_TRANSMISSION,
+        ) > 0
+        is_glossy = num_components(bsdf,
+            BSDF_GLOSSY | BSDF_REFLECTION | BSDF_TRANSMISSION,
+        ) > 0
+        if is_diffuse || (is_glossy && depth == max_depth)
+            vps[pixel_idx...] = VisiblePoint(
+                p = si.core.p, wo = wo,
+                bsdf = bsdf, β = β,
+            )
+            return
+        end
+        # If at max depth, no need to spawn ray again.
+        if depth == max_depth
+            depth += 1
+            continue
+        end
+        # Spawn ray from SPPM camera path vertex.
+        wi, f, pdf, sampled_type = sample_f(
+            bsdf, wo,
+            get_2d(tile_sampler), BSDF_ALL,
+        )
+        (pdf ≈ 0f0 || is_black(f)) && return
+        specular_bounce = (sampled_type & BSDF_SPECULAR) != 0
+        β *= f * abs(wi ⋅ si.shading.n) / pdf
+        @real_assert !isnan(β)
+        βy = to_Y(β)
+        if βy < 0.25f0
+            continue_probability = min(1f0, βy)
+            get_1d(tile_sampler) > continue_probability && return
+            β /= continue_probability
+            @real_assert !isnan(β) && !isinf(β)
+        end
+        rayd = RayDifferentials(spawn_ray(si, wi))
+        depth += 1
+    end
+end
+
 function _generate_visible_sppm_points!(
-        mempools, i::SPPMIntegrator,
+        i::SPPMIntegrator,
         pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint},
         scene::Scene,
         n_tiles::Point2, tile_size::Int64, sampler::S,
@@ -173,6 +222,8 @@ function _generate_visible_sppm_points!(
 
     bar = get_progress_bar(total_tiles, "Camera pass: ")
     Ld = pixels.Ld
+    camera = i.camera
+    max_depth = i.max_depth
     Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
@@ -183,78 +234,13 @@ function _generate_visible_sppm_points!(
         tile_bounds = Bounds2(tb_min, tb_max)
         for pixel_point in tile_bounds
             start_pixel!(tile_sampler, pixel_point)
-            # set_sample_number!(tile_sampler, iteration)
-
-            camera_sample = get_camera_sample(tile_sampler, pixel_point)
-            rayd::RayDifferentials, β = generate_ray_differential(i.camera, camera_sample)
-            β ≈ 0f0 && continue
-            β = RGBSpectrum(β)
-            @real_assert !isnan(β)
-            rayd = scale_differentials(rayd, inv_sqrt_spp)
-            # Follow camera ray path until a visible point is created.
-            # Get SPPMPixel for current `pixel`.
-            pixel_idx = reverse(Int64.(pixel_point))
-            specular_bounce = false
-            depth = 1
-            while depth ≤ i.max_depth
-                hit, primitive, si = intersect!(scene, rayd)
-                if !hit # Accumulate light contributions to the background.
-                    for light in scene.lights
-                        Ld[pixel_idx...] += β * le(light, rayd)
-                    end
-                    break
-                end
-                # Process SPPM camera ray intersection.
-                # Compute BSDF at SPPM camera ray intersection.
-                si, bsdf = compute_scattering!(primitive, si, rayd, true)
-                if bsdf ≡ nothing
-                    rayd = RayDifferentials(spawn_ray(si, rayd.d))
-                    continue
-                end
-                # Accumulate direct illumination at
-                # SPPM camera-ray intersection.
-                wo = -rayd.d
-                if depth == 1 || specular_bounce
-                    Ld[pixel_idx...] += β * le(si, wo)
-                end
-                Ld[pixel_idx...] += uniform_sample_one_light(
-                    bsdf, si, scene, tile_sampler,
-                )
-                # Possibly create visible point and end camera path.
-                is_diffuse = num_components(bsdf,
-                    BSDF_DIFFUSE | BSDF_REFLECTION | BSDF_TRANSMISSION,
-                ) > 0
-                is_glossy = num_components(bsdf,
-                    BSDF_GLOSSY | BSDF_REFLECTION | BSDF_TRANSMISSION,
-                ) > 0
-                if is_diffuse || (is_glossy && depth == i.max_depth)
-                    vps[pixel_idx...] = VisiblePoint(
-                        p = si.core.p, wo = wo,
-                        bsdf = bsdf, β = β,
-                    )
-                    break
-                end
-                # If at max depth, no need to spawn ray again.
-                depth == i.max_depth && (depth += 1; continue)
-                # Spawn ray from SPPM camera path vertex.
-                wi, f, pdf, sampled_type = sample_f(
-                    bsdf, wo,
-                    get_2d(tile_sampler), BSDF_ALL,
-                )
-                (pdf ≈ 0f0 || is_black(f)) && break
-                specular_bounce = (sampled_type & BSDF_SPECULAR) != 0
-                β *= f * abs(wi ⋅ si.shading.n) / pdf
-                @real_assert !isnan(β)
-                βy = to_Y(β)
-                if βy < 0.25f0
-                    continue_probability = min(1f0, βy)
-                    get_1d(tile_sampler) > continue_probability && break
-                    β /= continue_probability
-                    @real_assert !isnan(β) && !isinf(β)
-                end
-                rayd = RayDifferentials(spawn_ray(si, wi))
-                depth += 1
-            end
+            inner_kernel(
+                scene, tile_sampler,
+                inv_sqrt_spp,
+                vps,
+                pixel_point, camera, max_depth,
+                Ld
+            )
         end
         next!(bar)
     end
@@ -269,6 +255,7 @@ end
 function _populate_grid!(
         grid::Vector{Vector{Int}}, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}
     )
+
     n_pixels = UInt64(length(pixels))
     # Create grid of all SPPM visible points.
     grid_bounds = Bounds3()
@@ -290,7 +277,7 @@ function _populate_grid!(
     # TODO can be inf if no visible points
     @real_assert max_diag > 0
     @real_assert !isinf(max_radius)
-    base_grid_resolution = Int64(floor(max_diag / max_radius))
+    base_grid_resolution = floor(Int64, max_diag / max_radius)
     grid_resolution = max.(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
     )
@@ -314,7 +301,7 @@ end
 
 
 function _trace_photons!(
-        mempools, i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}, scene::Scene, iteration::Int64,
+        i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}, scene::Scene, iteration::Int64,
         light_distribution::Distribution1D,
         grid::Vector{Vector{Int}},
         grid_bounds::Bounds3, grid_resolution::Point3,
@@ -411,7 +398,7 @@ function _trace_photons!(
             # Compute BSDF at photon intersection point.
             si, bsdf = compute_scattering!(primitive, si, photon_ray, true, Importance)
 
-            if bsdf ≡ nothing
+            if bsdf.bxdfs.last == 0
                 photon_ray = spawn_ray(si, photon_ray.d)
                 continue
             end
@@ -444,6 +431,7 @@ end
 
 function _update_pixels!(pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}, γ::Float32)
     # Update pixel values from this pass's photons.
+
     pM = pixels.M
     pϕ_x = pixels.ϕ_x
     pϕ_y = pixels.ϕ_y
@@ -477,8 +465,9 @@ function _update_pixels!(pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{
 end
 
 function _sppm_to_image(
-    i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, iteration::Int64,
-)
+        i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, iteration::Int64,
+    )
+
     @real_assert iteration > 0
     Np = iteration * i.photons_per_iteration * π
     image = fill(RGBSpectrum(0f0), size(pixels))
@@ -522,6 +511,7 @@ end
 function uniform_sample_one_light(
         bsdf, i::SurfaceInteraction, scene::Scene, sampler::S,
     )::RGBSpectrum where S<:AbstractSampler
+
 
     n_lights = length(scene.lights)
     n_lights == 0 && return RGBSpectrum(0f0)

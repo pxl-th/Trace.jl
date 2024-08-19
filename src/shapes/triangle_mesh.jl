@@ -300,7 +300,7 @@ function create_surface_interaction(
 end
 
 
-function intersect(
+@inline function intersect(
         t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
     )::Tuple{Bool,Float32,SurfaceInteraction}
 
@@ -357,7 +357,7 @@ function intersect(
     return true, t_hit, si
 end
 
-function intersect_p(
+@inline function intersect_p(
         t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool = false,
     )::Bool
 

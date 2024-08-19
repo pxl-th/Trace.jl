@@ -12,7 +12,7 @@ end
 increase_hit(ray::Ray, t_hit) = Ray(ray; t_max=t_hit)
 increase_hit(ray::RayDifferentials, t_hit) = RayDifferentials(ray; t_max=t_hit)
 
-function intersect_p!(
+@inline function intersect_p!(
         p::GeometricPrimitive{T}, ray::R,
     )::Tuple{Bool, R, SurfaceInteraction} where {T<:AbstractShape, R<:AbstractRay}
     shape = p.shape
@@ -32,7 +32,7 @@ end
 function compute_scattering!(
         p::GeometricPrimitive, si::SurfaceInteraction,
         allow_multiple_lobes::Bool, transport::UInt8,
-    )
+    )::BSDF{RGBSpectrum}
     @real_assert (si.core.n ⋅ si.shading.n) ≥ 0f0
     if p.material.type !== NO_MATERIAL
         return p.material(si, allow_multiple_lobes, transport)

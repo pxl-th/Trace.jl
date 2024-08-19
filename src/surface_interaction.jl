@@ -115,21 +115,14 @@ end
 
 is_surface_interaction(i::Interaction) = i.n != Normal3f(0)
 
-function SurfaceInteraction(si::SurfaceInteraction; args...)
+@inline function SurfaceInteraction(
+        si::SurfaceInteraction;
+        core=si.core , shading=si.shading, uv=si.uv, ∂p∂u=si.∂p∂u, ∂p∂v=si.∂p∂v,
+        ∂n∂u=si.∂n∂u, ∂n∂v=si.∂n∂v, ∂u∂x=si.∂u∂x, ∂u∂y=si.∂u∂y,
+        ∂v∂x=si.∂v∂x, ∂v∂y=si.∂v∂y, ∂p∂x=si.∂p∂x, ∂p∂y=si.∂p∂y
+    )
     SurfaceInteraction(
-        get(args, :core, si.core),
-        get(args, :shading, si.shading),
-        get(args, :uv, si.uv),
-        get(args, :∂p∂u, si.∂p∂u),
-        get(args, :∂p∂v, si.∂p∂v),
-        get(args, :∂n∂u, si.∂n∂u),
-        get(args, :∂n∂v, si.∂n∂v),
-        get(args, :∂u∂x, si.∂u∂x),
-        get(args, :∂u∂y, si.∂u∂y),
-        get(args, :∂v∂x, si.∂v∂x),
-        get(args, :∂v∂y, si.∂v∂y),
-        get(args, :∂p∂x, si.∂p∂x),
-        get(args, :∂p∂y, si.∂p∂y),
+        core, shading, uv, ∂p∂u, ∂p∂v, ∂n∂u, ∂n∂v, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂p∂x, ∂p∂y
     )
 end
 
@@ -137,7 +130,7 @@ end
 Compute partial derivatives needed for computing sampling rates
 for things like texture antialiasing.
 """
-function compute_differentials(si::SurfaceInteraction, ray::RayDifferentials)
+@inline function compute_differentials(si::SurfaceInteraction, ray::RayDifferentials)
 
     if !ray.has_differentials
         return SurfaceInteraction(si;
@@ -185,7 +178,7 @@ the surface's material scatters light.
 surface properties and then initializing a representation of the BSDF
 at the point.
 """
-function compute_scattering!(
+@inline function compute_scattering!(
         primitive, si::SurfaceInteraction, ray::RayDifferentials,
         allow_multiple_lobes::Bool = false, transport = Radiance,
     )

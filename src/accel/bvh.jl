@@ -225,17 +225,18 @@ function intersect!(bvh::BVHAccel{P}, ray::AbstractRay)::Tuple{Bool,P,SurfaceInt
         nodes_to_visit[i] = Int32(0)
     end
     primitive::P = first(bvh.primitives)
+    primitives = bvh.primitives::Vector{P}
     @inbounds while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if ln isa LinearBVHLeaf && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives-1
-                    tmp_primitive = bvh.primitives[ln.primitives_offset+i]
+                    tmp_primitive::P = primitives[ln.primitives_offset+i]
                     tmp_hit, ray, tmp_interaction = intersect_p!(
                         tmp_primitive, ray,
                     )
-                    if tmp_hit && !(tmp_interaction isa Vec3)
+                    if tmp_hit
                         hit = tmp_hit
                         interaction = tmp_interaction
                         primitive = tmp_primitive
