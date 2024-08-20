@@ -18,6 +18,8 @@ struct Interaction
     n::Normal3f
 end
 
+Interaction() = Interaction(Point3f(Inf), 0f0, Vec3f(0f0), Normal3f(0f0))
+
 struct ShadingInteraction
     n::Normal3f
     ∂p∂u::Vec3f

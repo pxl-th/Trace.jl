@@ -46,7 +46,7 @@ struct Film{Pixels<:AbstractMatrix{Pixel}}
         )
         crop_resolution = Int32.(inclusive_sides(crop_bounds))
         # Allocate film image storage.
-        pixels = StructArray{Pixel}(undef, crop_resolution[end], crop_resolution[end])
+        pixels = StructArray{Pixel}(undef, crop_resolution[end], crop_resolution[begin])
         pixels.xyz .= (Point3f(0),)
         pixels.filter_weight_sum .= 0f0
         pixels.splat_xyz .= (Point3f(0),)
@@ -244,12 +244,11 @@ function set_image!(f::Film, spectrum::Matrix{S}) where {S<:Spectrum}
     f.pixels.splat_xyz .= (Point3f(0.0f0),)
 end
 
-function save(film::Film, splat_scale::Float32 = 1f0)
+function to_framebuffer!(film::Film, splat_scale::Float32 = 1f0)
     image = film.framebuffer
     xyz = film.pixels.xyz
     filter_weight_sum = film.pixels.filter_weight_sum
     splat_xyz = film.pixels.splat_xyz
-
     @inbounds for idx in eachindex(film.pixels)
         rgb = XYZ_to_RGB(xyz[idx])
         # Normalize pixel with weight sum.
@@ -268,5 +267,9 @@ function save(film::Film, splat_scale::Float32 = 1f0)
         end
         image[idx] = RGB(rgb...)
     end
-    FileIO.save(film.filename, @view image[end:-1:begin, :])
+end
+
+function save(film::Film, splat_scale::Float32 = 1f0)
+    to_framebuffer!(film, splat_scale)
+    FileIO.save(film.filename, @view film.framebuffer[end:-1:begin, :])
 end

@@ -313,7 +313,7 @@ end
 
     edges = _edge_function(t_vs)
     if iszero(edges) # Fall-back to double precision.
-        edges = _edge_function(Float64.(t_vs))
+        edges = _edge_function(map(x-> Float64.(x), t_vs))
     end
     # Perform triangle edge & determinant tests.
     # Point is inside a triangle if all edges have the same sign.

@@ -15,6 +15,9 @@ struct VisibilityTester
 end
 
 @inline function unoccluded(t::VisibilityTester, scene::Scene)::Bool
+    if isinf(t.p0.p) && isinf(t.p1.p)
+        return true
+    end
     !intersect_p(scene, spawn_ray(t.p0, t.p1))
 end
 

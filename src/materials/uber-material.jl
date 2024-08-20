@@ -155,7 +155,7 @@ end
     error("Unknown BxDF type $(s.bxdf_type)")
 end
 
-struct UberMaterial{STAType,FTAType}
+struct UberMaterial{STAType,FTAType} <: Material
     """
     Spectral diffuse reflection value.
     """

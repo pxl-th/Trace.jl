@@ -1,97 +1,99 @@
 using GeometryBasics
 using LinearAlgebra
 using Trace, FileIO, MeshIO
+begin
+    glass = Trace.GlassMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
+        Trace.ConstantTexture(0f0),
+        Trace.ConstantTexture(0f0),
+        Trace.ConstantTexture(1.25f0),
+        true,
+    )
+    plastic = Trace.PlasticMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+        Trace.ConstantTexture(0.010408001f0),
+        true,
+    )
 
-glass = Trace.GlassMaterial(
-    Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
-    Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),
-    Trace.ConstantTexture(0f0),
-    Trace.ConstantTexture(0f0),
-    Trace.ConstantTexture(1.25f0),
-    true,
-)
-plastic = Trace.PlasticMaterial(
-    Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
-    Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-    Trace.ConstantTexture(0.010408001f0),
-    true,
-)
-
-model = load(joinpath(@__DIR__, "..", "src", "assets",  "models", "caustic-glass.ply"))
+    model = load(joinpath(@__DIR__, "..", "src", "assets",  "models", "caustic-glass.ply"))
 
 
-triangles = Trace.create_triangle_mesh(
-    model, Trace.ShapeCore(Trace.translate(Vec3f(5, -1.49, -100)), false),
-)
+    triangles = Trace.create_triangle_mesh(
+        model, Trace.ShapeCore(Trace.translate(Vec3f(5, -1.49, -100)), false),
+    )
 
-floor_triangles = Trace.create_triangle_mesh(
-    Trace.ShapeCore(Trace.translate(Vec3f(-10, 0, -87)), false),
-    UInt32[1, 2, 3, 1, 4, 3],
-    [
-        Point3f(0, 0, 0), Point3f(0, 0, -30),
-        Point3f(30, 0, -30), Point3f(30, 0, 0),
-    ],
-    [
-        Trace.Normal3f(0, 1, 0), Trace.Normal3f(0, 1, 0),
-        Trace.Normal3f(0, 1, 0), Trace.Normal3f(0, 1, 0),
-    ],
-)
+    floor_triangles = Trace.create_triangle_mesh(
+        Trace.ShapeCore(Trace.translate(Vec3f(-10, 0, -87)), false),
+        UInt32[1, 2, 3, 1, 4, 3],
+        [
+            Point3f(0, 0, 0), Point3f(0, 0, -30),
+            Point3f(30, 0, -30), Point3f(30, 0, 0),
+        ],
+        [
+            Trace.Normal3f(0, 1, 0), Trace.Normal3f(0, 1, 0),
+            Trace.Normal3f(0, 1, 0), Trace.Normal3f(0, 1, 0),
+        ],
+    )
 
-primitives = Trace.GeometricPrimitive[]
-for t in triangles
-    push!(primitives, Trace.GeometricPrimitive(t, glass))
+    primitives = Trace.GeometricPrimitive[]
+    for t in triangles
+        push!(primitives, Trace.GeometricPrimitive(t, glass))
+    end
+    for t in floor_triangles
+        push!(primitives, Trace.GeometricPrimitive(t, plastic))
+    end
+
+    bvh = Trace.BVHAccel(map(identity, primitives), 1);
+
+    from, to = Point3f(0, 2, 0), Point3f(-5, 0, 5)
+    cone_angle, cone_δ_angle = 30f0, 10f0
+    dir = normalize(Vec3f(to - from))
+    dir, du, dv = Trace.coordinate_system(dir)
+
+    dir_to_z = Trace.Transformation(transpose(Mat4f(
+        du[1], du[2], du[3], 0f0,
+        dv[1], dv[2], dv[3], 0f0,
+        dir[1], dir[2], dir[3], 0f0,
+        0f0, 0f0, 0f0, 1f0,
+    )))
+    light_to_world = (
+        Trace.translate(Vec3f(4.5, 0, -101))
+        * Trace.translate(Vec3f(from))
+        * inv(dir_to_z)
+    )
+
+    lights = [
+            Trace.SpotLight(
+                light_to_world, Trace.RGBSpectrum(100f0),
+                cone_angle, cone_angle - cone_δ_angle,
+        ),
+        Trace.AmbientLight(Trace.RGBSpectrum(0.5f0)),
+    ]
+
+    scene = Trace.Scene(lights, bvh)
+
+    n_samples = 8
+    ray_depth = 5
+
+    look_point = Point3f(-3, 0, 0)
+    screen = Trace.Bounds2(Point2f(-1f0), Point2f(1f0))
+    filter = Trace.LanczosSincFilter(Point2f(1f0), 3f0)
+    resolution = Point2f(1024)
+    ir = Int64.(resolution)
+    film = Trace.Film(
+        resolution, Trace.Bounds2(Point2f(0), Point2f(1)),
+        filter, 1f0, 1f0,
+        "./scenes/caustics-sppm-$(ir[1])x$(ir[2]).png",
+    )
+    camera = Trace.PerspectiveCamera(
+        Trace.look_at(Point3f(0, 4, 4), look_point, Vec3f(0, 1, 0)),
+        screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
+    )
+    integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 1)
+    @time integrator(scene)
+    reverse(film.framebuffer, dims=1)
 end
-for t in floor_triangles
-    push!(primitives, Trace.GeometricPrimitive(t, plastic))
-end
-
-bvh = Trace.BVHAccel(map(identity, primitives), 1);
-
-from, to = Point3f(0, 2, 0), Point3f(-5, 0, 5)
-cone_angle, cone_δ_angle = 30f0, 10f0
-dir = normalize(Vec3f(to - from))
-dir, du, dv = Trace.coordinate_system(dir)
-
-dir_to_z = Trace.Transformation(transpose(Mat4f(
-    du[1], du[2], du[3], 0f0,
-    dv[1], dv[2], dv[3], 0f0,
-    dir[1], dir[2], dir[3], 0f0,
-    0f0, 0f0, 0f0, 1f0,
-)))
-light_to_world = (
-    Trace.translate(Vec3f(4.5, 0, -101))
-    * Trace.translate(Vec3f(from))
-    * inv(dir_to_z)
-)
-
-lights = [
-    Trace.SpotLight(
-        light_to_world, Trace.RGBSpectrum(60f0),
-        cone_angle, cone_angle - cone_δ_angle,
-    ),
-]
-
-scene = Trace.Scene(lights, bvh)
-
-n_samples = 8
-ray_depth = 5
-
-look_point = Point3f(-3, 0, -91)
-screen = Trace.Bounds2(Point2f(-1f0), Point2f(1f0))
-filter = Trace.LanczosSincFilter(Point2f(1f0), 3f0)
-
-resolution = Point2f(1024)
-ir = Int64.(resolution)
-film = Trace.Film(
-    resolution, Trace.Bounds2(Point2f(0), Point2f(1)),
-    filter, 1f0, 1f0,
-    "./scenes/caustics-sppm-$(ir[1])x$(ir[2]).png",
-)
-camera = Trace.PerspectiveCamera(
-    Trace.look_at(Point3f(0, 150, 150), look_point, Vec3f(0, 1, 0)),
-    screen, 0f0, 1f0, 0f0, 1f6, 90f0, film,
-)
-
-integrator = Trace.SPPMIntegrator(camera, 0.075f0, ray_depth, 1)
-@profview_allocs integrator(scene)
-@time integrator(scene)
+mean(decompose(Point, Rect3f(model)))
+Rect3f(model)

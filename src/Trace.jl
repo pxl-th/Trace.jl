@@ -239,6 +239,8 @@ include("lights/light.jl")
 include("lights/point.jl")
 include("lights/spot.jl")
 include("lights/directional.jl")
+include("lights/ambient.jl")
+include("lights/environment.jl")
 
 include("integrators/sampler.jl")
 include("integrators/sppm.jl")

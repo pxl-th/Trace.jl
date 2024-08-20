@@ -95,8 +95,8 @@ function li(
     si, bsdf = compute_scattering!(primitive, si, ray)
     if bsdf.bxdfs.last == 0
         return li(
-            spawn_ray(si, ray.d),
-            scene, i.sampler, depth,
+            i, RayDifferentials(spawn_ray(si, ray.d)),
+            scene, depth,
         )
     end
     # Compute emitted light if ray hit an area light source.

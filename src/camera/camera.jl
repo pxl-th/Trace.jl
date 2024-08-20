@@ -40,6 +40,7 @@ function generate_ray(
         camera::C, sample::CameraSample,
     )::Tuple{Ray,Float32} where C<:Camera
 end
+
 """
 Same as `generate_ray`, but also computes rays for pixels shifted one pixel
 in x & y directions on the film plane.

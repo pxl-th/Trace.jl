@@ -11,6 +11,7 @@ struct Texture{ElType, N, T<:AbstractArray{ElType, N}}
         new{T, N, typeof(data)}(data, const_value, isconst)
     end
 end
+Base.zero(::Type{RGBSpectrum}) = RGBSpectrum(0.0f0, 0.0f0, 0.0f0)
 
 Texture(data::AbstractArray{ElType, N}) where {ElType, N} = Texture(data, zero(ElType), false)
 Texture(data::Eltype) where Eltype = Texture(Matrix{Eltype}(undef, 0, 0), data, true)
@@ -27,7 +28,9 @@ function (c::Texture{T})(si::SurfaceInteraction)::T where {T<:TextureType}
     if c.isconst
         return c.const_value
     else
-        idx = 1 .+ ((size(c.data) .- 1) .* si.uv)
+        uv = Vec2f(1.0-si.uv[2], si.uv[1])
+        idx = round.(Int, 1 .+ ((size(c.data) .- 1) .* uv))
+        idx = clamp.(idx, 1, size(c.data))
         return c.data[idx...]
     end
 end
