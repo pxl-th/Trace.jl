@@ -93,7 +93,7 @@ function li(
     wo = core.wo
     # Compute scattering functions for surface interaction.
     si, bsdf = compute_scattering!(primitive, si, ray)
-    if bsdf.bxdfs.last == 0
+    if isnan(bsdf.η) # TODO, better way to return "nothing" BSDFs
         return li(
             i, RayDifferentials(spawn_ray(si, ray.d)),
             scene, depth,
