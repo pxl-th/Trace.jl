@@ -1,5 +1,12 @@
 MATTE_MATERIAL = UInt8(1)
 
+
+"""
+    MatteMaterial(Kd::Texture, σ::Texture)
+
+* `Kd:` Spectral diffuse reflection value.
+* `σ:` Scalar roughness.
+"""
 function MatteMaterial(
         Kd::Texture, σ::Texture,
     )
@@ -10,7 +17,7 @@ end
 """
 Compute scattering function.
 """
-Base.Base.@propagate_inbounds  function matte_material(m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
+Base.Base.@propagate_inbounds function matte_material(m::UberMaterial, si::SurfaceInteraction, ::Bool, transport)
     # TODO perform bump mapping
     # Evaluate textures and create BSDF.
     r = clamp(m.Kd(si))

@@ -210,7 +210,7 @@ function _init_triangle_shading_geometry(
         ts = Vec3f(normalize(ts))
         ss = Vec3f(ts × ns)
     else
-        _, ss, ts = coordinate_system(ns)
+        _, ss, ts = coordinate_system(Vec3f(ns))
     end
     ∂n∂u, ∂n∂v = ∂n(t, uv)
 

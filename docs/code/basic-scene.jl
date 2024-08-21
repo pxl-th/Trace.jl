@@ -45,18 +45,22 @@ begin
     s1 = tmesh(LowSphere(0.5f0), material_white)
     s2 = tmesh(LowSphere(0.3f0, Point3f(0.5, 0.5, 0)), material_blue)
     s3 = tmesh(LowSphere(0.3f0, Point3f(-0.5, 0.5, 0)), mirror)
-    s4 = tmesh(LowSphere(0.4f0, Point3f(0.0, 1.0, 0)), material_white)
-    ground = tmesh(Rect3f(Vec3f(-5, -5, 0), Vec3f(10, 10, -0.1)), mirror)
-    left = tmesh(Rect3f(Vec3f(-3, 0, 0), Vec3f(-0.1, 10, -0.1)), mirror)
+    s4 = tmesh(LowSphere(0.4f0, Point3f(0, 1.0, 0)), glass)
 
-    bvh = Trace.BVHAccel([s1..., s2..., s3..., s4..., ground...], 1);
+    ground = tmesh(Rect3f(Vec3f(-5, -5, 0), Vec3f(10, 10, 0.01)), mirror)
+    back = tmesh(Rect3f(Vec3f(-5, -3, 0), Vec3f(10, 0.01, 10)), material_white)
+    l = tmesh(Rect3f(Vec3f(-2, -5, 0), Vec3f(0.01, 10, 10)), material_red)
+    r = tmesh(Rect3f(Vec3f(2, -5, 0), Vec3f(0.01, 10, 10)), material_blue)
+
+    bvh = Trace.BVHAccel([s1..., s2..., s3..., s4..., ground..., back..., l..., r...], 1);
 
     lights = [
-        Trace.PointLight(Vec3f(0, 2.5, 4), Trace.RGBSpectrum(60.0f0)),
-        Trace.PointLight(Vec3f(-5, 2, 0), Trace.RGBSpectrum(60.0f0)),
+        # Trace.PointLight(Vec3f(0, -1, 2), Trace.RGBSpectrum(22.0f0)),
+        Trace.PointLight(Vec3f(0, 0, 2), Trace.RGBSpectrum(10.0f0)),
+        Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(15.0f0)),
     ]
     scene = Trace.Scene(lights, bvh);
-    resolution = Point2f(1024)
+    resolution = Point2f(10)
     f = Trace.LanczosSincFilter(Point2f(1.0f0), 3.0f0)
     film = Trace.Film(resolution,
         Trace.Bounds2(Point2f(0.0f0), Point2f(1.0f0)),
@@ -64,56 +68,19 @@ begin
         "shadows_sppm_res.png",
     )
     screen_window = Trace.Bounds2(Point2f(-1), Point2f(1))
-    camera = Trace.PerspectiveCamera(
-        Trace.look_at(Point3f(0, 3, 3), Point3f(0, 0, 0), Vec3f(0, 0, 1)),
+    cam = Trace.PerspectiveCamera(
+        Trace.look_at(Point3f(0, 4, 2), Point3f(0, -4, -1), Vec3f(0, 0, 1)),
         screen_window, 0.0f0, 1.0f0, 0.0f0, 1.0f6, 45.0f0, film,
     )
-    integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 1)
-    integrator(scene)
+
+end
+begin
+    integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 1)
+    @time integrator(scene)
     img = reverse(film.framebuffer, dims=1)
 end
-x = Trace.scale(2, 2, 2)
-x.inv_m == inv(x.m)
-GLMakie.activate!(inline=true)
-# Computer projective camera transformations.
-resolution = Point2f(1024)
-resolution = Trace.scale(resolution[1], resolution[2], 1)
-
-window_width = screen_window.p_max .- screen_window.p_min
-inv_bounds = Trace.scale((1.0f0 ./ window_width)..., 1)
-
-offset = Trace.translate(Vec3f(
-    -screen_window.p_min..., 0.0f0,
-))
-
-ray = camera.core.raster_to_camera(Point3f(1024 / 2, 1024 / 2, 0))
-camera.core.screen_to_raster(camera.core.camera_to_screen(ray))
-
-camera.core.screen_to_raster(Point3f(-1, -1, 0))
-camera.core.screen_to_raster(Point3f(1, 1, 0))
-
-camera.core.raster_to_screen(Point3f(1024, 1024, 0))
-
-camera.core.screen_to_raster(Point3f(-1, -1, 0))# == (0, 0, 0)
-camera.core.screen_to_raster(Point3f(1, 1, 0))# == (1024, 1024, 0)
-
-camera.core.raster_to_screen(Point3f(0, 0, 0)) # == (0, 0, 0)
-camera.core.screen_to_raster(Point3f(1, 1, 0)) # == (1024, 1024, 0)
-
-
-res_t = Trace.scale(resolution..., 1)
-window_width = screen_window.p_max .- screen_window.p_min
-inv_bounds = Trace.scale((1f0 ./ window_width)..., 1)
-
-offset = Trace.translate(Vec3f(
-    (-screen_window.p_min)..., 0f0,
-))
-
-inv(res_t.m)
-screen_to_raster = res_t * inv_bounds * offset
-
-screen_to_raster(Point3f(1, 1, 0))
-
-raster_to_screen = inv(offset) *  inv(inv_bounds) * inv(res_t)
-
-raster_to_screen(Point3f(1024, 1024, 0))
+# begin
+#     integrator = Trace.SPPMIntegrator(cam, 0.075f0, 5, 100)
+#     integrator(scene)
+#     img = reverse(film.framebuffer, dims=1)
+# end

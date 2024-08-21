@@ -75,7 +75,7 @@ function to_trace_primitive(plot::Makie.Surface)
     end
 
     positions = lift(grid, x, y, z, Makie.transform_func_obs(plot))
-    normals = Makie.surface_normals(x[], y[], z[])
+    # normals = Makie.surface_normals(x[], y[], z[])
     r = Tesselation(Rect2f((0, 0), (1, 1)), size(z[]))
     # decomposing a rectangle into uv and triangles is what we need to map the z coordinates on
     # since the xyz data assumes the coordinates to have the same neighouring relations

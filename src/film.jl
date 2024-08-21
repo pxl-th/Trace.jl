@@ -101,7 +101,6 @@ struct FilmTile{Pixels<:AbstractMatrix{<:FilmTilePixel}}
     inv_filter_radius::Point2f
     filter_table_width::Int32
     pixels::Pixels
-
 end
 
 function FilmTile(
