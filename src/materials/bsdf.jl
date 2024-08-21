@@ -136,7 +136,7 @@ function sample_f(
         Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
     component = min(
-        max(1, Int64(ceil(u[1] * matching_components))),
+        max(1, ceil(Int64, u[1] * matching_components)),
         matching_components,
     )
     # Get BxDF for chosen component.
@@ -155,7 +155,7 @@ function sample_f(
             end
         end
     end
-    @real_assert bxdf ≢ nothing "n bxdfs $(b.n_bxdfs), component $component, count $count"
+    @real_assert !isnothing(bxdf) "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f(
         min(u[1] * matching_components - component, 1f0), u[2],
@@ -208,7 +208,7 @@ end
 function compute_pdf(
         b::BSDF, wo_world::Vec3f, wi_world::Vec3f, flags::UInt8,
     )::Float32
-    b.n_bxdfs == 0 && return 0f0
+    b.bxdfs.last == 0 && return 0f0
     wo = world_to_local(b, wo_world)
     wo[3] ≈ 0f0 && return 0f0
     wi = world_to_local(b, wi_world)

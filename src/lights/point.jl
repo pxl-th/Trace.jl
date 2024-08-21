@@ -24,6 +24,10 @@ struct PointLight{S<:Spectrum} <: Light
     end
 end
 
+function PointLight(position, i::S) where S<:Spectrum
+    PointLight(translate(Vec3f(position)), i)
+end
+
 """
 Compute radiance arriving at `ref.p` interaction point at `ref.time` time
 due to that light, assuming there are no occluding objects between them.

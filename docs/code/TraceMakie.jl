@@ -138,7 +138,11 @@ function to_trace_camera(scene::Makie.Scene, film)
     )
 end
 
-function render_scene(mscene::Makie.Scene)
+function render_scene(scene::Makie.Scene)
+    return render_scene(c -> Trace.WhittedIntegrator(c, Trace.UniformSampler(8), 5), scene)
+end
+
+function render_scene(integrator_f, mscene::Makie.Scene)
     # Only set background image if it isn't set by env light, since
     # background image takes precedence
     resolution = Point2f(size(mscene))
@@ -164,7 +168,7 @@ function render_scene(mscene::Makie.Scene)
         error("Must have at least one light")
     end
     bvh = Trace.BVHAccel(map(identity, primitives), 1)
-    integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(8), 5)
+    integrator = integrator_f(camera)
     scene = Trace.Scene([lights...], bvh)
     integrator(scene)
     return reverse(film.framebuffer, dims=1)
@@ -187,10 +191,9 @@ begin
         Trace.ConstantTexture(0.010408001f0),
         true,
     )
-    scene = Scene(size=(1024, 1024); lights=[AmbientLight(RGBf(0.5, 0.5, 0.5)), PointLight(Vec3f(0, 1, 0.5), RGBf(1, 1, 1))])
+    scene = Scene(size=(1024, 1024); lights=[AmbientLight(RGBf(0.7, 0.6, 0.6)), PointLight(Vec3f(0, 1, 0.5), RGBf(1.3, 1.3, 1.3))])
     cam3d!(scene)
-    mesh!(scene, catmesh, color=load(Makie.assetpath("diffusemap.png")), material=plastic)
-    mesh!(scene, Sphere(Point3f(0, 0, 2), 1f0), material=glass)
+    mesh!(scene, catmesh, color=load(Makie.assetpath("diffusemap.png")))
     center!(scene)
     render_scene(scene)
 end
@@ -205,5 +208,7 @@ begin
     zs = [cos(x) * sin(y) for x in xs, y in ys]
     surface!(scene, xs, ys, zs)
     center!(scene)
-    render_scene(scene)
+    render_scene(scene) do cam
+
+    end
 end
