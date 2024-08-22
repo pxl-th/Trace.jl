@@ -91,24 +91,17 @@ end
     )
 end
 
-
-
 @inline function set_shading_geometry(
-        shape, si::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
+        si::SurfaceInteraction, tangent::Vec3f, bitangent::Vec3f,
         ∂n∂u::Normal3f, ∂n∂v::Normal3f, orientation_is_authoritative::Bool,
     )
     shading_n = normalize(tangent × bitangent)
-    if !isnothing(shape) && (shape.core.reverse_orientation ⊻ shape.core.transform_swaps_handedness)
-        shading_n *= -1
-    end
     core_n = si.core.n
     if orientation_is_authoritative
         core_n = face_forward(si.core.n, si.shading.n)
     else
         shading_n = face_forward(si.shading.n, si.core.n)
     end
-
-    core_n, shading_n = shading_normal(shape, core_n, shading_n)
 
     shading = ShadingInteraction(shading_n, tangent, bitangent, ∂n∂u, ∂n∂v)
     core = Interaction(si.core.p, si.core.time, si.core.wo, core_n)

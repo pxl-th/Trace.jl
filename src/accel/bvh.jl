@@ -35,50 +35,71 @@ struct BVHNode
 end
 
 abstract type LinearNode end
-struct LinearBVHLeaf <: LinearNode
+
+struct LinearBVH <: LinearNode
     bounds::Bounds3
-    primitives_offset::UInt32
+    offset::UInt32
     n_primitives::UInt32
-end
-struct LinearBVHInterior <: LinearNode
-    bounds::Bounds3
-    second_child_offset::UInt32
     split_axis::UInt8
+    is_interior::Bool
 end
-const LinearBVH = Union{LinearBVHLeaf,LinearBVHInterior}
 
-struct BVHAccel{P <: Primitive} <: AccelPrimitive
-    primitives::Vector{P}
+function LinearBVHLeaf(bounds::Bounds3, primitives_offset::Integer, n_primitives::Integer)
+    LinearBVH(bounds, primitives_offset, n_primitives, 0, false)
+end
+function LinearBVHInterior(bounds::Bounds3, second_child_offset::Integer, split_axis::Integer)
+    LinearBVH(bounds, second_child_offset, 0, split_axis, true)
+end
+
+function primitives_to_bvh(primitives, max_node_primitives=1)
+    max_node_primitives = min(255, max_node_primitives)
+    isempty(primitives) && return (primitives, max_node_primitives, LinearBVH[])
+    primitives_info = [
+        BVHPrimitiveInfo(i, world_bound(p))
+        for (i, p) in enumerate(primitives)
+    ]
+    total_nodes = Ref(0)
+    ordered_primitives = similar(primitives, 0)
+    root = _init(
+        primitives, primitives_info, 1, length(primitives),
+        total_nodes, ordered_primitives, max_node_primitives,
+    )
+
+    offset = Ref{UInt32}(1)
+    flattened = Vector{LinearBVH}(undef, total_nodes[])
+    _unroll(flattened, root, offset)
+    @real_assert total_nodes[] + 1 == offset[]
+    return (ordered_primitives, max_node_primitives, flattened)
+end
+
+struct BVHAccel{
+            PVec <:AbstractVector,
+            MatVec <: AbstractVector{<:Material},
+            NodeVec <: AbstractVector{LinearBVH}
+        } <: AccelPrimitive
+    primitives::PVec
+    materials::MatVec
     max_node_primitives::UInt8
-    nodes::Vector{LinearBVH}
-    nodes_to_visit::Vector{Vector{Int32}}
-
-    function BVHAccel(
-        primitives::Vector{P}, max_node_primitives::Integer = 1,
-    ) where P<:Primitive
-        max_node_primitives = min(255, max_node_primitives)
-        isempty(primitives) && return new{P}(primitives, max_node_primitives)
-        nodes_to_visit = [zeros(Int32, 64) for _ in 1:Threads.maxthreadid()]
-        primitives_info = [
-            BVHPrimitiveInfo(i, world_bound(p))
-            for (i, p) in enumerate(primitives)
-        ]
-
-        total_nodes = Ref(0)
-        ordered_primitives = P[]
-        root = _init(
-            primitives, primitives_info, 1, length(primitives),
-            total_nodes, ordered_primitives, max_node_primitives,
-        )
-
-        offset = Ref{UInt32}(1)
-        flattened = Vector{LinearBVH}(undef, total_nodes[])
-        _unroll(flattened, root, offset)
-        @real_assert total_nodes[] + 1 == offset[]
-
-        new{P}(ordered_primitives, max_node_primitives, flattened, nodes_to_visit)
-    end
+    nodes::NodeVec
 end
+
+function BVHAccel(
+        primitives::AbstractVector{P}, max_node_primitives::Integer=1,
+    ) where {P}
+    materials = map(x-> x.material, primitives)
+    meshes = map(x-> x.shape, primitives)
+    triangles = Triangle[]
+    for (mi, m) in enumerate(meshes)
+        vertices = m.vertices
+        for i in 1:div(length(m.indices), 3)
+            push!(triangles, Triangle(m, i, mi))
+        end
+    end
+    ordered_primitives, max_prim, nodes = primitives_to_bvh(triangles, max_node_primitives)
+    return BVHAccel(ordered_primitives, materials, UInt8(max_prim), nodes)
+end
+
+
 
 mutable struct BucketInfo
     count::UInt32
@@ -86,10 +107,11 @@ mutable struct BucketInfo
 end
 
 function _init(
-    primitives::Vector{P}, primitives_info::Vector{BVHPrimitiveInfo},
-    from::Integer, to::Integer, total_nodes::Ref{Int64},
-    ordered_primitives::Vector{P}, max_node_primitives::Integer,
-) where P<:Primitive
+        primitives::AbstractVector, primitives_info::Vector{BVHPrimitiveInfo},
+        from::Integer, to::Integer, total_nodes::Ref{Int64},
+        ordered_primitives::AbstractVector, max_node_primitives::Integer,
+    )
+
     total_nodes[] += 1
     n_primitives = to - from + 1
     # Compute bounds for all primitives in BVH node.
@@ -186,8 +208,9 @@ function _init(
 end
 
 function _unroll(
-    linear_nodes::Vector{LinearBVH}, node::BVHNode, offset::Ref{UInt32},
-)
+        linear_nodes::Vector{LinearBVH}, node::BVHNode, offset::Ref{UInt32},
+    )
+
     l_offset = offset[]
     offset[] += 1
 
@@ -210,29 +233,51 @@ end
     length(bvh.nodes) > 0 ? bvh.nodes[1].bounds : Bounds3()
 end
 
-function intersect!(bvh::BVHAccel{P}, ray::AbstractRay)::Tuple{Bool,P,SurfaceInteraction} where {P}
+macro ntuple(N, value)
+    expr = :(())
+    for i in 1:N
+        push!(expr.args, :($(esc(value))))
+    end
+    return expr
+end
+
+macro setindex(N, setindex_expr)
+    @assert Meta.isexpr(setindex_expr, :(=))
+    index_expr = setindex_expr.args[1]
+    @assert Meta.isexpr(index_expr, :ref)
+    tuple = index_expr.args[1]
+    idx = index_expr.args[2]
+    value = setindex_expr.args[2]
+    expr = :(())
+    for i in 1:N
+        push!(expr.args, :(ifelse($i != $(esc(idx)), $(esc(tuple))[$i], $(esc(value)))))
+    end
+    return :($(esc(tuple)) = $expr)
+end
+
+@inline function intersect!(bvh::BVHAccel{P}, ray::AbstractRay) where {P}
     hit = false
     interaction = SurfaceInteraction()
-    isempty(bvh.nodes) && return hit, nothing, interaction
 
     ray = check_direction(ray)
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
-    to_visit_offset::Int32, current_node_i::Int32 = 1, 1
-    @inbounds nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
-    @inbounds for i in eachindex(nodes_to_visit)
-        nodes_to_visit[i] = Int32(0)
-    end
-    primitive::P = first(bvh.primitives)
-    primitives = bvh.primitives::Vector{P}
+    to_visit_offset, current_node_i = Int32(1), Int32(1)
+    # Tuple version is 2us slower, which makes the total rendering time go from 5s to 7s -.-s
+    # no other way to do this on the GPU though, is there?
+    nodes_to_visit = @ntuple 64 Int32(0)
+    # nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
+    primitives = bvh.primitives
+    primitive = first(primitives)
+    nodes = bvh.nodes
     @inbounds while true
-        ln = bvh.nodes[current_node_i]
+        ln = nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
-            if ln isa LinearBVHLeaf && ln.n_primitives > 0
+            if !(ln.is_interior) && ln.n_primitives > 0
                 # Intersect ray with primitives in node.
                 for i in 0:ln.n_primitives-1
-                    tmp_primitive::P = primitives[ln.primitives_offset+i]
+                    tmp_primitive = primitives[ln.offset+i]
                     tmp_hit, ray, tmp_interaction = intersect_p!(
                         tmp_primitive, ray,
                     )
@@ -247,10 +292,12 @@ function intersect!(bvh::BVHAccel{P}, ray::AbstractRay)::Tuple{Bool,P,SurfaceInt
                 current_node_i = nodes_to_visit[to_visit_offset]
             else
                 if dir_is_neg[ln.split_axis] == 2
-                    nodes_to_visit[to_visit_offset] = current_node_i + Int32(1)
-                    current_node_i = ln.second_child_offset
+                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
+                    # nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
+                    current_node_i = Int32(ln.offset)
                 else
-                    nodes_to_visit[to_visit_offset] = ln.second_child_offset
+                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(ln.offset)
+                    # nodes_to_visit[to_visit_offset] = Int32(ln.offset)
                     current_node_i += Int32(1)
                 end
                 to_visit_offset += Int32(1)
@@ -264,43 +311,45 @@ function intersect!(bvh::BVHAccel{P}, ray::AbstractRay)::Tuple{Bool,P,SurfaceInt
     return hit, primitive, interaction
 end
 
-function intersect_p(bvh::BVHAccel, ray::AbstractRay)
+@inline function intersect_p(bvh::BVHAccel, ray::AbstractRay)
+
     length(bvh.nodes) == 0 && return false
 
     ray = check_direction(ray)
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
-    to_visit_offset, current_node_i = 1, 1
-    @inbounds nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
-    nodes_to_visit .= 0
-
+    to_visit_offset, current_node_i = Int32(1), Int32(1)
+    nodes_to_visit = @ntuple 64 Int32(0)
+    # nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
     while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
-            if ln isa LinearBVHLeaf && ln.n_primitives > 0
+            if !ln.is_interior && ln.n_primitives > 0
                 for i in 0:ln.n_primitives-1
                     intersect_p(
-                        bvh.primitives[ln.primitives_offset+i], ray,
+                        bvh.primitives[ln.offset+i], ray,
                     ) && return true
                 end
                 to_visit_offset == 1 && break
-                to_visit_offset -= 1
+                to_visit_offset -= Int32(1)
                 current_node_i = nodes_to_visit[to_visit_offset]
             else
                 if dir_is_neg[ln.split_axis] == 2
-                    nodes_to_visit[to_visit_offset] = current_node_i + 1
-                    current_node_i = ln.second_child_offset
+                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
+                    # nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
+                    current_node_i = Int32(ln.offset)
                 else
-                    nodes_to_visit[to_visit_offset] = ln.second_child_offset
-                    current_node_i += 1
+                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(ln.offset)
+                    # nodes_to_visit[to_visit_offset] = Int32(ln.offset)
+                    current_node_i += Int32(1)
                 end
-                to_visit_offset += 1
+                to_visit_offset += Int32(1)
             end
         else
             to_visit_offset == 1 && break
-            to_visit_offset -= 1
-            current_node_i = nodes_to_visit[to_visit_offset]
+            to_visit_offset -= Int32(1)
+            current_node_i = Int32(nodes_to_visit[to_visit_offset])
         end
     end
     false

@@ -3,18 +3,13 @@ using Trace
 using FileIO
 using ImageCore
 using BenchmarkTools
-using Makie, FileIO, ImageShow
-
-
-catmesh = load(Makie.assetpath("cat.obj"))
-img = load(Makie.assetpath("diffusemap.png"))
-m = normal_mesh(Tesselation(Sphere(Point3f(0), 1), 32))
+using FileIO, ImageShow
 
 function tmesh(prim, material)
     prim =  prim isa Sphere ? Tesselation(prim, 64) : prim
     mesh = normal_mesh(prim)
-    triangles = Trace.create_triangle_mesh(mesh, Trace.ShapeCore())
-    return [Trace.GeometricPrimitive(t, material) for t in triangles]
+    m = Trace.create_triangle_mesh(mesh, Trace.ShapeCore())
+    return Trace.GeometricPrimitive(m, material)
 end
 
 material_red = Trace.MatteMaterial(
@@ -52,7 +47,7 @@ begin
     l = tmesh(Rect3f(Vec3f(-2, -5, 0), Vec3f(0.01, 10, 10)), material_red)
     r = tmesh(Rect3f(Vec3f(2, -5, 0), Vec3f(0.01, 10, 10)), material_blue)
 
-    bvh = Trace.BVHAccel([s1..., s2..., s3..., s4..., ground..., back..., l..., r...], 1);
+    bvh = Trace.BVHAccel([s1, s2, s3, s4, ground, back, l, r], 1);
 
     lights = [
         # Trace.PointLight(Vec3f(0, -1, 2), Trace.RGBSpectrum(22.0f0)),
@@ -60,7 +55,7 @@ begin
         Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(15.0f0)),
     ]
     scene = Trace.Scene(lights, bvh);
-    resolution = Point2f(10)
+    resolution = Point2f(1024)
     f = Trace.LanczosSincFilter(Point2f(1.0f0), 3.0f0)
     film = Trace.Film(resolution,
         Trace.Bounds2(Point2f(0.0f0), Point2f(1.0f0)),
@@ -72,15 +67,38 @@ begin
         Trace.look_at(Point3f(0, 4, 2), Point3f(0, -4, -1), Vec3f(0, 0, 1)),
         screen_window, 0.0f0, 1.0f0, 0.0f0, 1.0f6, 45.0f0, film,
     )
-
 end
+
 begin
-    integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 1)
-    @time integrator(scene)
+    integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 5)
+    @time integrator(scene, film)
     img = reverse(film.framebuffer, dims=1)
 end
+# 6.7s
+
+
+camera_sample = Trace.get_camera_sample(integrator.sampler, Point2f(512))
+ray, ω = Trace.generate_ray_differential(integrator.camera, camera_sample)
+
+@btime Trace.intersect_p(bvh, ray)
+@btime Trace.intersect!(bvh, ray)
+
+###
+# Int32 always
+# 42.000 μs (1 allocation: 624 bytes)
+# Tuple instead of vector for nodes_to_visit
+# 43.400 μs (1 allocation: 624 bytes)
+# AFTER GPU rework
+# intersect!
+# 40.500 μs (1 allocation: 368 bytes)
+# intersect_p
+# 11.500 μs (0 allocations: 0 bytes)
+
+### LinearBVHLeaf as one type
+# 5.247460 seconds (17.55 k allocations: 19.783 MiB, 46 lock conflicts)
+
 # begin
-#     integrator = Trace.SPPMIntegrator(cam, 0.075f0, 5, 100)
+#     integrator = Trace.SPPMIntegrator(cam, 0.075f0, 5, 1)
 #     integrator(scene)
 #     img = reverse(film.framebuffer, dims=1)
 # end

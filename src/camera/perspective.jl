@@ -15,7 +15,7 @@ struct ProjectiveCamera <: Camera
             lens_radius::Float32, focal_distance::Float32,
             film::Film,
         )
-        core = CameraCore(camera_to_world, shutter_open, shutter_close, film)
+        core = CameraCore(camera_to_world, shutter_open, shutter_close)
         # Computer projective camera transformations.
         resolution = scale(film.resolution..., 1)
         window_width = screen_window.p_max .- screen_window.p_min

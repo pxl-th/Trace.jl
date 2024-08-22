@@ -249,6 +249,6 @@ Base.Base.@propagate_inbounds function (m::UberMaterial)(si::SurfaceInteraction,
     elseif m.type === PLASTIC_MATERIAL
         return plastic_material(m, si, allow_multiple_lobes, transport)
     else
-        return nothing
+        return BSDF()
     end
 end

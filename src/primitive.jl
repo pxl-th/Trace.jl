@@ -13,9 +13,8 @@ increase_hit(ray::Ray, t_hit) = Ray(ray; t_max=t_hit)
 increase_hit(ray::RayDifferentials, t_hit) = RayDifferentials(ray; t_max=t_hit)
 
 @inline function intersect_p!(
-        p::GeometricPrimitive{T}, ray::R,
-    )::Tuple{Bool, R, SurfaceInteraction} where {T<:AbstractShape, R<:AbstractRay}
-    shape = p.shape
+        shape::AbstractShape, ray::R,
+    )::Tuple{Bool, R, SurfaceInteraction} where {R<:AbstractRay}
     intersects, t_hit, interaction = intersect(shape, ray)
     !intersects && return false, ray, interaction
     ray = increase_hit(ray, t_hit)
@@ -30,7 +29,7 @@ end
 @inline world_bound(p::GeometricPrimitive) = world_bound(p.shape)
 
 function compute_scattering!(
-        p::GeometricPrimitive, si::SurfaceInteraction,
+        material::GeometricPrimitive, si::SurfaceInteraction,
         allow_multiple_lobes::Bool, transport::UInt8,
     )::BSDF{RGBSpectrum}
     @real_assert (si.core.n ⋅ si.shading.n) ≥ 0f0

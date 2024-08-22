@@ -192,6 +192,7 @@ end
 @inline function intersect!(scene::Scene, ray::AbstractRay)
     intersect!(scene.aggregate, ray)
 end
+
 @inline function intersect_p(scene::Scene, ray::AbstractRay)
     intersect_p(scene.aggregate, ray)
 end

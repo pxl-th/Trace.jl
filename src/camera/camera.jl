@@ -4,8 +4,6 @@ struct CameraCore
     camera_to_world::Transformation
     shutter_open::Float32
     shutter_close::Float32
-    film::Film
-    # medium::Medium
 end
 
 struct CameraSample

@@ -17,6 +17,7 @@ Texture(data::AbstractArray{ElType, N}) where {ElType, N} = Texture(data, zero(E
 Texture(data::Eltype) where Eltype = Texture(Matrix{Eltype}(undef, 0, 0), data, true)
 ConstantTexture(data::Eltype) where Eltype = Texture(data)
 Texture() = Texture(0.0f0)
+no_texture(t::Texture) = !isdefined(t, :data)
 
 struct NoTexture end
 

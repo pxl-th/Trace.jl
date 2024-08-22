@@ -6,6 +6,7 @@ struct WhittedIntegrator{C<: Camera, S <: AbstractSampler} <: SamplerIntegrator
     max_depth::Int64
 end
 
+
 function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E, camera::F, pixel::G, spp_sqr::H) where {A, B, C, D, E, F, G, H}
     while has_next_sample(t_sampler)
         camera_sample = get_camera_sample(t_sampler, pixel)
@@ -37,8 +38,8 @@ end
 """
 Render scene.
 """
-function (i::SamplerIntegrator)(scene::Scene)
-    sample_bounds = get_sample_bounds(get_film(i.camera))
+function (i::SamplerIntegrator)(scene::Scene, film)
+    sample_bounds = get_sample_bounds(film)
     sample_extent = diagonal(sample_bounds)
     tile_size = 16
     n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
@@ -47,7 +48,6 @@ function (i::SamplerIntegrator)(scene::Scene)
     total_tiles = width * height - 1
     bar = Progress(total_tiles, 1)
     @info "Utilizing $(Threads.nthreads()) threads"
-    film = get_film(i.camera)
     camera = i.camera
     filter_radius = film.filter.radius
 
@@ -72,13 +72,24 @@ function (i::SamplerIntegrator)(scene::Scene)
     save(film)
 end
 
+function get_material(bvh::BVHAccel, shape::Triangle)
+    if shape.material_idx == 0
+        return bvh.materials[1]
+    else
+        return bvh.materials[shape.material_idx]
+    end
+end
+function get_material(scene::Scene, shape::Triangle)
+    get_material(scene.aggregate, shape)
+end
+
 function li(
         i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
     )::RGBSpectrum
 
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
-    hit, primitive, si = intersect!(scene, ray)
+    hit, shape, si = intersect!(scene, ray)
     if !hit
         for light in scene.lights
             l += le(light, ray)
@@ -91,13 +102,15 @@ function li(
     n = si.shading.n
     wo = core.wo
     # Compute scattering functions for surface interaction.
-    si, bsdf = compute_scattering!(primitive, si, ray)
-    if isnan(bsdf.η) # TODO, better way to return "nothing" BSDFs
+    si = compute_differentials(si, ray)
+    m = get_material(scene, shape)
+    if m.type === NO_MATERIAL
         return li(
             i, RayDifferentials(spawn_ray(si, ray.d)),
             scene, depth,
         )
     end
+    bsdf = m(si, false, Radiance)
     # Compute emitted light if ray hit an area light source.
     l += le(si, wo)
     # Add contribution of each light source.

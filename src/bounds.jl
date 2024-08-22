@@ -25,7 +25,7 @@ end
 function Base.getindex(b::Union{Bounds2,Bounds3}, i::Integer)
     i == 1 && return b.p_min
     i == 2 && return b.p_max
-    error("Invalid index `$i`. Only `1` & `2` are valid.")
+    # error("Invalid index `$i`. Only `1` & `2` are valid.")
 end
 function is_valid(b::Bounds3)::Bool
     all(b.p_min .!= Inf32) && all(b.p_max .!= -Inf32)
