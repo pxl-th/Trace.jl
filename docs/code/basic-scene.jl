@@ -52,7 +52,7 @@ begin
     lights = [
         # Trace.PointLight(Vec3f(0, -1, 2), Trace.RGBSpectrum(22.0f0)),
         Trace.PointLight(Vec3f(0, 0, 2), Trace.RGBSpectrum(10.0f0)),
-        Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(15.0f0)),
+        Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(25.0f0)),
     ]
     scene = Trace.Scene(lights, bvh);
     resolution = Point2f(1024)
@@ -74,7 +74,7 @@ begin
     @time integrator(scene, film)
     img = reverse(film.framebuffer, dims=1)
 end
-# 6.7s
+# 6.296157 seconds (17.64 k allocations: 19.796 MiB, 0.13% gc time, 45 lock conflicts)
 
 
 camera_sample = Trace.get_camera_sample(integrator.sampler, Point2f(512))

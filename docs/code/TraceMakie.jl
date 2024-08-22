@@ -52,11 +52,9 @@ end
 
 function to_trace_primitive(plot::Makie.Mesh)
     # Potentially per instance attributes
-    triangles = Trace.create_triangle_mesh(
-        plot.mesh[], Trace.ShapeCore(Trace.translate(Vec3f(0)), false),
-    )
+    triangles = Trace.create_triangle_mesh(plot.mesh[])
     material = extract_material(plot, plot.color)
-    return [Trace.GeometricPrimitive(t, material) for t in triangles]
+    return Trace.GeometricPrimitive(triangles, material)
 end
 
 function to_trace_primitive(plot::Makie.Surface)
@@ -85,14 +83,13 @@ function to_trace_primitive(plot::Makie.Surface)
     # with this we can beuild a mesh
     mesh = normal_mesh(GeometryBasics.Mesh(meta(vec(positions[]), uv=uv), faces))
 
-    triangles = Trace.create_triangle_mesh(
-        mesh, Trace.ShapeCore(Trace.translate(Vec3f(0)), false),
-    )
+    triangles = Trace.create_triangle_mesh(mesh)
     material = extract_material(plot, plot.z)
-    return [Trace.GeometricPrimitive(t, material) for t in triangles]
+    return Trace.GeometricPrimitive(triangles, material)
 end
+
 function to_trace_primitive(plot::Makie.Plot)
-    return []
+    return nothing
 end
 
 function to_trace_light(light::Makie.AmbientLight)
@@ -118,12 +115,9 @@ function to_trace_light(light::Makie.PointLight)
     )
 end
 
-
-
 function to_trace_light(light)
     return nothing
 end
-
 
 function to_trace_camera(scene::Makie.Scene, film)
     cc = scene.camera_controls
@@ -156,7 +150,7 @@ function render_scene(integrator_f, mscene::Makie.Scene)
     primitives = []
     for plot in mscene.plots
         prim = to_trace_primitive(plot)
-        append!(primitives, prim)
+        !isnothing(prim) && push!(primitives, prim)
     end
     camera = to_trace_camera(mscene, film)
     lights = []
@@ -167,48 +161,50 @@ function render_scene(integrator_f, mscene::Makie.Scene)
     if isempty(lights)
         error("Must have at least one light")
     end
-    bvh = Trace.BVHAccel(map(identity, primitives), 1)
+    bvh = Trace.BVHAccel(primitives, 1)
     integrator = integrator_f(camera)
     scene = Trace.Scene([lights...], bvh)
-    integrator(scene)
+    integrator(scene, film)
     return reverse(film.framebuffer, dims=1)
 end
-
+glass = Trace.GlassMaterial(
+    Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
+    Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
+    Trace.ConstantTexture(0.0f0),
+    Trace.ConstantTexture(0.0f0),
+    Trace.ConstantTexture(1.25f0),
+    true,
+)
+mirror = Trace.MirrorMaterial(Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)))
+plastic = Trace.PlasticMaterial(
+    Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
+    Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+    Trace.ConstantTexture(0.010408001f0),
+    true,
+)
 catmesh = load(Makie.assetpath("cat.obj"))
+
 begin
-    glass = Trace.GlassMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
-        Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
-        Trace.ConstantTexture(0.0f0),
-        Trace.ConstantTexture(0.0f0),
-        Trace.ConstantTexture(1.25f0),
-        true,
+    scene = Scene(size=(1024, 1024);
+        lights=[AmbientLight(RGBf(0.7, 0.6, 0.6)), PointLight(Vec3f(0, 1, 0.5), RGBf(1.3, 1.3, 1.3))]
     )
-    mirror = Trace.MirrorMaterial(Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)))
-    plastic = Trace.PlasticMaterial(
-        Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
-        Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-        Trace.ConstantTexture(0.010408001f0),
-        true,
-    )
-    scene = Scene(size=(1024, 1024); lights=[AmbientLight(RGBf(0.7, 0.6, 0.6)), PointLight(Vec3f(0, 1, 0.5), RGBf(1.3, 1.3, 1.3))])
     cam3d!(scene)
     mesh!(scene, catmesh, color=load(Makie.assetpath("diffusemap.png")))
     center!(scene)
-    render_scene(scene)
+    # 1.024328 seconds (16.94 M allocations: 5.108 GiB, 46.19% gc time, 81 lock conflicts)
+    @time render_scene(scene)
 end
 
-
 begin
-    scene = Scene(size=(1024, 1024); lights=[
-        AmbientLight(RGBf(0.4, 0.4, 0.4)), PointLight(Vec3f(4, 4, 10), RGBf(500, 500, 500))])
+    scene = Scene(size=(1024, 1024);
+        lights=[AmbientLight(RGBf(0.4, 0.4, 0.4)), PointLight(Vec3f(4, 4, 10), RGBf(500, 500, 500))]
+    )
     cam3d!(scene)
     xs = LinRange(0, 10, 100)
     ys = LinRange(0, 15, 100)
     zs = [cos(x) * sin(y) for x in xs, y in ys]
     surface!(scene, xs, ys, zs)
     center!(scene)
-    render_scene(scene) do cam
-
-    end
+    #  1.598740s
+    @time render_scene(scene)
 end
