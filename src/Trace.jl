@@ -180,14 +180,14 @@ struct Scene{P<:Primitive, L<:NTuple{N, Light} where N}
     lights::L
     aggregate::P
     bound::Bounds3
+end
 
-    function Scene(
-        lights::Vector{L}, aggregate::P,
-    ) where L<:Light where P<:Primitive
-        # TODO preprocess for lights
-        ltuple = Tuple(lights)
-        new{P,typeof(ltuple)}(ltuple, aggregate, world_bound(aggregate))
-    end
+function Scene(
+        lights::Union{Tuple,AbstractVector}, aggregate::P,
+    ) where {P<:Primitive}
+    # TODO preprocess for lights
+    ltuple = Tuple(lights)
+    Scene{P,typeof(ltuple)}(ltuple, aggregate, world_bound(aggregate))
 end
 
 @inline function intersect!(scene::Scene, ray::AbstractRay)

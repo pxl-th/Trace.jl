@@ -6,22 +6,20 @@ struct WhittedIntegrator{C<: Camera, S <: AbstractSampler} <: SamplerIntegrator
     max_depth::Int64
 end
 
-
 function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E, camera::F, pixel::G, spp_sqr::H) where {A, B, C, D, E, F, G, H}
-    while has_next_sample(t_sampler)
+    for _ in 1:t_sampler.samples_per_pixel
         camera_sample = get_camera_sample(t_sampler, pixel)
         ray, ω = generate_ray_differential(camera, camera_sample)
         ray = scale_differentials(ray, spp_sqr)
         l = RGBSpectrum(0f0)
         if ω > 0.0f0
-            l = li(i, ray, scene, 1)
+            l = li(t_sampler, i.max_depth, ray, scene, 1)
         end
         # TODO check l for invalid values
         if isnan(l)
             l = RGBSpectrum(0f0)
         end
         add_sample!(film, film_tile, camera_sample.film, l, ω)
-        start_next_sample!(t_sampler)
     end
 end
 
@@ -29,7 +27,6 @@ end
     t_sampler = deepcopy(i.sampler)
     spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
     for pixel in tile_bounds
-        start_pixel!(t_sampler, pixel)
         sample_kernel_inner(i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
     end
     merge_film_tile!(film, film_tile)
@@ -73,10 +70,11 @@ function (i::SamplerIntegrator)(scene::Scene, film)
 end
 
 function get_material(bvh::BVHAccel, shape::Triangle)
+    materials = bvh.materials
     @inbounds if shape.material_idx == 0
-        return bvh.materials[1]
+        return materials[1]
     else
-        return bvh.materials[shape.material_idx]
+        return materials[shape.material_idx]
     end
 end
 function get_material(scene::Scene, shape::Triangle)
@@ -84,7 +82,7 @@ function get_material(scene::Scene, shape::Triangle)
 end
 
 function li(
-        i::WhittedIntegrator, ray::RayDifferentials, scene::Scene, depth::Int64,
+        sampler, max_depth, ray::RayDifferentials, scene::Scene, depth::Int64,
     )::RGBSpectrum
 
     l = RGBSpectrum(0f0)
@@ -106,7 +104,7 @@ function li(
     m = get_material(scene, shape)
     if m.type === NO_MATERIAL
         return li(
-            i, RayDifferentials(spawn_ray(si, ray.d)),
+            sampler, max_depth, RayDifferentials(spawn_ray(si, ray.d)),
             scene, depth,
         )
     end
@@ -114,56 +112,61 @@ function li(
     # Compute emitted light if ray hit an area light source.
     l += le(si, wo)
     # Add contribution of each light source.
-    for light in scene.lights
-        sampled_li, wi, pdf, visibility_tester = sample_li(
-            light, core, get_2d(i.sampler),
-        )
-        (is_black(sampled_li) || pdf ≈ 0f0) && continue
-        f = bsdf(wo, wi)
-        if !is_black(f) && unoccluded(visibility_tester, scene)
-            l += f * sampled_li * abs(wi ⋅ n) / pdf
+    lights = scene.lights
+    Base.Cartesian.@nexprs 8 i -> begin
+        if i <= length(lights)
+            light = lights[i]
+            sampled_li, wi, pdf, visibility_tester = sample_li(
+                light, core, get_2d(sampler),
+            )
+            if !(is_black(sampled_li) || pdf ≈ 0f0)
+                f = bsdf(wo, wi)
+                if !is_black(f) && unoccluded(visibility_tester, scene)
+                    l += f * sampled_li * abs(wi ⋅ n) / pdf
+                end
+            end
         end
     end
-    if depth + 1 ≤ i.max_depth
+    if depth + 1 ≤ max_depth
         # Trace rays for specular reflection & refraction.
-        l += specular_reflect(bsdf, i, ray, si, scene, depth)
-        l += specular_transmit(bsdf, i, ray, si, scene, depth)
+        l += specular_reflect(bsdf, sampler, max_depth, ray, si, scene, depth)
+        l += specular_transmit(bsdf, sampler, max_depth, ray, si, scene, depth)
     end
     l
 end
 
-function specular_reflect(
-        bsdf, i::I, ray::RayDifferentials,
-        surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
-    ) where I<:SamplerIntegrator
+@inline function specular_reflect(
+        bsdf, sampler, max_depth, ray::RayDifferentials,
+        si::SurfaceInteraction, scene::Scene, depth::Int64,
+    )
 
     # Compute specular reflection direction `wi` and BSDF value.
 
-    wo = surface_intersect.core.wo
+    wo = si.core.wo
     type = BSDF_REFLECTION | BSDF_SPECULAR
     wi, f, pdf, sampled_type = sample_f(
-        bsdf, wo, get_2d(i.sampler), type,
+        bsdf, wo, get_2d(sampler), type,
     )
     # Return contribution of specular reflection.
-    ns = surface_intersect.shading.n
+    ns = si.shading.n
     if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
         return RGBSpectrum(0f0)
     end
     # Compute ray differential for specular reflection.
-    rd = RayDifferentials(spawn_ray(surface_intersect, wi))
+    rd = RayDifferentials(spawn_ray(si, wi))
     if ray.has_differentials
-        rx_origin = surface_intersect.core.p + surface_intersect.∂p∂x
-        ry_origin = surface_intersect.core.p + surface_intersect.∂p∂y
+        rx_origin = si.core.p + si.∂p∂x
+        ry_origin = si.core.p + si.∂p∂y
         # Compute differential reflected directions.
         ∂n∂x = (
-            surface_intersect.shading.∂n∂u * surface_intersect.∂u∂x
+            si.shading.∂n∂u * si.∂u∂x
             +
-            surface_intersect.shading.∂n∂v * surface_intersect.∂v∂x
+            si.shading.∂n∂v * si.∂v∂x
         )
         ∂n∂y = (
-            surface_intersect.shading.∂n∂u * surface_intersect.∂u∂y
+            si.shading.∂n∂u * si.∂u∂y
             +
-            surface_intersect.shading.∂n∂v * surface_intersect.∂v∂y
+            si.shading.∂n∂v * si.∂v∂y
         )
         ∂wo∂x = -ray.rx_direction - wo
         ∂wo∂y = -ray.ry_direction - wo
@@ -173,19 +176,19 @@ function specular_reflect(
         ry_direction = wi - ∂wo∂y + 2f0 * (wo ⋅ ns) * ∂n∂y + ∂dn∂y * ns
         rd = RayDifferentials(rd, rx_origin=rx_origin, ry_origin=ry_origin, rx_direction=rx_direction, ry_direction=ry_direction)
     end
-    return f * li(i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
+    return f * li(sampler, max_depth, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
 end
 
-function specular_transmit(
-        bsdf, i::S, ray::RayDifferentials,
+@inline function specular_transmit(
+        bsdf, sampler, max_depth, ray::RayDifferentials,
         surface_intersect::SurfaceInteraction, scene::Scene, depth::Int64,
-    ) where S<:SamplerIntegrator
+    )
 
     # Compute specular reflection direction `wi` and BSDF value.
     wo = surface_intersect.core.wo
     type = BSDF_TRANSMISSION | BSDF_SPECULAR
     wi, f, pdf, sampled_type = sample_f(
-        bsdf, wo, get_2d(i.sampler), type,
+        bsdf, wo, get_2d(sampler), type,
     )
 
     ns = surface_intersect.shading.n
@@ -223,12 +226,12 @@ function specular_transmit(
         ∂dn∂x = ∂wo∂x ⋅ ns + wo ⋅ ∂n∂x
         ∂dn∂y = ∂wo∂y ⋅ ns + wo ⋅ ∂n∂y
         μ = η * (wo ⋅ ns) - abs(wi ⋅ ns)
-        ν = η - (η^2 * (wo ⋅ ns)) / abs(wi ⋅ ns)
+        ν = η - (η * η * (wo ⋅ ns)) / abs(wi ⋅ ns)
         ∂μ∂x = ν * ∂dn∂x
         ∂μ∂y = ν * ∂dn∂y
         rx_direction = wi - η * ∂wo∂x + μ * ∂n∂x + ∂μ∂x * ns
         ry_direction = wi - η * ∂wo∂y + μ * ∂n∂y + ∂μ∂y * ns
         rd = RayDifferentials(rd, rx_origin=rx_origin, ry_origin=ry_origin, rx_direction=rx_direction, ry_direction=ry_direction)
     end
-    f * li(i, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
+    f * li(sampler, max_depth, rd, scene, depth + 1) * abs(wi ⋅ ns) / pdf
 end

@@ -142,7 +142,7 @@ function sample_f(
     # Get BxDF for chosen component.
     count = component
     component -= 1
-    bxdf = nothing
+    bxdf = UberBxDF{RGBSpectrum}()
     bxdfs = b.bxdfs
     Base.Cartesian.@nexprs 8 i -> begin
         if i <= bxdfs.last
@@ -155,7 +155,7 @@ function sample_f(
             end
         end
     end
-    @real_assert !isnothing(bxdf) "n bxdfs $(b.n_bxdfs), component $component, count $count"
+    @real_assert bxdf.active "n bxdfs $(b.n_bxdfs), component $component, count $count"
     # Remap BxDF sample u to [0, 1)^2.
     u_remapped = Point2f(
         min(u[1] * matching_components - component, 1f0), u[2],

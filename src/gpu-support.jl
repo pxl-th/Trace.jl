@@ -24,9 +24,15 @@ function to_gpu(ArrayType, m::Trace.Texture; preserve=[])
 end
 
 function to_gpu(ArrayType, m::Trace.UberMaterial; preserve=[])
-    @assert !Trace.no_texture(m.Kd)
-    Kd = to_gpu(ArrayType, m.Kd; preserve=preserve)
-    no_tex_s = typeof(Kd)()
+    if !Trace.no_texture(m.Kd)
+        Kd = to_gpu(ArrayType, m.Kd; preserve=preserve)
+        no_tex_s = typeof(Kd)()
+        Kr = Trace.no_texture(m.Kr) ? no_tex_s : to_gpu(ArrayType, m.Kr; preserve=preserve)
+    else
+        Kr = to_gpu(ArrayType, m.Kr; preserve=preserve)
+        no_tex_s = typeof(Kr)()
+        Kd = Trace.no_texture(m.Kd) ? no_tex_s : to_gpu(ArrayType, m.Kd; preserve=preserve)
+    end
     f_tex = to_gpu(ArrayType, Trace.Texture(ArrayType(zeros(Float32, 1, 1))); preserve=preserve)
     no_tex_f = typeof(f_tex)()
     return Trace.UberMaterial(
@@ -51,4 +57,9 @@ function to_gpu(ArrayType, bvh::Trace.BVHAccel; preserve=[])
     nodes = to_gpu(ArrayType, bvh.nodes; preserve=preserve)
     materials = to_gpu(ArrayType, to_gpu.((ArrayType,), bvh.materials; preserve=preserve); preserve=preserve)
     return Trace.BVHAccel(primitives, materials, bvh.max_node_primitives, nodes)
+end
+
+function to_gpu(ArrayType, scene::Trace.Scene; preserve=[])
+    bvh = to_gpu(ArrayType, scene.aggregate; preserve=preserve)
+    return Trace.Scene(scene.lights, bvh, scene.bound)
 end

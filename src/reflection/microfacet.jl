@@ -76,8 +76,8 @@ correspond to near-perfect specular reflection, rather than by specifying
 @inline function roughness_to_α(roughness::Float32)::Float32
     roughness = max(1f-3, roughness)
     x = log(roughness)
-    1.62142f0 + 0.819955f0 * x + 0.1734f0 * x^2 +
-    0.0171201f0 * x^3 + 0.000640711f0 * x^4
+    1.62142f0 + 0.819955f0 * x + 0.1734f0 * x*x +
+    0.0171201f0 * x*x*x + 0.000640711f0 * x*x*x*x
 end
 
 @inline function G1(m::MicrofacetDistribution, w::Vec3f)::Float32
@@ -273,7 +273,7 @@ function distribution_microfacet_transmission(m::UberBxDF{S}, wo::Vec3f, wi::Vec
     )
 end
 
-@inline function sample_microfacet_transmission(m::UberBxDF{S}, wo::Vec3f, u::Point2f)::S where {S<:Spectrum}
+@inline function sample_microfacet_transmission(m::UberBxDF{S}, wo::Vec3f, u::Point2f) where {S<:Spectrum}
 
     wo[3] ≈ 0 && return Vec3f(0f0), 0f0, S(0f0), UInt8(0)
     wh = sample_wh(m.distribution, wo, u)

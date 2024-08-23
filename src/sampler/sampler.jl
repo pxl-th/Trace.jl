@@ -155,7 +155,7 @@ function get_2d(ps::PixelSampler)::Point2f
 end
 
 
-mutable struct UniformSampler <: AbstractSampler
+struct UniformSampler <: AbstractSampler
     current_sample::Int64
     samples_per_pixel::Int64
     UniformSampler(samples_per_pixel::Integer) = new(1, samples_per_pixel)
