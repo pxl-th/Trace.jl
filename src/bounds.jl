@@ -185,20 +185,22 @@ dir_is_negative: 1 -- false, 2 -- true
         b::Bounds3, ray::AbstractRay,
         inv_dir::Vec3f, dir_is_negative::Point3{UInt8},
     )::Bool
-    tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
-    tx_max = (b[3-dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
-    ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
-    ty_max = (b[3-dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
+    @inbounds begin
+        tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
+        tx_max = (b[3-dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
+        ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
+        ty_max = (b[3-dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]
 
-    (tx_min > ty_max || ty_min > tx_max) && return false
-    ty_min > tx_min && (tx_min = ty_min)
-    ty_max > tx_max && (tx_max = ty_max)
+        (tx_min > ty_max || ty_min > tx_max) && return false
+        ty_min > tx_min && (tx_min = ty_min)
+        ty_max > tx_max && (tx_max = ty_max)
 
-    tz_min = (b[dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
-    tz_max = (b[3-dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
-    (tx_min > tz_max || tz_min > tx_max) && return false
+        tz_min = (b[dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
+        tz_max = (b[3-dir_is_negative[3]][3] - ray.o[3]) * inv_dir[3]
+        (tx_min > tz_max || tz_min > tx_max) && return false
 
-    (tz_min > tx_min) && (tx_min = tz_min)
-    (tz_max < tx_max) && (tx_max = tz_max)
-    tx_min < ray.t_max && tx_max > 0
+        (tz_min > tx_min) && (tx_min = tz_min)
+        (tz_max < tx_max) && (tx_max = tz_max)
+        return tx_min < ray.t_max && tx_max > 0f0
+    end
 end

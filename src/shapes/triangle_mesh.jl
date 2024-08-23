@@ -134,11 +134,11 @@ world_bound(t::Triangle) = reduce(∪, Bounds3.(vertices(t)))
 
 function _argmax(vec::Vec3)
     max_val = vec[1]
-    max_idx = 1
+    max_idx = Int32(1)
     Base.Cartesian.@nexprs 3 i -> begin
         if vec[i] > max_val
             max_val = vec[i]
-            max_idx = i
+            max_idx = Int32(i)
         end
     end
     return max_idx
@@ -147,32 +147,30 @@ end
 @inline function _to_ray_coordinate_space(
         vertices::AbstractVector{Point3f}, ray::AbstractRay,
     )
-    @inbounds  begin
-        # Compute permutation.
-        kz = _argmax(map(abs, ray.d))
-        kx = kz + 1
-        kx == 4 && (kx = 1)
-        ky = kx + 1
-        ky == 4 && (ky = 1)
-        permutation = Vec3(kx, ky, kz)
-        # Permute ray direction.
-        d = ray.d[permutation]
-        # Compute shear.
-        denom = 1f0 / d[3]
-        shear = Point3f(-d[1] * denom, -d[2] * denom, denom)
-        # Translate, apply permutation and shear to vertices.
-        rkz = ray.o[kz]
-        tvs = ntuple(3) do i
-            v = vertices[i]
-            vo = (v-ray.o)[permutation]
-            return vo + Point3f(
-                shear[1] * (v[kz] - rkz),
-                shear[2] * (v[kz] - rkz),
-                0.0f0,
-            )
-        end
-        return SVector{3, Point3f}(tvs), shear
+    # Compute permutation.
+    kz = _argmax(map(abs, ray.d))
+    kx = kz + Int32(1)
+    kx == Int32(4) && (kx = Int32(1))
+    ky = kx + Int32(1)
+    ky == Int32(4) && (ky = Int32(1))
+    permutation = Vec3(kx, ky, kz)
+    # Permute ray direction.
+    d = map(x-> ray.d[x], permutation)
+    # Compute shear.
+    denom = 1f0 / d[3]
+    shear = Point3f(-d[1] * denom, -d[2] * denom, denom)
+    # Translate, apply permutation and shear to vertices.
+    rkz = ray.o[kz]
+    tvs = ntuple(3) do i
+        v = vertices[i]
+        vo = map(x-> (v-ray.o)[x], permutation)
+        return vo + Point3f(
+            shear[1] * (v[kz] - rkz),
+            shear[2] * (v[kz] - rkz),
+            0.0f0,
+        )
     end
+    return SVector{3, Point3f}(tvs), shear
 end
 
 @inline function ∂p(
@@ -230,7 +228,7 @@ end
         ss = normalize(si.∂p∂u)
     end
     ts = ns × ss
-    if (ts ⋅ ts) > 0
+    if (ts ⋅ ts) > 0f0
         ts = Vec3f(normalize(ts))
         ss = Vec3f(ts × ns)
     else
@@ -245,12 +243,10 @@ end
         t::Triangle, ray::AbstractRay, ::Bool = false,
     )::Tuple{Bool,Float32,SurfaceInteraction}
 
-    hit, t_hit, barycentric = intersect_triangle(t, ray)
-    si = SurfaceInteraction()
-    !hit && return false, t_hit, si
-
-    # TODO check that t_hit > 0
     vs = vertices(t)
+    hit, t_hit, barycentric = intersect_triangle(vs, ray)
+    !hit && return false, t_hit, SurfaceInteraction()
+    # TODO check that t_hit > 0
     uv = uvs(t)
     ∂p∂u, ∂p∂v, δp_13, δp_23 = ∂p(t, vs, uv)
     # Interpolate (u, v) paramteric coordinates and hit point.
@@ -260,7 +256,7 @@ end
 
     si = SurfaceInteraction(
         normal, hit_point, ray.time, -ray.d, uv_hit,
-        ∂p∂u, ∂p∂v, Normal3f(0), Normal3f(0)
+        ∂p∂u, ∂p∂v, Normal3f(0f0), Normal3f(0f0)
     )
     si = _init_triangle_shading_geometry(t, si, barycentric, uv)
     # TODO test against alpha texture if present.
@@ -281,52 +277,51 @@ function intersect_triangle(
     determinant = dot(edge1, h)
 
     if abs(determinant) < 1e-6
-        return (false, 0.0, 0.0, 0.0)
+        return (false, 0.0f0, 0f0)
     end
 
-    inv_determinant = 1.0 / determinant
+    inv_determinant = 1f0 / determinant
     s = ray_origin - v0
     u = inv_determinant * dot(s, h)
 
-    if u < 0.0 || u > 1.0
-        return (false, 0.0, 0.0, 0.0)
+    if u < 0.0f0  || u > 1.0f0
+        return (false, 0.0f0, 0.0f0)
     end
 
     edge1_cross_s = cross(s, edge1)
     barycentric_v = inv_determinant * dot(ray_direction, edge1_cross_s)
 
-    if barycentric_v < 0.0 || u + barycentric_v > 1.0
-        return (false, 0.0, 0.0, 0.0)
+    if barycentric_v < 0.0f0 || u + barycentric_v > 1.0f0
+        return (false, 0.0f0, 0.0f0)
     end
 
     intersection_distance = inv_determinant * dot(edge2, edge1_cross_s)
 
-    return (true, intersection_distance, u, barycentric_v)
+    return (true, intersection_distance, inv_determinant)
 end
 
 
 @inline function intersect_p(t::Triangle, ray::Union{Ray,RayDifferentials}, ::Bool=false)
-    intersect_triangle(t, ray)[1]
+    intersect_triangle(t.vertices, ray)[1]
 end
 
 @inline function intersect_triangle(
-        t::Triangle, ray::Union{Ray,RayDifferentials}
+        vs::SVector{3, Point3f}, ray::Union{Ray,RayDifferentials}
     )
-    vs = vertices(t)
     barycentric = Point3f(0)
     t_hit = 0f0
     is_degenerate(vs) && return false, t_hit, barycentric
     t_vs, shear = _to_ray_coordinate_space(vs, ray)
     # Compute edge function coefficients.
     edges = _edge_function(t_vs)
-    if iszero(edges) # Fall-back to double precision.
+    if iszero(edges)
         return false, t_hit, barycentric
     end
     # Perform triangle edge & determinant tests.
     # Point is inside a triangle if all edges have the same sign.
-    any(edges .< 0) && any(edges .> 0) && return false, t_hit, barycentric
+    any(edges .< 0.0f0) && any(edges .> 0.0f0) && return false, t_hit, barycentric
     det = sum(edges)
-    det ≈ 0 && return false, t_hit, barycentric
+    det ≈ 0f0 && return false, t_hit, barycentric
     # Compute scaled hit distance to triangle.
     shear_z = shear[3]
     t_scaled = (
@@ -335,8 +330,8 @@ end
         + edges[3] * t_vs[3][3] * shear_z
     )
     # Test against t_max range.
-    det < 0 && (t_scaled >= 0 || t_scaled < ray.t_max * det) && return false, t_hit, barycentric
-    det > 0 && (t_scaled <= 0 || t_scaled > ray.t_max * det) && return false, t_hit, barycentric
+    det < 0f0 && (t_scaled >= 0f0 || t_scaled < ray.t_max * det) && return false, t_hit, barycentric
+    det > 0f0 && (t_scaled <= 0f0 || t_scaled > ray.t_max * det) && return false, t_hit, barycentric
     # TODO test against alpha texture if present.
     # Compute barycentric coordinates and t value for triangle intersection.
     inv_det = 1.0f0 / det

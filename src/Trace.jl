@@ -9,6 +9,7 @@ using StaticArrays
 using ProgressMeter
 using StructArrays
 using Atomix
+using KernelAbstractions
 
 abstract type AbstractRay end
 abstract type Spectrum end

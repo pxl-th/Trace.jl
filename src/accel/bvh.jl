@@ -230,53 +230,27 @@ function _unroll(
 end
 
 @inline function world_bound(bvh::BVHAccel)::Bounds3
-    length(bvh.nodes) > 0 ? bvh.nodes[1].bounds : Bounds3()
-end
-
-macro ntuple(N, value)
-    expr = :(())
-    for i in 1:N
-        push!(expr.args, :($(esc(value))))
-    end
-    return expr
-end
-
-macro setindex(N, setindex_expr)
-    @assert Meta.isexpr(setindex_expr, :(=))
-    index_expr = setindex_expr.args[1]
-    @assert Meta.isexpr(index_expr, :ref)
-    tuple = index_expr.args[1]
-    idx = index_expr.args[2]
-    value = setindex_expr.args[2]
-    expr = :(())
-    for i in 1:N
-        push!(expr.args, :(ifelse($i != $(esc(idx)), $(esc(tuple))[$i], $(esc(value)))))
-    end
-    return :($(esc(tuple)) = $expr)
+    length(bvh.nodes) > Int32(0) ? bvh.nodes[1].bounds : Bounds3()
 end
 
 @inline function intersect!(bvh::BVHAccel{P}, ray::AbstractRay) where {P}
     hit = false
     interaction = SurfaceInteraction()
-
     ray = check_direction(ray)
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
     to_visit_offset, current_node_i = Int32(1), Int32(1)
-    # Tuple version is 2us slower, which makes the total rendering time go from 5s to 7s -.-s
-    # no other way to do this on the GPU though, is there?
-    nodes_to_visit = @ntuple 64 Int32(0)
-    # nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
+    nodes_to_visit = zeros(MVector{64,Int32})
     primitives = bvh.primitives
-    primitive = first(primitives)
+    @inbounds primitive = primitives[1]
     nodes = bvh.nodes
     @inbounds while true
         ln = nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
-            if !(ln.is_interior) && ln.n_primitives > 0
+            if !ln.is_interior && ln.n_primitives > Int32(0)
                 # Intersect ray with primitives in node.
-                for i in 0:ln.n_primitives-1
+                for i in Int32(0):ln.n_primitives - Int32(1)
                     tmp_primitive = primitives[ln.offset+i]
                     tmp_hit, ray, tmp_interaction = intersect_p!(
                         tmp_primitive, ray,
@@ -287,17 +261,15 @@ end
                         primitive = tmp_primitive
                     end
                 end
-                to_visit_offset == 1 && break
+                to_visit_offset == Int32(1) && break
                 to_visit_offset -= Int32(1)
                 current_node_i = nodes_to_visit[to_visit_offset]
             else
-                if dir_is_neg[ln.split_axis] == 2
-                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
-                    # nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
+                if dir_is_neg[ln.split_axis] == Int32(2)
+                    nodes_to_visit[to_visit_offset] = current_node_i + Int32(1)
                     current_node_i = Int32(ln.offset)
                 else
-                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(ln.offset)
-                    # nodes_to_visit[to_visit_offset] = Int32(ln.offset)
+                    nodes_to_visit[to_visit_offset] = ln.offset % Int32
                     current_node_i += Int32(1)
                 end
                 to_visit_offset += Int32(1)
@@ -313,41 +285,40 @@ end
 
 @inline function intersect_p(bvh::BVHAccel, ray::AbstractRay)
 
-    length(bvh.nodes) == 0 && return false
+    length(bvh.nodes) == Int32(0) && return false
 
     ray = check_direction(ray)
     inv_dir = 1f0 ./ ray.d
     dir_is_neg = is_dir_negative(ray.d)
 
     to_visit_offset, current_node_i = Int32(1), Int32(1)
-    nodes_to_visit = @ntuple 64 Int32(0)
-    # nodes_to_visit = bvh.nodes_to_visit[Threads.threadid()]
+    nodes_to_visit = zeros(MVector{64,Int32})
     while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
-            if !ln.is_interior && ln.n_primitives > 0
-                for i in 0:ln.n_primitives-1
+            if !ln.is_interior && ln.n_primitives > Int32(0)
+                for i in Int32(0):ln.n_primitives-Int32(1)
                     intersect_p(
-                        bvh.primitives[ln.offset+i], ray,
+                        bvh.primitives[ln.offset + i], ray,
                     ) && return true
                 end
                 to_visit_offset == 1 && break
                 to_visit_offset -= Int32(1)
                 current_node_i = nodes_to_visit[to_visit_offset]
             else
-                if dir_is_neg[ln.split_axis] == 2
-                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
-                    # nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
-                    current_node_i = Int32(ln.offset)
+                if dir_is_neg[ln.split_axis] == Int32(2)
+                    # @setindex 64 nodes_to_visit[to_visit_offset] = Int32(current_node_i + 1)
+                    nodes_to_visit[to_visit_offset] = current_node_i + Int32(1)
+                    current_node_i = ln.offset % Int32
                 else
-                    @setindex 64 nodes_to_visit[to_visit_offset] = Int32(ln.offset)
-                    # nodes_to_visit[to_visit_offset] = Int32(ln.offset)
+                    # @setindex 64 nodes_to_visit[to_visit_offset] = Int32(ln.offset)
+                    nodes_to_visit[to_visit_offset] = ln.offset % Int32
                     current_node_i += Int32(1)
                 end
                 to_visit_offset += Int32(1)
             end
         else
-            to_visit_offset == 1 && break
+            to_visit_offset == Int32(1) && break
             to_visit_offset -= Int32(1)
             current_node_i = Int32(nodes_to_visit[to_visit_offset])
         end

@@ -152,7 +152,8 @@ end
     elseif s.bxdf_type === MICROFACET_TRANSMISSION
         return distribution_microfacet_transmission(s, wo, wi)
     end
-    error("Unknown BxDF type $(s.bxdf_type)")
+    return RGBSpectrum(0.0f0)
+    # error("Unknown BxDF type $(s.bxdf_type)")
 end
 
 struct UberMaterial{STAType,FTAType} <: Material

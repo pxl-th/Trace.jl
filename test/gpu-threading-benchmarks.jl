@@ -1,5 +1,4 @@
-using GeometryBasics, LinearAlgebra, Trace, BenchmarkTools, AMDGPU
-using FileIO
+using GeometryBasics, LinearAlgebra, Trace, BenchmarkTools
 using ImageShow
 using Makie
 include("./../src/gpu-support.jl")
@@ -43,6 +42,11 @@ begin
         Trace.look_at(Point3f(0, 4, 2), Point3f(0, -4, -1), Vec3f(0, 0, 1)),
         screen_window, 0.0f0, 1.0f0, 0.0f0, 1.0f6, 45.0f0, film,
     )
+    lights = (
+        # Trace.PointLight(Vec3f(0, -1, 2), Trace.RGBSpectrum(22.0f0)),
+        Trace.PointLight(Vec3f(0, 0, 2), Trace.RGBSpectrum(10.0f0)),
+        Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(25.0f0)),
+    )
     img = zeros(RGBf, res, res)
 end
 
@@ -53,37 +57,112 @@ end
     Trace.CameraSample(p_film, p_lens, rand(Float32))
 end
 
-@inline function trace_pixel(camera, bvh, xy)
+using KernelAbstractions.Extras.LoopInfo: @unroll
 
+function simple_shading(bvh, shape, ray, si, l, depth, max_depth, lights)
+    core = si.core
+    n = si.shading.n
+    wo = core.wo
+    # Compute scattering functions for surface interaction.
+    si = Trace.compute_differentials(si, ray)
+    mat = Trace.get_material(bvh, shape)
+    if mat.type === Trace.NO_MATERIAL
+        return l
+    end
+    bsdf = mat(si, false, Trace.Radiance)
+    # Compute emitted light if ray hit an area light source.
+    l += Trace.le(si, wo)
+    # Add contribution of each light source.
+    @unroll for light in lights
+        sampled_li, wi, pdf, vt = Trace.sample_li(
+            light, core, rand(Point2f),
+        )
+        (Trace.is_black(sampled_li) || pdf ≈ 0.0f0) && continue
+        f = bsdf(wo, wi)
+        if !Trace.is_black(f) && !Trace.intersect_p(bvh, Trace.spawn_ray(vt.p0, vt.p1))
+            l += f * sampled_li * abs(wi ⋅ n) / pdf
+        end
+    end
+    # if depth + 1 <= max_depth
+    #     # Trace rays for specular reflection & refraction.
+    #     l += specular_reflect(bsdf, i, ray, si, scene, depth)
+    #     l += specular_transmit(bsdf, i, ray, si, scene, depth)
+    # end
+    return l
+end
+
+
+@inline function trace_pixel(camera, bvh, xy, lights)
     pixel = Point2f(Tuple(xy))
     camera_sample = get_camera_sample(pixel)
     ray, ω = Trace.generate_ray_differential(camera, camera_sample)
-    hit, primitive, interaction = Trace.intersect!(bvh, ray)
-    return ifelse(hit, RGBf(interaction.core.n...), RGBf(0.0f0, 0.0f0, 0.0f0))
+    l = Trace.RGBSpectrum(0.0f0)
+    if ω > 0.0f0
+        hit, shape, si = Trace.intersect!(bvh, ray)
+        if hit
+            l = Trace.RGBSpectrum(si.core.n...)#simple_shading(bvh, shape, ray, si, l, 1, 8, lights)
+        end
+    end
+    return RGBf(l.c...)
 end
 
 using KernelAbstractions
 import KernelAbstractions as KA
 
 
-@kernel function ka_trace_image!(img, camera, bvh)
-    xy = @index(Global, Cartesian)
-    @inbounds img[xy] = trace_pixel(camera, bvh, xy)
+@kernel function ka_trace_image!(img, camera, bvh, lights)
+    idx = @index(Global, Linear)
+    if checkbounds(Bool, img, idx)
+        xy = Tuple(divrem(idx, size(img, 1)))
+        @inbounds img[idx] = trace_pixel(camera, bvh, xy, lights)
+    end
 end
 
-function launch_trace_image!(img, camera, bvh)
+function launch_trace_image!(img, camera, bvh, lights)
     backend = KA.get_backend(img)
     kernel! = ka_trace_image!(backend)
-    kernel!(img, camera, bvh, ndrange=size(img))
+    kernel!(img, camera, bvh, lights, ndrange = size(img), workgroupsize = (16, 16))
     KA.synchronize(backend)
     return img
 end
 
-gpu_bvh = to_gpu(ROCArray, bvh);
-gpu_img = ROCArray(zeros(RGBf, res, res));
-@btime launch_trace_image!(gpu_img, cam, gpu_bvh);
+using CUDA
+ArrayType = CuArray
+preserve = []
+gpu_bvh = to_gpu(ArrayType, bvh; preserve=preserve);
+gpu_img = ArrayType(zeros(RGBf, res, res));
+# launch_trace_image!(img, cam, bvh, lights);
+# @btime launch_trace_image!(img, cam, bvh, lights);
+# @btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
+@btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
+Array(gpu_img)
+
+function cu_trace_image!(img, camera, bvh, lights)
+    x = threadIdx().x
+    y = threadIdx().y
+    if checkbounds(Bool, img, (x, y))
+        @inbounds img[x, y] = trace_pixel(camera, bvh, (x,y), lights)
+    end
+end
+
+k = some_kernel(img)
+ndrange, workgroupsize, iterspace, dynamic = KA.launch_config(k, size(img), (16, 16))
+blocks = length(KA.blocks(iterspace))
+threads = length(KA.workitems(iterspace))
+
+function cu_launch_trace_image!(img, camera, bvh, lights)
+    CUDA.@sync @cuda threads = length(img) cu_trace_image!(img, camera, bvh, lights)
+    return img
+end
+cu_launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
 Array(gpu_img)
 # 380.081 ms (913 allocations: 23.55 KiB)
+# CUDA (3070 mobile)
+# 238.149 ms (46 allocations: 6.22 KiB)
+# Int64 -> Int32
+# 65.34 m
+# workgroupsize=(16,16)
+# 31.022 ms (35 allocations: 5.89 KiB)
 
 function trace_image!(img, camera, bvh)
     for xy in CartesianIndices(size(img))
