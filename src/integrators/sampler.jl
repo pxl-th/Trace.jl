@@ -73,7 +73,7 @@ function (i::SamplerIntegrator)(scene::Scene, film)
 end
 
 function get_material(bvh::BVHAccel, shape::Triangle)
-    if shape.material_idx == 0
+    @inbounds if shape.material_idx == 0
         return bvh.materials[1]
     else
         return bvh.materials[shape.material_idx]

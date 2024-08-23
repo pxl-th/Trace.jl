@@ -100,7 +100,7 @@ end
     if ω > 0.0f0
         hit, shape, si = Trace.intersect!(bvh, ray)
         if hit
-            l = Trace.RGBSpectrum(si.core.n...)#simple_shading(bvh, shape, ray, si, l, 1, 8, lights)
+            l = simple_shading(bvh, shape, ray, si, l, 1, 8, lights)
         end
     end
     return RGBf(l.c...)
@@ -118,23 +118,37 @@ import KernelAbstractions as KA
     end
 end
 
+function launch_trace_image_ir!(img, camera, bvh, lights)
+    backend = KA.get_backend(img)
+    kernel! = ka_trace_image!(backend)
+    open("test2.ir", "w") do io
+        @device_code_llvm io begin
+            kernel!(img, camera, bvh, lights, ndrange = size(img), workgroupsize = (16, 16))
+        end
+    end
+    AMDGPU.synchronize(; stop_hostcalls=false)
+    return img
+end
 function launch_trace_image!(img, camera, bvh, lights)
     backend = KA.get_backend(img)
     kernel! = ka_trace_image!(backend)
-    kernel!(img, camera, bvh, lights, ndrange = size(img), workgroupsize = (16, 16))
+    kernel!(img, camera, bvh, lights, ndrange=size(img), workgroupsize=(16, 16))
     KA.synchronize(backend)
     return img
 end
-
-using CUDA
-ArrayType = CuArray
+using AMDGPU
+ArrayType = ROCArray
+# using CUDA
+# ArrayType = CuArray
 preserve = []
 gpu_bvh = to_gpu(ArrayType, bvh; preserve=preserve);
 gpu_img = ArrayType(zeros(RGBf, res, res));
 # launch_trace_image!(img, cam, bvh, lights);
 # @btime launch_trace_image!(img, cam, bvh, lights);
 # @btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
-@btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
+launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
+@btime launch_trace_image!(img, cam, bvh, lights)
+# 76.420 ms (234 allocations: 86.05 KiB)
 Array(gpu_img)
 
 function cu_trace_image!(img, camera, bvh, lights)

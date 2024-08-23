@@ -192,6 +192,7 @@ begin
     mesh!(scene, catmesh, color=load(Makie.assetpath("diffusemap.png")))
     center!(scene)
     # 1.024328 seconds (16.94 M allocations: 5.108 GiB, 46.19% gc time, 81 lock conflicts)
+    # 0.913530 seconds (16.93 M allocations: 5.108 GiB, 42.52% gc time, 57 lock conflicts)
     @time render_scene(scene)
 end
 
@@ -206,5 +207,6 @@ begin
     surface!(scene, xs, ys, zs)
     center!(scene)
     #  1.598740s
+    # 1.179450 seconds (17.30 M allocations: 5.126 GiB, 36.48% gc time, 94 lock conflicts)
     @time render_scene(scene)
 end

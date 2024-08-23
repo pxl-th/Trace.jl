@@ -75,7 +75,8 @@ begin
     img = reverse(film.framebuffer, dims=1)
 end
 # 6.296157 seconds (17.64 k allocations: 19.796 MiB, 0.13% gc time, 45 lock conflicts)
-
+# After more GPU optimizations
+# 4.169616 seconds (17.37 k allocations: 19.777 MiB, 0.14% gc time, 20 lock conflicts)
 
 camera_sample = Trace.get_camera_sample(integrator.sampler, Point2f(512))
 ray, ω = Trace.generate_ray_differential(integrator.camera, camera_sample)

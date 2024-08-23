@@ -267,7 +267,7 @@ end
             else
                 if dir_is_neg[ln.split_axis] == Int32(2)
                     nodes_to_visit[to_visit_offset] = current_node_i + Int32(1)
-                    current_node_i = Int32(ln.offset)
+                    current_node_i = ln.offset % Int32
                 else
                     nodes_to_visit[to_visit_offset] = ln.offset % Int32
                     current_node_i += Int32(1)
@@ -293,7 +293,7 @@ end
 
     to_visit_offset, current_node_i = Int32(1), Int32(1)
     nodes_to_visit = zeros(MVector{64,Int32})
-    while true
+    @inbounds while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if !ln.is_interior && ln.n_primitives > Int32(0)
