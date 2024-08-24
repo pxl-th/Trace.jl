@@ -1,17 +1,17 @@
 using Colors, Statistics
 
-luminosity(c::RGB{T}) where {T} = (max(c.r, c.g, c.b) + min(c.r, c.g, c.b)) / 2.0
+luminosity(c::RGB{T}) where {T} = (max(c.r, c.g, c.b) + min(c.r, c.g, c.b)) / 2.0f0
 
 function lum_max(rgb_m)
-    lum_max = 0.0
+    lum_max = 0.0f0
     for pix in rgb_m
         (lum_max > luminosity(pix)) || (lum_max = luminosity(pix))
     end
     lum_max
 end
 
-function avg_lum(rgb_m, δ::Number=1e-10)
-    cumsum = 0.0
+function avg_lum(rgb_m, δ::Number=1f-10)
+    cumsum = 0.0f0
     for pix in rgb_m
         cumsum += log10(δ + luminosity(pix))
     end
@@ -20,13 +20,13 @@ end
 
 function normalize_image(
         rgb_m,
-        a::Float64=0.18,
+        a::Float32=0.18f0,
         lum::Union{Number,Nothing}=nothing,
-        δ::Number=1e-10
+        δ::Number=1f-10
     )
 
-    (isnothing(lum) || lum ≈ 0.0) && (lum = avg_lum(rgb_m, δ))
-    return rgb_m .* a .* (1.0 / lum)
+    (isnothing(lum) || lum ≈ 0.0f0) && (lum = avg_lum(rgb_m, δ))
+    return rgb_m .* a .* (1.0f0 / lum)
 end
 
 function clamp_image(img::AbstractMatrix{T}) where {T}
@@ -35,7 +35,7 @@ function clamp_image(img::AbstractMatrix{T}) where {T}
     end
 end
 
-function γ_correction(img::AbstractMatrix{T}, γ::Float64=1.0, k::Float64=1.0) where T
+function γ_correction(img::AbstractMatrix{T}, γ::Float32=1.0f0, k::Float32=1.0f0) where T
     return map(img) do c
         return T(
             floor(255 * c.r^(1 / γ)),
@@ -46,8 +46,8 @@ function γ_correction(img::AbstractMatrix{T}, γ::Float64=1.0, k::Float64=1.0) 
 end
 
 function tone_mapping(img;
-        a::Float64=0.18,
-        γ::Float64=1.0,
+        a::Float32=0.18f0,
+        γ::Float32=1.0f0,
         lum::Union{Number,Nothing}=nothing
     )
     img = normalize_image(img, a, lum)

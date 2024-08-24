@@ -55,7 +55,7 @@ end
 
 function refine_intersection(p::Point, s::Sphere)
     p *= s.radius ./ distance(Point3f(0), p)
-    p[1] ≈ 0 && p[2] ≈ 0 && (p = Point3f(1f-6 * s.radius, p[2], p[3]))
+    p[1] ≈ 0f0 && p[2] ≈ 0f0 && (p = Point3f(1f-6 * s.radius, p[2], p[3]))
     p
 end
 

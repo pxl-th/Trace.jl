@@ -100,6 +100,13 @@ function launch_trace_image!(img, camera, scene)
     KA.synchronize(backend)
     return img
 end
+# using AMDGPU
+# ArrayType = ROCArray
+# using CUDA
+# ArrayType = CuArray
+
+# using Metal
+# ArrayType = MtlArray
 
 preserve = []
 gpu_scene = to_gpu(ArrayType, scene; preserve=preserve);

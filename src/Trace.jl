@@ -52,7 +52,7 @@ function concentric_sample_disk(u::Point2f)::Point2f
     # Map uniform random numbers to [-1, 1].
     offset = 2f0 * u - Vec2f(1f0)
     # Handle degeneracy at the origin.
-    offset[1] ≈ 0 && offset[2] ≈ 0 && return Point2f(0)
+    offset[1] ≈ 0f0 && offset[2] ≈ 0f0 && return Point2f(0)
     if abs(offset[1]) > abs(offset[2])
         r = offset[1]
         θ = (offset[2] / offset[1]) * π / 4f0
