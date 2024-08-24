@@ -129,8 +129,8 @@ function li(
     end
     if depth + 1 ≤ max_depth
         # Trace rays for specular reflection & refraction.
-        l += specular_reflect(bsdf, sampler, max_depth, ray, si, scene, depth)
-        l += specular_transmit(bsdf, sampler, max_depth, ray, si, scene, depth)
+        # l += specular_reflect(bsdf, sampler, max_depth, ray, si, scene, depth)
+        # l += specular_transmit(bsdf, sampler, max_depth, ray, si, scene, depth)
     end
     l
 end

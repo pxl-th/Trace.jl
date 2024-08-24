@@ -109,3 +109,4 @@ gpu_img = ArrayType(zeros(RGBf, res, res));
 # @btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
 launch_trace_image!(gpu_img, cam, gpu_scene);
 launch_trace_image!(img, cam, scene, lights)
+Array(gpu_img)
