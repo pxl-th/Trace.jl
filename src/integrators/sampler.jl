@@ -88,9 +88,13 @@ function li(
     l = RGBSpectrum(0f0)
     # Find closest ray intersection or return background radiance.
     hit, shape, si = intersect!(scene, ray)
+    lights = scene.lights
     if !hit
-        for light in scene.lights
-            l += le(light, ray)
+        Base.Cartesian.@nexprs 8 i -> begin
+            if i <= length(lights)
+                light = lights[i]
+                l += le(light, ray)
+            end
         end
         return l
     end
@@ -112,7 +116,6 @@ function li(
     # Compute emitted light if ray hit an area light source.
     l += le(si, wo)
     # Add contribution of each light source.
-    lights = scene.lights
     Base.Cartesian.@nexprs 8 i -> begin
         if i <= length(lights)
             light = lights[i]
@@ -129,8 +132,8 @@ function li(
     end
     if depth + 1 ≤ max_depth
         # Trace rays for specular reflection & refraction.
-        # l += specular_reflect(bsdf, sampler, max_depth, ray, si, scene, depth)
-        # l += specular_transmit(bsdf, sampler, max_depth, ray, si, scene, depth)
+        l += specular_reflect(bsdf, sampler, max_depth, ray, si, scene, depth)
+        l += specular_transmit(bsdf, sampler, max_depth, ray, si, scene, depth)
     end
     l
 end
@@ -152,7 +155,7 @@ end
     if !(pdf > 0f0 && !is_black(f) && abs(wi ⋅ ns) != 0f0)
         return RGBSpectrum(0f0)
     end
-    # Compute ray differential for specular reflection.
+    # # Compute ray differential for specular reflection.
     rd = RayDifferentials(spawn_ray(si, wi))
     if ray.has_differentials
         rx_origin = si.core.p + si.∂p∂x
@@ -215,7 +218,7 @@ end
         # intersected. Compute the relative IOR by first out by assuming
         # that the ray is entering the object.
         η = 1f0 / bsdf.η
-        if (ns ⋅ ns) < 0
+        if (ns ⋅ ns) < 0f0
             # If the ray isn't entering the object, then we need to invert
             # the relative IOR and negate the normal and its derivatives.
             η = 1f0 / η

@@ -5,10 +5,10 @@ using KernelAbstractions
 import KernelAbstractions as KA
 using KernelAbstractions.Extras.LoopInfo: @unroll
 
-# using AMDGPU
-# ArrayType = ROCArray
-using CUDA
-ArrayType = CuArray
+using AMDGPU
+ArrayType = ROCArray
+# using CUDA
+# ArrayType = CuArray
 
 include("./../src/gpu-support.jl")
 
@@ -57,13 +57,8 @@ begin
         Trace.PointLight(Vec3f(0, 0, 2), Trace.RGBSpectrum(10.0f0)),
         Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(25.0f0)),
     )
+    scene = Trace.Scene(lights, bvh)
     img = zeros(RGBf, res, res)
-end
-
-@inline function get_camera_sample(p_raster::Point2)
-    p_film = p_raster .+ rand(Point2f)
-    p_lens = rand(Point2f)
-    Trace.CameraSample(p_film, p_lens, rand(Float32))
 end
 
 # ray = Trace.Ray(o=Point3f(0.5, 0.5, 1.0), d=Vec3f(0.0, 0.0, -1.0))
@@ -74,12 +69,30 @@ end
 
 @inline function trace_pixel(camera, scene, xy)
     pixel = Point2f(Tuple(xy))
-    camera_sample = get_camera_sample(pixel)
+    s = Trace.UniformSampler(8)
+    camera_sample = @inline Trace.get_camera_sample(s, pixel)
     ray, ω = Trace.generate_ray_differential(camera, camera_sample)
     if ω > 0.0f0
-        hit, shape, si = Trace.intersect!(scene, ray)
+        l = @inline Trace.li(s, 5, ray, scene, 1)
+    end
+    return l
+end
+
+@inline function trace_pixel(camera, scene, xy)
+    pixel = Point2f(reverse(Tuple(xy)))
+    s = Trace.UniformSampler(8)
+    camera_sample = @inline Trace.get_camera_sample(s, pixel)
+    ray, ω = Trace.generate_ray_differential(camera, camera_sample)
+    l = Trace.RGBSpectrum(0.0f0)
+    if ω > 0.0f0
+        hit, prim, si = Trace.intersect!(scene, ray)
         if hit
-            l = Trace.li(Trace.UniformSampler(8), 5, ray, scene, 1)
+            m = Trace.get_material(scene, prim)
+            bsdf = m(si, false, Trace.Radiance)
+            l = Trace.specular_reflect(
+                bsdf, s, 8, ray,
+                si, scene, 8,
+            )
         end
     end
     return l
@@ -91,6 +104,7 @@ end
         l = trace_pixel(camera, scene, xy)
         @inbounds img[xy] = RGBf(l.c...)
     end
+    nothing
 end
 
 function launch_trace_image!(img, camera, scene)
@@ -108,4 +122,44 @@ gpu_img = ArrayType(zeros(RGBf, res, res));
 # @btime launch_trace_image!(img, cam, bvh, lights);
 # @btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
 launch_trace_image!(gpu_img, cam, gpu_scene);
+Array(gpu_img)
+
 launch_trace_image!(img, cam, scene)
+GLMakie.activate!(float=true)
+image(img)
+
+ray = Trace.RayDifferentials(Trace.Ray(o=Point3f(0.5, 0.5, 1.0), d=Vec3f(0.0, 0.0, -1.0)))
+open("le-wt.jl", "w") do io
+    code_warntype(io, Trace.li, typeof.((Trace.UniformSampler(8), 5, ray, scene, 1)))
+end
+
+
+function launch_trace_image_ir!(img, camera, scene)
+    backend = KA.get_backend(img)
+    kernel! = ka_trace_image!(backend)
+    open("test.ir", "w") do io
+        try
+            @device_code_llvm io begin
+                kernel!(img, camera, scene, ndrange=size(img), workgroupsize=(16, 16))
+            end
+        catch e
+            println(e)
+        end
+    end
+    KA.synchronize(backend)
+    return img
+end
+launch_trace_image_ir!(gpu_img, cam, gpu_scene);
+
+code_llvm(Trace.intersect!, (typeof(bvh), Trace.RayDifferentials))
+
+
+function trace_image!(img, camera, scene)
+    for xy in CartesianIndices(size(img))
+        @inbounds img[xy] = RGBf(trace_pixel(camera, scene, xy).c...)
+    end
+    return img
+end
+
+
+@time launch_trace_image!(img, cam, scene)

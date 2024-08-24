@@ -74,13 +74,11 @@ end
 
 @inline function trace_pixel(camera, scene, xy)
     pixel = Point2f(Tuple(xy))
-    camera_sample = get_camera_sample(pixel)
+    s = Trace.UniformSampler(8)
+    camera_sample = @inline Trace.get_camera_sample(s, pixel)
     ray, ω = Trace.generate_ray_differential(camera, camera_sample)
     if ω > 0.0f0
-        hit, shape, si = Trace.intersect!(scene, ray)
-        if hit
-            l = Trace.li(Trace.UniformSampler(8), 5, ray, scene, 1)
-        end
+        l = @inline Trace.li(s, 5, ray, scene, 1)
     end
     return l
 end
@@ -147,9 +145,9 @@ Array(gpu_img)
 # workgroupsize=(16,16)
 # 31.022 ms (35 allocations: 5.89 KiB)
 
-function trace_image!(img, camera, bvh)
+function trace_image!(img, camera, scene)
     for xy in CartesianIndices(size(img))
-        @inbounds img[xy] = trace_pixel(camera, bvh, xy)
+        @inbounds img[xy] = RGBf(trace_pixel(camera, scene, xy).c...)
     end
     return img
 end

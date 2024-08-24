@@ -51,7 +51,6 @@ begin
 end
 
 @inline function get_camera_sample(p_raster::Point2)
-
     p_film = p_raster .+ rand(Point2f)
     p_lens = rand(Point2f)
     Trace.CameraSample(p_film, p_lens, rand(Float32))
