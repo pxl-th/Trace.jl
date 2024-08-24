@@ -92,5 +92,5 @@ function fresnel_conductor(
     t3 = cos_θi2 * a2_plus_b2 + sin_θi2 * sin_θi2
     t4 = t2 * sin_θi2
     r_parallel = r_perp * (t3 - t4) / (t3 + t4)
-    0.5f0 * (r_parallel + r_perp)
+    return 0.5f0 * (r_parallel + r_perp)
 end
