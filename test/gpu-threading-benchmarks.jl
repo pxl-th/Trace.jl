@@ -155,7 +155,7 @@ function trace_image!(img, camera, bvh)
 end
 
 function threads_trace_image!(img, camera, bvh)
-    Threads.@threads :static for xy in CartesianIndices(size(img))
+    Threads.@threads for xy in CartesianIndices(size(img))
         @inbounds img[xy] = trace_pixel(camera, bvh, xy)
     end
     return img

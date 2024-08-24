@@ -53,7 +53,7 @@ function (i::SamplerIntegrator)(scene::Scene, film)
     _tb_max = min.(_tb_min .+ (tile_size - 1), sample_bounds.p_max)
     _tile_bounds = Bounds2(_tb_min, _tb_max)
     filmtiles = [FilmTile(film, _tile_bounds, filter_radius) for _ in 1:Threads.maxthreadid()]
-    Threads.@threads :greedy for k in 0:total_tiles
+    Threads.@threads for k in 0:total_tiles
         x, y = k % width, k ÷ width
         tile = Point2f(x, y)
         tb_min = sample_bounds.p_min .+ tile .* tile_size

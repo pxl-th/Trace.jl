@@ -192,11 +192,16 @@ end
     ∂p∂u, ∂p∂v, δp_13, δp_23
 end
 
+@inline function _all(f, x::StaticVector{3})
+    f(x[1]) && f(x[2]) && f(x[3])
+end
+
+
 @inline function ∂n(
         t::Triangle, uv::AbstractVector{Point2f},
     )::Tuple{Normal3f,Normal3f}
     t_normals = normals(t)
-    all(x-> all(isnan, x), t_normals) && return Normal3f(0), Normal3f(0)
+    _all(x -> _all(isnan, x), t_normals) && return Normal3f(0), Normal3f(0)
     # Compute deltas for partial detivatives of normal.
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
     δn_13, δn_23 = t_normals[1] - t_normals[3], t_normals[2] - t_normals[3]
@@ -209,12 +214,13 @@ end
     ∂n∂u, ∂n∂v
 end
 
+
 @inline function _init_triangle_shading_geometry(
         t::Triangle, si::SurfaceInteraction,
         barycentric::Point3f, uv::AbstractVector{Point2f},
     )
-    has_normals = all(x->all(isfinite, x), t.normals)
-    has_tangents = all(x->all(isfinite, x), t.tangents)
+    has_normals = _all(x -> _all(isfinite, x), t.normals)
+    has_tangents = _all(x -> _all(isfinite, x), t.tangents)
     !has_normals && !has_tangents && return si
     # Initialize triangle shading geometry.
     # Compute shading normal, tangent & bitangent.

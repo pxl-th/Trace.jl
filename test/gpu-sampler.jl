@@ -57,6 +57,7 @@ begin
         Trace.PointLight(Vec3f(0, 0, 2), Trace.RGBSpectrum(10.0f0)),
         Trace.PointLight(Vec3f(0, 3, 3), Trace.RGBSpectrum(25.0f0)),
     )
+    scene = Trace.Scene([lights...], bvh)
     img = zeros(RGBf, res, res)
 end
 
@@ -86,10 +87,12 @@ end
 end
 
 @kernel function ka_trace_image!(img, camera, scene)
-    xy = @index(Global, Cartesian)
-    if checkbounds(Bool, img, xy)
-        l = trace_pixel(camera, scene, xy)
-        @inbounds img[xy] = RGBf(l.c...)
+    linear_idx = @index(Global, Linear)
+    if checkbounds(Bool, img, linear_idx)
+        x = ((linear_idx - 1) % size(img, 1)) + 1
+        y = ((linear_idx - 1) ÷ size(img, 1)) + 1
+        l = trace_pixel(camera, scene, (x, y))
+        @inbounds img[linear_idx] = RGBf(l.c...)
     end
 end
 
@@ -108,4 +111,5 @@ gpu_img = ArrayType(zeros(RGBf, res, res));
 # @btime launch_trace_image!(img, cam, bvh, lights);
 # @btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
 launch_trace_image!(gpu_img, cam, gpu_scene);
-launch_trace_image!(img, cam, scene)
+# @btime (launch_trace_image!(img, cam, scene));
+# 234.530 ms (456 allocations: 154.26 KiB)
