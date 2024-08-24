@@ -136,10 +136,13 @@ function launch_trace_image!(img, camera, bvh, lights)
     KA.synchronize(backend)
     return img
 end
-using AMDGPU
-ArrayType = ROCArray
+# using AMDGPU
+# ArrayType = ROCArray
 # using CUDA
 # ArrayType = CuArray
+
+using Metal
+ArrayType = MtlArray
 preserve = []
 gpu_bvh = to_gpu(ArrayType, bvh; preserve=preserve);
 gpu_img = ArrayType(zeros(RGBf, res, res));

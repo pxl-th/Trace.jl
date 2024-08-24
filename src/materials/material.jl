@@ -59,7 +59,7 @@ Base.Base.@propagate_inbounds function glass_material(g::UberMaterial, si::Surfa
     t_black = is_black(t)
     r_black && t_black && return BSDF(si, η)
 
-    is_specular = u_roughness ≈ 0 && v_roughness ≈ 0
+    is_specular = u_roughness ≈ 0f0 && v_roughness ≈ 0f0
     if is_specular && allow_multiple_lobes
         return BSDF(si, η, FresnelSpecular(true, r, t, 1.0f0, η, transport))
     end

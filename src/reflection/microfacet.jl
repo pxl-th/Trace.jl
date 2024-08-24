@@ -95,8 +95,11 @@ with the surface normal `w`.
 function D(trd::TrowbridgeReitzDistribution, w::Vec3f)::Float32
     tan_θ² = tan_θ(w)^2
     isinf(tan_θ²) && return 0f0
-
-    cos_θ⁴ = cos_θ(w)^4
+    
+    # Calculate cos_θ⁴ without using ^4
+    cos_θ² = cos_θ(w) * cos_θ(w)
+    cos_θ⁴ = cos_θ² * cos_θ²
+    
     e = (cos_ϕ(w)^2 / (trd.α_x^2) + sin_ϕ(w)^2 / (trd.α_y^2)) * tan_θ²
     1f0 / (π * trd.α_x * trd.α_y * cos_θ⁴ * (1f0 + e)^2)
 end
@@ -210,7 +213,7 @@ function distribution_microfacet_reflection(m::UberBxDF{S}, wo::Vec3f, wi::Vec3f
     wh = wi + wo
     # Degenerate cases for microfacet reflection.
 
-    (cosθi ≈ 0 || cosθo ≈ 0) && return S(0f0)
+    (cosθi ≈ 0f0 || cosθo ≈ 0f0) && return S(0f0)
     wh ≈ Vec3f(0) && return S(0f0)
     wh = normalize(wh)
     f = m.fresnel(wi ⋅ face_forward(wh, Vec3f(0, 0, 1)))
@@ -222,12 +225,12 @@ end
         m::UberBxDF{S}, wo::Vec3f, u::Point2f,
     )::Tuple{Vec3f,Float32,RGBSpectrum,UInt8} where {S<:Spectrum}
 
-    wo[3] ≈ 0 && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
+    wo[3] ≈ 0f0 && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
 
     # Sample microfacet orientation `wh` and reflected direction `wi`.
 
     wh = sample_wh(m.distribution, wo, u)
-    (wo ⋅ wh) < 0 && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
+    (wo ⋅ wh) < 0f0 && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
 
     wi = reflect(wo, wh)
     !same_hemisphere(wo, wi) && return Vec3f(0.0f0), 0.0f0, S(0.0f0), UInt8(0)
@@ -252,7 +255,7 @@ function distribution_microfacet_transmission(m::UberBxDF{S}, wo::Vec3f, wi::Vec
     same_hemisphere(wo, wi) && return S(0f0)
 
     cosθo, cosθi = cos_θ(wo), cos_θ(wi)
-    (cosθo ≈ 0 || cosθi ≈ 0) && return S(0f0)
+    (cosθo ≈ 0f0 || cosθi ≈ 0f0) && return S(0f0)
     # Compute `wh` from `wo` & `wi` for microfacet transmission.
     η = cos_θ(wo) > 0f0 ? (m.η_b / m.η_a) : (m.η_a / m.η_b)
     wh = normalize((wo + wi * η))
@@ -275,7 +278,7 @@ end
 
 @inline function sample_microfacet_transmission(m::UberBxDF{S}, wo::Vec3f, u::Point2f) where {S<:Spectrum}
 
-    wo[3] ≈ 0 && return Vec3f(0f0), 0f0, S(0f0), UInt8(0)
+    wo[3] ≈ 0f0 && return Vec3f(0f0), 0f0, S(0f0), UInt8(0)
     wh = sample_wh(m.distribution, wo, u)
     (wo ⋅ wh) < 0 && return Vec3f(0f0), 0f0, S(0f0), UInt8(0)
 

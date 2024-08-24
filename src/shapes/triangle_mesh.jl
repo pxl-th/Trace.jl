@@ -181,7 +181,7 @@ end
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
     δp_13, δp_23 = Vec3f(vs[1] - vs[3]), Vec3f(vs[2] - vs[3])
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
-    if det ≈ 0
+    if det ≈ 0f0
         v = normalize((vs[3] - vs[1]) × (vs[2] - vs[1]))
         _, ∂p∂u, ∂p∂v = coordinate_system(Vec3f(v))
         return ∂p∂u, ∂p∂v, δp_13, δp_23
@@ -201,7 +201,7 @@ end
     δuv_13, δuv_23 = uv[1] - uv[3], uv[2] - uv[3]
     δn_13, δn_23 = t_normals[1] - t_normals[3], t_normals[2] - t_normals[3]
     det = δuv_13[1] * δuv_23[2] - δuv_13[2] * δuv_23[1]
-    det ≈ 0 && return Normal3f(0), Normal3f(0)
+    det ≈ 0f0 && return Normal3f(0), Normal3f(0)
 
     inv_det = 1f0 / det
     ∂n∂u = (δuv_23[2] * δn_13 - δuv_13[2] * δn_23) * inv_det
