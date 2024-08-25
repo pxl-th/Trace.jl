@@ -33,13 +33,14 @@ function to_gpu(ArrayType, m::Trace.UberMaterial; preserve=[])
         no_tex_s = typeof(Kr)()
         Kd = Trace.no_texture(m.Kd) ? no_tex_s : to_gpu(ArrayType, m.Kd; preserve=preserve)
     end
-    f_tex = to_gpu(ArrayType, Trace.Texture(ArrayType(zeros(Float32, 1, 1))); preserve=preserve)
+    f_tex = to_gpu(ArrayType, Trace.Texture(zeros(Float32, 1, 1)); preserve=preserve)
     no_tex_f = typeof(f_tex)()
     return Trace.UberMaterial(
         Kd,
         Trace.no_texture(m.Ks) ? no_tex_s : to_gpu(ArrayType, m.Ks; preserve=preserve),
         Trace.no_texture(m.Kr) ? no_tex_s : to_gpu(ArrayType, m.Kr; preserve=preserve),
         Trace.no_texture(m.Kt) ? no_tex_s : to_gpu(ArrayType, m.Kt; preserve=preserve),
+
         Trace.no_texture(m.σ) ? no_tex_f : to_gpu(ArrayType, m.σ; preserve=preserve),
         Trace.no_texture(m.roughness) ? no_tex_f : to_gpu(ArrayType, m.roughness; preserve=preserve),
         Trace.no_texture(m.u_roughness) ? no_tex_f : to_gpu(ArrayType, m.u_roughness; preserve=preserve),

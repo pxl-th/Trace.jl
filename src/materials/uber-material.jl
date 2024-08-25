@@ -34,13 +34,14 @@ FresnelConductor(ni, nt, k) = Fresnel(ni, nt, k, FRESNEL_CONDUCTOR)
 FresnelDielectric(ni::Float32, nt::Float32) = Fresnel(RGBSpectrum(ni), RGBSpectrum(nt), RGBSpectrum(0.0f0), FRESNEL_DIELECTRIC)
 FresnelNoOp() = Fresnel(RGBSpectrum(0.0f0), RGBSpectrum(0.0f0), RGBSpectrum(0.0f0), FRESNEL_NO_OP)
 
-function (f::Fresnel)(cos_θi::Float32)
-    if f.type === FRESNEL_CONDUCTOR
-        return fresnel_conductor(cos_θi, f.ηi, f.ηt, f.k)
-    elseif f.type === FRESNEL_DIELECTRIC
+function (f::Fresnel)(cos_θi::Float32)::Float32
+    # if f.type === FRESNEL_CONDUCTOR
+    #     return fresnel_conductor(cos_θi, f.ηi, f.ηt, f.k)
+    # else
+    if f.type === FRESNEL_DIELECTRIC
         return fresnel_dielectric(cos_θi, f.ηi[1], f.ηt[1])
     end
-    return RGBSpectrum(1.0f0)
+    return 1f0
 end
 
 

@@ -251,7 +251,8 @@ end
             if !ln.is_interior && ln.n_primitives > Int32(0)
                 # Intersect ray with primitives in node.
                 for i in Int32(0):ln.n_primitives - Int32(1)
-                    tmp_primitive = primitives[ln.offset+i]
+                    offset = ln.offset % Int32
+                    tmp_primitive = primitives[offset+i]
                     tmp_hit, ray, tmp_interaction = intersect_p!(
                         tmp_primitive, ray,
                     )
@@ -293,13 +294,15 @@ end
 
     to_visit_offset, current_node_i = Int32(1), Int32(1)
     nodes_to_visit = zeros(MVector{64,Int32})
+    primitives = bvh.primitives
     @inbounds while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if !ln.is_interior && ln.n_primitives > Int32(0)
                 for i in Int32(0):ln.n_primitives-Int32(1)
+                    offset = ln.offset % Int32
                     intersect_p(
-                        bvh.primitives[ln.offset + i], ray,
+                        primitives[offset + i], ray,
                     ) && return true
                 end
                 to_visit_offset == 1 && break

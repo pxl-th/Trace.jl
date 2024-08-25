@@ -72,34 +72,18 @@ end
 
 begin
     integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 5)
-    @time integrator(scene, film)
+    @btime integrator(scene, film)
     img = reverse(film.framebuffer, dims=1)
 end
+
 # 6.296157 seconds (17.64 k allocations: 19.796 MiB, 0.13% gc time, 45 lock conflicts)
 # After more GPU optimizations
 # 4.169616 seconds (17.37 k allocations: 19.777 MiB, 0.14% gc time, 20 lock conflicts)
 # After first shading running on GPU
 # 3.835527 seconds (17.36 k allocations: 19.779 MiB, 0.16% gc time, 41 lock conflicts)
+# 4.191 s (4710 allocations: 18.36 MiB)
+# iterative_li: 5.2s -.-
 
-camera_sample = Trace.get_camera_sample(integrator.sampler, Point2f(512))
-ray, ω = Trace.generate_ray_differential(integrator.camera, camera_sample)
-
-@btime Trace.intersect_p(bvh, ray)
-@btime Trace.intersect!(bvh, ray)
-
-###
-# Int32 always
-# 42.000 μs (1 allocation: 624 bytes)
-# Tuple instead of vector for nodes_to_visit
-# 43.400 μs (1 allocation: 624 bytes)
-# AFTER GPU rework
-# intersect!
-# 40.500 μs (1 allocation: 368 bytes)
-# intersect_p
-# 11.500 μs (0 allocations: 0 bytes)
-
-### LinearBVHLeaf as one type
-# 5.247460 seconds (17.55 k allocations: 19.783 MiB, 46 lock conflicts)
 
 # begin
 #     integrator = Trace.SPPMIntegrator(cam, 0.075f0, 5, 1)

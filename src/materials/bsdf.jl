@@ -121,6 +121,8 @@ function (b::BSDF)(
     return output
 end
 
+u_int32(x) = Base.unsafe_trunc(Int32, x)
+
 """
 Compute incident ray direction for a given outgoing direction and
 a given mode of light scattering corresponding
@@ -132,16 +134,16 @@ function sample_f(
 
     # Choose which BxDF to sample.
     matching_components = num_components(b, type)
-    matching_components == 0 && return (
+    matching_components == Int32(0) && return (
         Vec3f(0f0), RGBSpectrum(0f0), 0f0, BSDF_NONE,
     )
     component = min(
-        max(1, ceil(Int64, u[1] * matching_components)),
+        max(Int32(1), u_int32(ceil(u[1] * matching_components))),
         matching_components,
     )
     # Get BxDF for chosen component.
     count = component
-    component -= 1
+    component -= Int32(1)
     bxdf = UberBxDF{RGBSpectrum}()
     bxdfs = b.bxdfs
     Base.Cartesian.@nexprs 8 i -> begin
@@ -177,24 +179,24 @@ function sample_f(
     )
     wi_world = local_to_world(b, wi)
     # Compute overall PDF with all matching BxDFs.
-    if !(bxdf.type & BSDF_SPECULAR != 0) && matching_components > 1
+    if !(bxdf.type & BSDF_SPECULAR != Int32(0)) && matching_components > Int32(1)
         Base.Cartesian.@nexprs 8 i -> begin
             if i <= bxdfs.last && bxdfs[i] != bxdf && bxdfs[i] & type
                 pdf += compute_pdf(bxdfs[i], wo, wi)
             end
         end
     end
-    matching_components > 1 && (pdf /= matching_components)
+    matching_components > Int32(1) && (pdf /= matching_components)
     # Compute value of BSDF for sampled direction.
-    if !(bxdf.type & BSDF_SPECULAR != 0)
-        reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0
+    if !(bxdf.type & BSDF_SPECULAR != Int32(0))
+        reflect = ((wi_world ⋅ b.ng) * (wo_world ⋅ b.ng)) > 0f0
         f = RGBSpectrum(0f0)
         Base.Cartesian.@nexprs 8 i -> begin
             if i <= bxdfs.last
                 bxdf = bxdfs[i]
                 if  ((bxdf & type) && (
-                        (reflect && (bxdf.type & BSDF_REFLECTION != 0)) ||
-                        (!reflect && (bxdf.type & BSDF_TRANSMISSION != 0))
+                        (reflect && (bxdf.type & BSDF_REFLECTION != Int32(0))) ||
+                        (!reflect && (bxdf.type & BSDF_TRANSMISSION != Int32(0)))
                     ))
                     f += bxdf(wo, wi)
                 end
@@ -226,11 +228,11 @@ function compute_pdf(
 end
 
 @inline function num_components(b::BSDF, flags::UInt8)::Int64
-    num = 0
+    num = Int32(0)
     bxdfs = b.bxdfs
     Base.Cartesian.@nexprs 8 i -> begin
         if i <= bxdfs.last && (bxdfs[i] & flags)
-            num += 1
+            num += Int32(1)
         end
     end
     return num

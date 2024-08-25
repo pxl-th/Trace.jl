@@ -33,8 +33,8 @@ lerp(c1::C, c2::C, t::Float32) where C<:Spectrum = (1f0 - t) * c1 + t * c2
 Base.getindex(c::C, i) where C<:Spectrum = c.c[i]
 
 function Base.clamp(
-    c::C, low::Float32 = 0f0, high::Float32 = Inf32,
-) where C<:Spectrum
+        c::C, low::Float32 = 0f0, high::Float32 = Inf32,
+    ) where C<:Spectrum
     C(clamp.(c.c, low, high))
 end
 
