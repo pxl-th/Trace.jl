@@ -95,14 +95,14 @@ end
 
 @inline function trace_pixel(camera, scene, xy)
     pixel = Point2f(Tuple(xy))
-    s = Trace.UniformSampler(3)
+    s = Trace.UniformSampler(8)
     camera_sample = @inline Trace.get_camera_sample(s, pixel)
     ray, ω = Trace.generate_ray_differential(camera, camera_sample)
-    lights = scene.lights
     l = Trace.RGBSpectrum(0.0f0)
-    sampler = Trace.UniformSampler(8)
+    sampler = Trace.UniformSampler(3)
     if ω > 0.0f0
-        l = Trace.li_iterative(scene, sampler, ray, lights)
+        l = Trace.li_iterative(sampler, Int32(8), ray, scene)
+        # l = Trace.li(sampler, Int32(8), ray, scene, Int32(1))
     end
     return l
 end
@@ -131,9 +131,7 @@ end
 preserve = []
 gpu_scene = to_gpu(ArrayType, scene; preserve=preserve);
 gpu_img = ArrayType(zeros(RGBf, res, res));
-# @btime launch_trace_image!(img, cam, bvh, lights);
-# @btime launch_trace_image!(gpu_img, cam, gpu_bvh, lights);
-@btime launch_trace_image!(gpu_img, cam, gpu_scene);
+launch_trace_image!(gpu_img, cam, gpu_scene);
 Array(gpu_img)
 #95.787 ms (912 allocations: 27.22 KiB)
 img = zeros(RGBf, res, res)
@@ -141,7 +139,19 @@ img = zeros(RGBf, res, res)
 # 4.5s (CPU)
 # 3s (GPU)
 
+# 0.912289 seconds (2.12 M allocations: 178.238 MiB, 2.60% gc time)
 
+
+function single_trace_image!(img, camera, scene)
+    @inbounds for idx in eachindex(img)
+        cols = size(img, 2) % Int32
+        row = (idx - Int32(1)) ÷ cols + Int32(1)
+        col = (idx - Int32(1)) % cols + Int32(1)
+        l = trace_pixel(camera, scene, (row, cols - col))
+        img[idx] = RGBf(l.c...)
+    end
+    return img
+end
 
 nothing
 # 81.839 ms (233 allocations: 86.09 KiB)
@@ -181,3 +191,12 @@ nothing
 
 
 # @time launch_trace_image!(img, cam, scene)
+
+s = Trace.UniformSampler(8)
+pixel = Point2f(512, 512)
+camera_sample = Trace.get_camera_sample(s, pixel)
+ray, ω = Trace.generate_ray_differential(cam, camera_sample)
+
+@btime Trace.li_iterative(s, 8, ray, scene)
+
+MVector((ray, Int32(0), Trace.RGBSpectrum(0.0f0)), (ray, Int32(0), Trace.RGBSpectrum(0.0f0)))

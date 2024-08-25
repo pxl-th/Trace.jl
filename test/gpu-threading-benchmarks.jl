@@ -240,3 +240,23 @@ end
 open("li-wt.jl", "w") do io
     code_warntype(io, Trace.li, typeof.((Trace.UniformSampler(8), 5, ray, scene, 1)))
 end
+
+camera_sample = Trace.get_camera_sample(integrator.sampler, Point2f(512))
+ray, ω = Trace.generate_ray_differential(integrator.camera, camera_sample)
+
+@btime Trace.intersect_p(bvh, ray)
+@btime Trace.intersect!(bvh, ray)
+
+###
+# Int32 always
+# 42.000 μs (1 allocation: 624 bytes)
+# Tuple instead of vector for nodes_to_visit
+# 43.400 μs (1 allocation: 624 bytes)
+# AFTER GPU rework
+# intersect!
+# 40.500 μs (1 allocation: 368 bytes)
+# intersect_p
+# 11.500 μs (0 allocations: 0 bytes)
+
+### LinearBVHLeaf as one type
+# 5.247460 seconds (17.55 k allocations: 19.783 MiB, 46 lock conflicts)
