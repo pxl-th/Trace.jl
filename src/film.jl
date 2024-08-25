@@ -154,7 +154,7 @@ end
 
 @inline function filter_offset(x, discrete_point, inv_filter_radius, filter_table_width)
     fx = abs((x - discrete_point[1]) * inv_filter_radius * filter_table_width)
-    return clamp(ceil(Int32, fx), Int32(1), Int32(filter_table_width))  # TODO is clipping ok?
+    return clamp(u_int32(ceil(fx)), Int32(1), Int32(filter_table_width))  # TODO is clipping ok?
 end
 
 function filter_offsets(start, stop, discrete_point, inv_filter_radius, filter_table_width)::NTuple{8, Int32}
@@ -208,7 +208,7 @@ end
 Point in (x, y) format.
 """
 @inline function get_pixel_index(t::FilmTile, p::Point2)
-    i1, i2 = Int32.((p .- t.bounds.p_min .+ 1))
+    i1, i2 = u_int32.((p .- t.bounds.p_min .+ 1f0))
     return CartesianIndex(i2, i1)
 end
 
@@ -216,7 +216,7 @@ end
 Point in (x, y) format.
 """
 @inline function get_pixel_index(f::Film, p::Point2)
-    i1, i2 = Int32.((p .- f.crop_bounds.p_min .+ 1.0))
+    i1, i2 = u_int32.((p .- f.crop_bounds.p_min .+ 1f0))
     return CartesianIndex(i2, i1)
 end
 
@@ -227,6 +227,7 @@ function merge_film_tile!(f::Film, ft::FilmTile)
     ft_filter_weight_sum = ft.pixels.filter_weight_sum
     f_xyz = f.pixels.xyz
     f_filter_weight_sum = f.pixels.filter_weight_sum
+
     @inbounds for y in y_range, x in x_range
         pixel = Point2{Int32}(x, y)
         ft_idx = get_pixel_index(ft, pixel)
@@ -235,6 +236,7 @@ function merge_film_tile!(f::Film, ft::FilmTile)
         f_filter_weight_sum[f_idx] += ft_filter_weight_sum[ft_idx]
     end
 end
+
 
 function set_image!(f::Film, spectrum::Matrix{S}) where {S<:Spectrum}
     @real_assert size(f.pixels) == size(spectrum)

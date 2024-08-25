@@ -2,6 +2,7 @@ using GeometryBasics, ImageShow
 using LinearAlgebra, Makie
 using Trace, FileIO, MeshIO
 
+model = load(joinpath(@__DIR__, "..", "src", "assets", "models", "caustic-glass.ply"))
 begin
     glass = Trace.GlassMaterial(
         Trace.ConstantTexture(Trace.RGBSpectrum(1f0)),

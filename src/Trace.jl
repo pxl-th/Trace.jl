@@ -224,7 +224,6 @@ include("filter.jl")
 include("film.jl")
 
 
-
 include("camera/camera.jl")
 include("sampler/sampling.jl")
 include("sampler/sampler.jl")
@@ -246,6 +245,7 @@ include("lights/environment.jl")
 
 include("integrators/sampler.jl")
 include("integrators/sppm.jl")
+include("kernel-abstractions.jl")
 
 # include("model_loader.jl")
 

@@ -72,7 +72,7 @@ end
 
 begin
     integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 5)
-    @btime integrator(scene, film)
+    @time integrator(scene, film)
     img = reverse(film.framebuffer, dims=1)
 end
 

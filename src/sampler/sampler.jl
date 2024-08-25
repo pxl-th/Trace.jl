@@ -138,7 +138,7 @@ end
     p = rand2f()
     p_film = Point2f(p_raster[1] + p[1], p_raster[2] + p[2])
     p_lens = rand2f()
-    CameraSample(p_film, p_lens, 0f0)
+    CameraSample(p_film, p_lens, 0.5f0)
 end
 
 @inline function has_next_sample(u::UniformSampler)::Bool

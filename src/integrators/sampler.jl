@@ -16,6 +16,7 @@ function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E
         ray = scale_differentials(ray, spp_sqr)
         l = RGBSpectrum(0f0)
         if ω > 0.0f0
+            # l = li(t_sampler, Int32(i.max_depth), ray, scene, Int32(1))
             l = li_iterative(t_sampler, Int32(i.max_depth), ray, scene)
         end
         # TODO check l for invalid values
@@ -98,12 +99,17 @@ end
 @inline function light_contribution(l, lights, wo, scene, bsdf, sampler, si)
     core = si.core
     n = si.shading.n
-    @unroll for light in lights
-        sampled_li, wi, pdf, tester = sample_li(light, core, get_2d(sampler))
-        if !(is_black(sampled_li) || pdf ≈ 0.0f0)
-            f = bsdf(wo, wi)
-            if !is_black(f) && unoccluded(tester, scene)
-                l += f * sampled_li * abs(wi ⋅ n) / pdf
+    # Why can't I use KernelAbstraction.@unroll here, when in Trace.jl?
+    # Worked just fined when the function was defined outside
+    Base.Cartesian.@nexprs 8 i -> begin
+        if i <= length(lights)
+            @inbounds light = lights[i]
+            sampled_li, wi, pdf, tester = sample_li(light, core, get_2d(sampler))
+            if !(is_black(sampled_li) || pdf ≈ 0.0f0)
+                f = bsdf(wo, wi)
+                if !is_black(f) && unoccluded(tester, scene)
+                    l += f * sampled_li * abs(wi ⋅ n) / pdf
+                end
             end
         end
     end
@@ -249,78 +255,8 @@ end
 end
 
 
-# function li_iterative(scene, sampler, ray, lights)
-#     l = RGBSpectrum(0.0f0)
-#     srf = RGBSpectrum(1.0f0)
-#     stf = RGBSpectrum(1.0f0)
-#     i = Int32(0)
-#     max_depth = Int32(3)
-#     reflect = false
-#     transmit = false
-#     recursion_depth = Int32(0)
-#     last_ray = ray
-#     while i ≤ max_depth
-#         i += Int32(1)
-#         if reflect && i == max_depth
-#             # i = recursion_depth
-#             reflect = false
-#             srf = RGBSpectrum(1.0f0)
-#             ray = last_ray
-#         end
-#         if transmit && i == max_depth
-#             # i = recursion_depth
-#             transmit = false
-#             stf = RGBSpectrum(1.0f0)
-#         end
-#         l *= srf
-#         l *= stf
-#         # Find closest ray intersection or return background radiance.
-#         hit, shape, si = intersect!(scene, ray)
-#         if !hit
-#             l = only_light(lights, ray)
-#             break
-#         end
-#         f, _ray, bsdf = li_norec(shape, sampler, ray, scene, si)
-#         l += f
-#         if _ray !== ray
-#             last_ray = ray
-#             ray = _ray
-
-#             continue
-#         end
-#         # Trace rays for specular reflection & refraction.
-#         srf, rayr = specular_reflect(bsdf, sampler, ray, si)
-#         if rayr !== ray
-#             last_ray = ray
-#             ray = rayr
-#             reflect = true
-#             # recursion_depth = i
-#             continue
-#         end
-#         stf, rayt = specular_transmit(bsdf, sampler, ray, si)
-#         if rayt !== ray
-#             ray = rayt
-#             transmit = true
-#             recursion_depth = i
-#             continue
-#         end
-#     end
-#     return l
-# end
-
-@inline function push(stack, pos, item)
-    pos = pos + Int32(1)
-    stack[pos] = item
-    return pos
-end
-
-@inline function pop(stack, pos)
-    return stack[pos], pos - Int32(1)
-end
-
 struct Reflect end
 struct Transmit end
-
 
 macro ntuple(N, value)
     expr = :(())
@@ -345,8 +281,8 @@ macro setindex(N, setindex_expr)
 end
 
 @inline function li_iterative(
-    sampler, max_depth, initial_ray::RayDifferentials, scene::Scene
-)::RGBSpectrum
+    sampler, max_depth::Int32, initial_ray::RayDifferentials, scene::S
+)::RGBSpectrum where {S<:Scene}
 
     accumulated_l = RGBSpectrum(0.0f0)
     # stack = MVector{8,Tuple{Trace.RayDifferentials,Int32,Trace.RGBSpectrum}}(undef)
@@ -356,7 +292,7 @@ end
     @inbounds while pos > Int32(0)
         (ray, depth, accumulated_l) = stack[pos]
         pos -= Int32(1)
-        if depth == sampler
+        if depth == max_depth
             continue
         end
         hit, shape, si = intersect!(scene, ray)
@@ -442,6 +378,7 @@ end
 end
 
 @inline function specular_differentials(::Type{Transmit}, rd, bsdf, si, ray, wo, wi)
+
     ns = si.shading.n
     rx_origin = si.core.p + si.∂p∂x
     ry_origin = si.core.p + si.∂p∂y
@@ -469,4 +406,65 @@ end
     rx_direction = wi - η * ∂wo∂x + μ * ∂n∂x + ∂μ∂x * ns
     ry_direction = wi - η * ∂wo∂y + μ * ∂n∂y + ∂μ∂y * ns
     return RayDifferentials(rd, rx_origin=rx_origin, ry_origin=ry_origin, rx_direction=rx_direction, ry_direction=ry_direction)
+end
+
+
+struct Tile
+    tile_indx::NTuple{2, Int32}
+    width::Int32
+end
+
+# function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E, camera::F, pixel::G, spp_sqr::H) where {A,B,C,D,E,F,G,H}
+#     for _ in 1:t_sampler.samples_per_pixel
+#         camera_sample = get_camera_sample(t_sampler, pixel)
+#         ray, ω = generate_ray_differential(camera, camera_sample)
+#         ray = scale_differentials(ray, spp_sqr)
+#         l = RGBSpectrum(0.0f0)
+#         if ω > 0.0f0
+#             # l = li(t_sampler, Int32(i.max_depth), ray, scene, Int32(1))
+#             l = li_iterative(t_sampler, Int32(i.max_depth), ray, scene)
+#         end
+#         # TODO check l for invalid values
+#         if isnan(l)
+#             l = RGBSpectrum(0.0f0)
+#         end
+#         add_sample!(film, film_tile, camera_sample.film, l, ω)
+#     end
+# end
+
+@noinline function sample_tile(sampler, camera, scene, film, film_tile, tile_bounds, max_depth)
+    spp_sqr = 1.0f0 / √Float32(sampler.samples_per_pixel)
+    for pixel in tile_bounds
+        for _ in 1:sampler.samples_per_pixel
+            camera_sample = get_camera_sample(sampler, pixel)
+            ray, ω = generate_ray_differential(camera, camera_sample)
+            ray = scale_differentials(ray, spp_sqr)
+            l = RGBSpectrum(0.0f0)
+            if ω > 0.0f0
+                l = li_iterative(sampler, Int32(max_depth), ray, scene)
+            end
+            # TODO check l for invalid values
+            l = ifelse(isnan(l), RGBSpectrum(0.0f0), l)
+            add_sample!(film, film_tile, camera_sample.film, l, ω)
+        end
+    end
+    merge_film_tile!(film, film_tile)
+end
+
+function sample_tiled(scene::Scene, film)
+    sample_bounds = get_sample_bounds(film)
+    sample_extent = diagonal(sample_bounds)
+    tile_size = 16
+    n_tiles = floor.(Int64, (sample_extent .+ tile_size) ./ tile_size)
+    # TODO visualize tile bounds to see if they overlap
+    width, height = n_tiles
+    filter_radius = film.filter.radius
+    filmtiles = similar(film.pixels, tile_size * tile_size, n_tiles)
+    for tile_idx in CartesianIndices((width, height))
+        tile_column, tile_row = Tuple(tile_idx)
+        tile_bounds = Bounds2(tb_min, tb_max)
+        film_tile = update_bounds!(film, film_tile, tile_bounds)
+        sample_kernel(i, camera, scene, film, film_tile, tile_bounds)
+    end
+    return film
 end

@@ -389,7 +389,6 @@ function _trace_photons!(
                         Atomix.@atomic pϕ_x[pixel_idx] += _ϕ[1]
                         Atomix.@atomic pϕ_y[pixel_idx] += _ϕ[2]
                         Atomix.@atomic pϕ_z[pixel_idx] += _ϕ[3]
-
                         Atomix.@atomic pM[pixel_idx] += 1
                     end
                 end
@@ -488,18 +487,10 @@ Computed indices are in [0, resolution), which is the correct input for `hash`.
     )::Tuple{Bool,Point3{UInt64}}
 
     p_offset = offset(bounds, p)
-    grid_point = Point3{Int64}(
-        floor(grid_resolution[1] * p_offset[1]),
-        floor(grid_resolution[2] * p_offset[2]),
-        floor(grid_resolution[3] * p_offset[3]),
-    )
+    grid_point = u_int32.(floor.(grid_resolution .* p_offset))
     in_bounds = all(0 .≤ grid_point .< grid_resolution)
-    grid_point = Point3{UInt64}(
-        clamp(grid_point[1], 0, grid_resolution[1] - 1),
-        clamp(grid_point[2], 0, grid_resolution[2] - 1),
-        clamp(grid_point[3], 0, grid_resolution[3] - 1),
-    )
-    in_bounds, grid_point
+    grid_point = clamp.(grid_point, Int32(0), grid_resolution .- Int32(1))
+    return in_bounds, grid_point
 end
 
 @inline function hash(

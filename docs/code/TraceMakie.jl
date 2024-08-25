@@ -1,4 +1,6 @@
 using Makie, Trace, ImageShow, Colors, FileIO, LinearAlgebra, GeometryBasics
+using AMDGPU
+ArrayType = ROCArray
 
 function to_spectrum(data::Colorant)
     rgb = RGBf(data)
@@ -136,10 +138,10 @@ function render_scene(scene::Makie.Scene)
     return render_scene(c -> Trace.WhittedIntegrator(c, Trace.UniformSampler(8), 5), scene)
 end
 
-function render_scene(integrator_f, mscene::Makie.Scene)
-    # Only set background image if it isn't set by env light, since
+function convert_scene(scene::Makie.Scene)
+        # Only set background image if it isn't set by env light, since
     # background image takes precedence
-    resolution = Point2f(size(mscene))
+    resolution = Point2f(size(scene))
     f = Trace.LanczosSincFilter(Point2f(1.0f0), 3.0f0)
     film = Trace.Film(
         resolution,
@@ -148,13 +150,13 @@ function render_scene(integrator_f, mscene::Makie.Scene)
         "trace-test.png",
     )
     primitives = []
-    for plot in mscene.plots
+    for plot in scene.plots
         prim = to_trace_primitive(plot)
         !isnothing(prim) && push!(primitives, prim)
     end
-    camera = to_trace_camera(mscene, film)
+    camera = to_trace_camera(scene, film)
     lights = []
-    for light in mscene.lights
+    for light in scene.lights
         l = to_trace_light(light)
         isnothing(l) || push!(lights, l)
     end
@@ -162,11 +164,29 @@ function render_scene(integrator_f, mscene::Makie.Scene)
         error("Must have at least one light")
     end
     bvh = Trace.BVHAccel(primitives, 1)
-    integrator = integrator_f(camera)
     scene = Trace.Scene([lights...], bvh)
+    return scene, camera, film
+end
+
+function render_whitted(mscene::Makie.Scene; samples_per_pixel=8, max_depth=5)
+    scene, camera, film = convert_scene(mscene)
+    integrator = Trace.WhittedIntegrator(camera, Trace.UniformSampler(samples_per_pixel), max_depth)
     integrator(scene, film)
     return reverse(film.framebuffer, dims=1)
 end
+
+function render_gpu(mscene::Makie.Scene, ArrayType; samples_per_pixel=8, max_depth=5)
+    scene, camera, film = convert_scene(mscene)
+    preserve = []
+    gpu_scene = Trace.to_gpu(ArrayType, scene; preserve=preserve)
+    res = Int.((film.resolution...,))
+    gpu_img = ArrayType(zeros(RGBf, res))
+    GC.@preserve preserve begin
+        Trace.launch_trace_image!(gpu_img, camera, gpu_scene, Int32(samples_per_pixel), Int32(max_depth))
+    end
+    return Array(gpu_img)
+end
+
 glass = Trace.GlassMaterial(
     Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
     Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
@@ -191,9 +211,12 @@ begin
     cam3d!(scene)
     mesh!(scene, catmesh, color=load(Makie.assetpath("diffusemap.png")))
     center!(scene)
+    @time render_whitted(scene)
     # 1.024328 seconds (16.94 M allocations: 5.108 GiB, 46.19% gc time, 81 lock conflicts)
     # 0.913530 seconds (16.93 M allocations: 5.108 GiB, 42.52% gc time, 57 lock conflicts)
-    @time render_scene(scene)
+    # 0.416158 seconds (75.58 k allocations: 88.646 MiB, 2.44% gc time, 16 lock conflicts)
+    @time render_gpu(scene, ArrayType)
+    # 0.135438 seconds (76.03 k allocations: 82.406 MiB, 8.57% gc time)
 end
 
 begin
@@ -206,7 +229,48 @@ begin
     zs = [cos(x) * sin(y) for x in xs, y in ys]
     surface!(scene, xs, ys, zs)
     center!(scene)
-    #  1.598740s
+
+    @time render_whitted(scene)
+    # 1.598740s
     # 1.179450 seconds (17.30 M allocations: 5.126 GiB, 36.48% gc time, 94 lock conflicts)
-    @time render_scene(scene)
+    # 0.976180 seconds (443.12 k allocations: 107.841 MiB, 6.60% gc time, 12 lock conflicts)
+    @time render_gpu(scene, ArrayType)
+    # 0.236231 seconds (443.48 k allocations: 101.598 MiB, 3.92% gc time)
+end
+
+model = load(joinpath(@__DIR__, "..", "src", "assets", "models", "caustic-glass.ply"))
+begin
+    glass = Trace.GlassMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(1.0f0)),
+        Trace.ConstantTexture(0.0f0),
+        Trace.ConstantTexture(0.0f0),
+        Trace.ConstantTexture(1.25f0),
+        true,
+    )
+    plastic = Trace.PlasticMaterial(
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
+        Trace.ConstantTexture(Trace.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
+        Trace.ConstantTexture(0.010408001f0),
+        true,
+    )
+    scene = Scene(size=(1024, 1024); lights=[
+        AmbientLight(RGBf(1, 1, 1)),
+        PointLight(Vec3f(4, 4, 10), RGBf(150, 150, 150)),
+        PointLight(Vec3f(-3, 10, 2.5), RGBf(60, 60, 60)),
+        PointLight(Vec3f(0, 3, 0.5), RGBf(40, 40, 40))
+    ])
+    cam3d!(scene)
+    cm = scene.camera_controls
+    mesh!(scene, model, material=glass)
+    mini, maxi = extrema(Rect3f(decompose(Point, model)))
+    floorrect = Rect3f(Vec3f(-10, mini[2], -10), Vec3f(20, -1, 20))
+    mesh!(scene, floorrect, material=plastic)
+    center!(scene)
+    update_cam!(scene, Vec3f(-1.6, 6.2, 0.2), Vec3f(-3.6, 2.5, 2.4), Vec3f(0, 1, 0))
+
+    @time render_whitted(scene)
+    # 9.820304 seconds (1.69 M allocations: 235.165 MiB, 0.51% gc time, 3 lock conflicts)
+    @time render_gpu(scene, ArrayType)
+    # 6.128600 seconds (1.70 M allocations: 228.875 MiB, 1.09% gc time)
 end

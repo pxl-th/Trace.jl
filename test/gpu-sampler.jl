@@ -96,7 +96,7 @@ end
 @inline function trace_pixel(camera, scene, xy)
     pixel = Point2f(Tuple(xy))
     s = Trace.UniformSampler(8)
-    camera_sample = @inline Trace.get_camera_sample(s, pixel)
+    camera_sample = Trace.get_camera_sample(s, pixel)
     ray, ω = Trace.generate_ray_differential(camera, camera_sample)
     l = Trace.RGBSpectrum(0.0f0)
     sampler = Trace.UniformSampler(3)
@@ -111,12 +111,11 @@ end
     _idx = @index(Global)
     idx = _idx % Int32
     if checkbounds(Bool, img, idx)
-
         cols = size(img, 2) % Int32
         row = (idx - Int32(1)) ÷ cols + Int32(1)
         col = (idx - Int32(1)) % cols + Int32(1)
         l = trace_pixel(camera, scene, (row, cols - col))
-        img[idx] = RGBf(l.c...)
+        @inbounds img[idx] = RGBf(l.c...)
     end
     nothing
 end
@@ -124,7 +123,7 @@ end
 function launch_trace_image!(img, camera, scene)
     backend = KA.get_backend(img)
     kernel! = ka_trace_image!(backend)
-    kernel!(img, camera, scene, ndrange=size(img))
+    kernel!(img, camera, scene, ndrange=size(img), workgroupsize=(16, 16))
     KA.synchronize(backend)
     return img
 end
@@ -132,10 +131,11 @@ preserve = []
 gpu_scene = to_gpu(ArrayType, scene; preserve=preserve);
 gpu_img = ArrayType(zeros(RGBf, res, res));
 launch_trace_image!(gpu_img, cam, gpu_scene);
+
+launch_trace_image!(gpu_img, cam, gpu_scene);
 Array(gpu_img)
-#95.787 ms (912 allocations: 27.22 KiB)
 img = zeros(RGBf, res, res)
-@time launch_trace_image!(img, cam, scene)
+@btime launch_trace_image!(img, cam, scene)
 # 4.5s (CPU)
 # 3s (GPU)
 
@@ -197,6 +197,17 @@ pixel = Point2f(512, 512)
 camera_sample = Trace.get_camera_sample(s, pixel)
 ray, ω = Trace.generate_ray_differential(cam, camera_sample)
 
-@btime Trace.li_iterative(s, 8, ray, scene)
+function test(ray, scene)
+    l = Trace.RGBSpectrum(0.0f0)
+    sampler = Trace.UniformSampler(3)
+    for i in 1:100000
+        # l = Trace.li_iterative(sampler, Int32(8), ray, scene)
+        l = Trace.li(sampler, 8, ray, scene, Int32(1))
+    end
+    return l
+end
 
-MVector((ray, Int32(0), Trace.RGBSpectrum(0.0f0)), (ray, Int32(0), Trace.RGBSpectrum(0.0f0)))
+@profview test(ray, scene)
+
+@profview Trace.li_iterative(s, Int32(8), ray, scene)
+@profview Trace.li(s, 8, ray, scene, Int32(1))

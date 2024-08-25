@@ -67,3 +67,11 @@ function sample_le(
     radiance = e.scale * e.env_map.sample(wi)
     return radiance, ray, light_normal, pdf_pos, pdf_dir
 end
+
+"""
+Emmited light if ray hit an area light source.
+By default light sources have no area.
+"""
+function @inline le(env::EnvironmentLight, ray::AbstractRay)
+    env.env_map(Vec2f(0f0))
+end
