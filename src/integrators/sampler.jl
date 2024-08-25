@@ -322,62 +322,37 @@ struct Reflect end
 struct Transmit end
 
 
-function li_iterative(
-        sampler, max_depth, initial_ray::RayDifferentials, scene::Scene
-    )::RGBSpectrum
-
-    accumulated_l = RGBSpectrum(0.0f0)
-    stack = [(initial_ray, Int32(0), accumulated_l)]
-    while !isempty(stack)
-        (ray, depth, accumulated_l) = pop!(stack)
-        if depth == sampler
-            continue
-        end
-        hit, shape, si = intersect!(scene, ray)
-        lights = scene.lights
-
-        if !hit
-            accumulated_l += only_light(lights, ray)
-            continue
-        end
-
-        core = si.core
-        wo = core.wo
-        si = compute_differentials(si, ray)
-        m = get_material(scene, shape)
-        if m.type === NO_MATERIAL
-            new_ray = RayDifferentials(spawn_ray(si, ray.d))
-            push!(stack, (new_ray, depth, accumulated_l))
-            continue
-        end
-
-        bsdf = m(si, false, Radiance)
-        accumulated_l += le(si, wo)
-        accumulated_l = light_contribution(accumulated_l, lights, wo, scene, bsdf, sampler, si)
-
-        if depth + 1 ≤ max_depth
-            rd_reflect, reflect_l = specular(Reflect, bsdf, sampler, ray, si)
-            if rd_reflect !== ray
-                push!(stack, (rd_reflect, depth + Int32(1), reflect_l * accumulated_l))
-            end
-            rd_transmit, transmit_l = specular(Transmit, bsdf, sampler, ray, si)
-            if rd_transmit !== ray
-                push!(stack, (rd_transmit, depth + Int32(1), transmit_l * accumulated_l))
-            end
-        end
+macro ntuple(N, value)
+    expr = :(())
+    for i in 1:N
+        push!(expr.args, :($(esc(value))))
     end
-    return accumulated_l
+    return expr
 end
 
+macro setindex(N, setindex_expr)
+    @assert Meta.isexpr(setindex_expr, :(=))
+    index_expr = setindex_expr.args[1]
+    @assert Meta.isexpr(index_expr, :ref)
+    tuple = index_expr.args[1]
+    idx = index_expr.args[2]
+    value = setindex_expr.args[2]
+    expr = :(())
+    for i in 1:N
+        push!(expr.args, :(ifelse($i != $(esc(idx)), $(esc(tuple))[$i], $(esc(value)))))
+    end
+    return :($(esc(tuple)) = $expr)
+end
 
 @inline function li_iterative(
     sampler, max_depth, initial_ray::RayDifferentials, scene::Scene
 )::RGBSpectrum
 
     accumulated_l = RGBSpectrum(0.0f0)
-    stack = MVector{8,Tuple{Trace.RayDifferentials,Int32,Trace.RGBSpectrum}}(undef)
+    # stack = MVector{8,Tuple{Trace.RayDifferentials,Int32,Trace.RGBSpectrum}}(undef)
+    stack = @ntuple(8, (initial_ray, Int32(0), accumulated_l))
     pos = Int32(1)
-    stack[pos] = (initial_ray, Int32(0), accumulated_l)
+    # stack[pos] = (initial_ray, Int32(0), accumulated_l)
     @inbounds while pos > Int32(0)
         (ray, depth, accumulated_l) = stack[pos]
         pos -= Int32(1)
@@ -399,7 +374,8 @@ end
         if m.type === NO_MATERIAL
             new_ray = RayDifferentials(spawn_ray(si, ray.d))
             pos += Int32(1)
-            stack[pos] = (new_ray, depth, accumulated_l)
+            @setindex 8 stack[pos] = (new_ray, depth, accumulated_l)
+            # stack[pos] = (new_ray, depth, accumulated_l)
             continue
         end
 
@@ -411,12 +387,14 @@ end
             rd_reflect, reflect_l = specular(Reflect, bsdf, sampler, ray, si)
             if rd_reflect !== ray && pos < 8
                 pos += Int32(1)
-                stack[pos] = (rd_reflect, depth + Int32(1), reflect_l * accumulated_l)
+                @setindex 8 stack[pos] = (rd_reflect, depth + Int32(1), reflect_l * accumulated_l)
+                # stack[pos] = (rd_reflect, depth + Int32(1), reflect_l * accumulated_l)
             end
             rd_transmit, transmit_l = specular(Transmit, bsdf, sampler, ray, si)
             if rd_transmit !== ray && pos < 8
                 pos += Int32(1)
-                stack[pos] = (rd_transmit, depth + Int32(1), transmit_l * accumulated_l)
+                @setindex 8 stack[pos] = (rd_transmit, depth + Int32(1), transmit_l * accumulated_l)
+                # stack[pos] = (rd_transmit, depth + Int32(1), transmit_l * accumulated_l)
             end
         end
     end
