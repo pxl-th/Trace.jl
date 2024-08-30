@@ -239,16 +239,16 @@ using AMDGPU
 
 function launch_trace_image!(w::Whitten5, camera, scene)
     backend = KA.get_backend(w.tiles.contrib_sum)
-    kernel! = sample_kernel2!(backend)
+    kernel! = sample_kernel2!(backend, (16, 16))
     spp_sqr = 1.0f0 / √Float32(w.sampler.samples_per_pixel)
     static_filter_table = Mat{size(w.fiter_table)...}(w.fiter_table)
     # open("../trace-tiles.ir", "w") do io
         # @device_code_llvm io kernel!(
         kernel!(
-                w.pixel, w.tiles, w.tile_size, w.sample_bounds, w.max_depth,
-                scene, camera, w.sampler, spp_sqr,
-                static_filter_table, w.filter_radius,
-                w.resolution, w.crop_bounds, ndrange=(w.ntiles), workgroupsize=(16, 16)
+            w.pixel, w.tiles, w.tile_size, w.sample_bounds, w.max_depth,
+            scene, camera, w.sampler, spp_sqr,
+            static_filter_table, w.filter_radius,
+            w.resolution, w.crop_bounds, ndrange=w.ntiles
         )
     # end
     KA.synchronize(backend)
@@ -259,7 +259,7 @@ include("./../docs/code/basic-scene.jl")
 
 begin
     # Trace.clear!(film)
-    w = Whitten5(film; samples_per_pixel=8)
+    w = Whitten5(film; samples_per_pixel=1, max_depth=1)
     @time launch_trace_image!(w, cam, scene)
     Trace.to_framebuffer!(film.framebuffer, w.pixel)
 end
@@ -267,7 +267,7 @@ end
 begin
     Trace.clear!(film)
     p = []
-    w_gpu = Trace.to_gpu(ROCArray, Whitten5(film); preserve=p)
+    w_gpu = Trace.to_gpu(ROCArray, Whitten5(film; samples_per_pixel=1, max_depth=1); preserve=p)
     gpu_scene = Trace.to_gpu(ROCArray, scene; preserve=p)
     GC.@preserve p begin
         @time launch_trace_image!(w_gpu, cam, gpu_scene)
