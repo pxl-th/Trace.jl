@@ -70,11 +70,21 @@ begin
     )
 end
 
-begin
-    integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 5)
-    @time integrator(scene, film)
-    img = reverse(film.framebuffer, dims=1)
-end
+# begin
+#     Trace.clear!(film)
+#     integrator = Trace.WhittedIntegrator(cam, Trace.UniformSampler(8), 5)
+#     @time integrator(scene, film)
+#     img = reverse(film.framebuffer, dims=1)
+# end
+
+# begin
+#     resolution = Point2f(1024)
+#     Trace.clear!(film)
+#     @time render_scene(scene, film, cam)
+#     Trace.to_framebuffer!(film, 1.0f0)
+#     film.framebuffer
+# end
+
 
 # 6.296157 seconds (17.64 k allocations: 19.796 MiB, 0.13% gc time, 45 lock conflicts)
 # After more GPU optimizations

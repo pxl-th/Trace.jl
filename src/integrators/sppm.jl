@@ -54,13 +54,13 @@ struct SPPMIntegrator{C<:Camera} <: Integrator
 
     function SPPMIntegrator(
         camera::C, initial_search_radius::Float32, max_depth::Int64,
-        n_iterations::Int64, photons_per_iteration::Int64 = -1,
+        n_iterations::Int64, film, photons_per_iteration::Int64=-1,
         write_frequency::Int64 = 1,
     ) where C<:Camera
 
         photons_per_iteration = (
             photons_per_iteration > 0
-            ? photons_per_iteration : area(get_film(camera).crop_bounds)
+            ? photons_per_iteration : area(film.crop_bounds)
         )
         new{C}(
             camera, initial_search_radius, max_depth,
@@ -69,9 +69,9 @@ struct SPPMIntegrator{C<:Camera} <: Integrator
     end
 end
 
-function (i::SPPMIntegrator)(scene::Scene)
+function (i::SPPMIntegrator)(scene::Scene, film::Film)
 
-    pixel_bounds = get_film(i.camera).crop_bounds
+    pixel_bounds = film.crop_bounds
 
     b_sides = inclusive_sides(pixel_bounds)
     n_pixels = UInt64(b_sides[1] * b_sides[2])
@@ -90,7 +90,7 @@ function (i::SPPMIntegrator)(scene::Scene)
     visible_points.β .= (RGBSpectrum(0f0),)
 
 
-    grid = [Int[] for _ in 1:n_pixels]
+    grid = [Int32[] for _ in 1:n_pixels]
 
     γ = 2f0 / 3f0
     inv_sqrt_spp = Float32(1f0 / sqrt(i.n_iterations))
@@ -118,8 +118,8 @@ function (i::SPPMIntegrator)(scene::Scene)
         # Periodically store SPPM image in film and save it.
         if iteration % i.write_frequency == 0 || iteration == i.n_iterations
             image = _sppm_to_image(i, pixels, iteration)
-            set_image!(get_film(i.camera), image)
-            save(get_film(i.camera))
+            set_image!(film, image)
+            save(film)
         end
     end
 end
@@ -155,7 +155,9 @@ function inner_kernel(
         end
         # Process SPPM camera ray intersection.
         # Compute BSDF at SPPM camera ray intersection.
-        si, bsdf = compute_scattering!(primitive, si, rayd, true)
+        si = compute_differentials(si, rayd)
+        material = get_material(scene, primitive)
+        bsdf = material(si, true, Radiance)
         if bsdf.bxdfs.last == 0
             rayd = RayDifferentials(spawn_ray(si, rayd.d))
             continue
@@ -233,7 +235,6 @@ function _generate_visible_sppm_points!(
         tb_max = min.(tb_min .+ (tile_size - 1), pixel_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
         for pixel_point in tile_bounds
-            start_pixel!(tile_sampler, pixel_point)
             inner_kernel(
                 scene, tile_sampler,
                 inv_sqrt_spp,
@@ -253,7 +254,7 @@ end
 end
 
 function _populate_grid!(
-        grid::Vector{Vector{Int}}, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}
+        grid::Vector{Vector{Int32}}, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}
     )
 
     n_pixels = UInt64(length(pixels))
@@ -303,7 +304,7 @@ end
 function _trace_photons!(
         i::SPPMIntegrator, pixels::AbstractMatrix{SPPMPixel}, vps::AbstractMatrix{VisiblePoint}, scene::Scene, iteration::Int64,
         light_distribution::Distribution1D,
-        grid::Vector{Vector{Int}},
+        grid::Vector{Vector{Int32}},
         grid_bounds::Bounds3, grid_resolution::Point3,
         n_pixels::UInt64,
     )
@@ -395,10 +396,11 @@ function _trace_photons!(
             end
             # Sample new photon direction.
             # Compute BSDF at photon intersection point.
-            si, bsdf = compute_scattering!(primitive, si, photon_ray, true, Importance)
-
+            si = compute_differentials(si, photon_ray)
+            material = get_material(scene, primitive)
+            bsdf = material(si, true, Importance)
             if bsdf.bxdfs.last == 0
-                photon_ray = spawn_ray(si, photon_ray.d)
+                photon_ray = RayDifferentials(spawn_ray(si, photon_ray.d))
                 continue
             end
             # Sample BSDF spectrum and direction `wi` for reflected photon.

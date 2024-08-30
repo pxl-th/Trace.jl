@@ -72,6 +72,6 @@ end
 Emmited light if ray hit an area light source.
 By default light sources have no area.
 """
-function @inline le(env::EnvironmentLight, ray::AbstractRay)
+function le(env::EnvironmentLight, ray::AbstractRay)
     env.env_map(Vec2f(0f0))
 end

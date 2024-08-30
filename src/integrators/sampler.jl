@@ -70,7 +70,7 @@ function (i::SamplerIntegrator)(scene::Scene, film)
         end
         next!(bar)
     end
-    save(film)
+    to_framebuffer!(film, 1f0)
 end
 
 function get_material(bvh::BVHAccel, shape::Triangle)
@@ -281,9 +281,8 @@ macro setindex(N, setindex_expr)
 end
 
 @inline function li_iterative(
-    sampler, max_depth::Int32, initial_ray::RayDifferentials, scene::S
-)::RGBSpectrum where {S<:Scene}
-
+        sampler, max_depth::Int32, initial_ray::RayDifferentials, scene::S
+    )::RGBSpectrum where {S<:Scene}
     accumulated_l = RGBSpectrum(0.0f0)
     # stack = MVector{8,Tuple{Trace.RayDifferentials,Int32,Trace.RGBSpectrum}}(undef)
     stack = @ntuple(8, (initial_ray, Int32(0), accumulated_l))

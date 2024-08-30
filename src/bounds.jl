@@ -33,22 +33,22 @@ end
 
 function Base.length(b::Bounds2)::Int64
     δ = ceil.(b.p_max .- b.p_min .+ 1f0)
-    Int64(δ[1] * δ[2])
+    u_int32(δ[1] * δ[2])
 end
 
 function Base.iterate(
-    b::Bounds2, i::Integer = 1,
-)::Union{Nothing,Tuple{Point2f,Integer}}
+        b::Bounds2, i::Integer = Int32(1),
+    )::Union{Nothing,Tuple{Point2f,Int32}}
     i > length(b) && return nothing
 
-    j = i - 1
+    j = i - Int32(1)
     δ = b.p_max .- b.p_min .+ 1f0
-    b.p_min .+ Point2f(j % δ[1], j ÷ δ[1]), i + 1
+    b.p_min .+ Point2f(j % δ[1], j ÷ δ[1]), i + Int32(1)
 end
 
 # Index through 8 corners.
 function corner(b::Bounds3, c::Integer)
-    c -= 1
+    c -= Int32(1)
     Point3f(
         b[(c&1)+1][1],
         b[(c & 2) != 0 ? 2 : 1][2],

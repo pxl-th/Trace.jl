@@ -132,7 +132,7 @@ struct UniformSampler <: AbstractSampler
     UniformSampler(samples_per_pixel::Integer) = new(1, samples_per_pixel)
 end
 
-@inline rand2f() = Point2f(0.5f0, 0.5f0)
+@inline rand2f() = Point2f(0.5)
 
 @inline function get_camera_sample(::UniformSampler, p_raster::Point2f)
     p = rand2f()

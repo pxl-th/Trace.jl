@@ -64,35 +64,37 @@ function to_gpu(ArrayType, scene::Trace.Scene; preserve=[])
 end
 
 
-@inline function trace_pixel(camera, scene, xy, samples_per_pixel, max_depth)
-    pixel = Point2f(Tuple(xy))
+@inline function trace_pixel(camera, scene, pixel, samples_per_pixel, max_depth, l)
     s = UniformSampler(samples_per_pixel)
     camera_sample = get_camera_sample(s, pixel)
     ray, ω = generate_ray_differential(camera, camera_sample)
-    l = RGBSpectrum(0.0f0)
     if ω > 0.0f0
-        l = li_iterative(s, max_depth, ray, scene)
+        l += li_iterative(s, max_depth, ray, scene)
     end
     return l
 end
 
-@kernel function ka_trace_image!(img, camera, scene, samples_per_pixel, max_depth)
+@kernel function ka_trace_image!(img, camera, scene, samples_per_pixel, max_depth, niter)
     _idx = @index(Global)
     idx = _idx % Int32
-    if checkbounds(Bool, img, idx)
+    @inbounds if checkbounds(Bool, img, idx)
         cols = size(img, 2) % Int32
         row = (idx - Int32(1)) ÷ cols + Int32(1)
         col = (idx - Int32(1)) % cols + Int32(1)
-        l = trace_pixel(camera, scene, (row, cols - col), samples_per_pixel, max_depth)
-        @inbounds img[idx] = RGB{Float32}(l.c...)
+        rgb = img[idx]
+        ninv = 0.5f0
+        l = RGBSpectrum(ninv * rgb.r, ninv * rgb.g, ninv * rgb.b)
+        pixel = Point2f((row, cols - col))
+        l = trace_pixel(camera, scene, pixel, samples_per_pixel, max_depth, l)
+        img[idx] = RGB{Float32}(( l.c)...)
     end
     nothing
 end
 
-function launch_trace_image!(img, camera, scene, samples_per_pixel::Int32, max_depth::Int32)
+function launch_trace_image!(img, camera, scene, samples_per_pixel::Int32, max_depth::Int32, niter::Int32)
     backend = KA.get_backend(img)
     kernel! = ka_trace_image!(backend)
-    kernel!(img, camera, scene, samples_per_pixel, max_depth, ndrange=size(img), workgroupsize=(16, 16))
+    kernel!(img, camera, scene, samples_per_pixel, max_depth, niter, ndrange=size(img), workgroupsize=(16, 16))
     KA.synchronize(backend)
     return img
 end
