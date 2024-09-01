@@ -42,7 +42,7 @@ function extract_material(plot::Plot, color_obs::Observable)
             return
         end
     elseif color isa Colorant || color isa Union{String,Symbol}
-        tex = Trace.ConstantTexture(to_spectrum(color))
+        tex = Trace.ConstantTexture(to_spectrum(to_color(color)))
     elseif color isa Nothing
         # ignore!
         nothing
@@ -193,9 +193,6 @@ function render_gpu(mscene::Makie.Scene, ArrayType; samples_per_pixel=8, max_dep
     return Array(gpu_img)
 end
 
-function render(w::Whitten5, scene)
-
-end
 
 function render_interactive(mscene::Makie.Scene, ArrayType; max_depth=5)
     scene, camera, film = convert_scene(mscene)

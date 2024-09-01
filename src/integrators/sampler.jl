@@ -155,9 +155,9 @@ function li(
 end
 
 @inline function specular_reflect(
-    bsdf, sampler, max_depth, ray::RayDifferentials,
-    si::SurfaceInteraction, scene::Scene, depth::Int32,
-)
+        bsdf, sampler, max_depth, ray::RayDifferentials,
+        si::SurfaceInteraction, scene::Scene, depth::Int32,
+    )
 
     # Compute specular reflection direction `wi` and BSDF value.
     wo = si.core.wo
@@ -408,28 +408,14 @@ end
 end
 
 
-struct Tile
-    tile_indx::NTuple{2, Int32}
-    width::Int32
+@inline function trace_pixel(camera, scene, pixel, sampler, max_depth)
+    camera_sample = get_camera_sample(sampler, pixel)
+    ray, ω = generate_ray_differential(camera, camera_sample)
+    if ω > 0.0f0
+        return li_iterative(sampler, max_depth, ray, scene)
+    end
+    return RGBSpectrum(0.0f0)
 end
-
-# function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E, camera::F, pixel::G, spp_sqr::H) where {A,B,C,D,E,F,G,H}
-#     for _ in 1:t_sampler.samples_per_pixel
-#         camera_sample = get_camera_sample(t_sampler, pixel)
-#         ray, ω = generate_ray_differential(camera, camera_sample)
-#         ray = scale_differentials(ray, spp_sqr)
-#         l = RGBSpectrum(0.0f0)
-#         if ω > 0.0f0
-#             # l = li(t_sampler, Int32(i.max_depth), ray, scene, Int32(1))
-#             l = li_iterative(t_sampler, Int32(i.max_depth), ray, scene)
-#         end
-#         # TODO check l for invalid values
-#         if isnan(l)
-#             l = RGBSpectrum(0.0f0)
-#         end
-#         add_sample!(film, film_tile, camera_sample.film, l, ω)
-#     end
-# end
 
 @noinline function sample_tile(sampler, camera, scene, film, film_tile, tile_bounds, max_depth)
     spp_sqr = 1.0f0 / √Float32(sampler.samples_per_pixel)

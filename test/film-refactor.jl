@@ -11,104 +11,6 @@ using KernelAbstractions
 using AMDGPU
 
 
-function generate_filter_table(filter)
-    filter_table_width = 16
-    filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
-    r = filter.radius ./ filter_table_width
-    for y in 0:filter_table_width-1, x in 0:filter_table_width-1
-        p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
-        filter_table[y+1, x+1] = filter(p)
-    end
-
-    point = Point2f(filter_table_width)
-    # Compute sample's raster bounds.
-    discrete_point = point .- 0.5f0
-    # Compute sample radius around point
-    p0 = ceil.(Int, discrete_point .- filter.radius)
-    p1 = floor.(Int, discrete_point .+ filter.radius) .+ 1
-    # Make sure we're inbounds
-    inv_radius = 1.0f0 ./ filter.radius
-    # Precompute x & y filter offsets.
-    offsets_x = Trace.filter_offsets(p0[1], p1[1], discrete_point[1], inv_radius[1], filter_table_width)
-    offsets_y = Trace.filter_offsets(p0[2], p1[2], discrete_point[2], inv_radius[2], filter_table_width)
-    # Loop over filter support & add sample to pixel array.
-    xrange = p0[1]:p1[1]
-    yrange = p0[2]:p1[2]
-    weights = zeros(Float32, length(xrange), length(yrange))
-    for i in 1:length(xrange), j in 1:length(yrange)
-        w = filter_table[offsets_y[j], offsets_x[i]]
-        weights[i, j] = w
-    end
-    return weights
-end
-
-"""
-Point in (x, y) format.
-"""
-@inline function get_pixel_index(crop_bounds, p::Point2)
-    i1, i2 = u_int32.((p .- crop_bounds.p_min .+ 1.0f0))
-    return CartesianIndex(i1, i2)
-end
-
-@inline function merge_film_tile!(f::AbstractMatrix{Pixel}, crop_bounds::Bounds2, ft::AbstractMatrix{FilmTilePixel}, tile::Bounds2, tile_col::Int32)
-    ft_contrib_sum = ft.contrib_sum
-    ft_filter_weight_sum = ft.filter_weight_sum
-    f_xyz = f.xyz
-    f_filter_weight_sum = f.filter_weight_sum
-    linear = Int32(1)
-    @inbounds for pixel in tile
-        f_idx = get_pixel_index(crop_bounds, pixel)
-        f_xyz[f_idx] += to_XYZ(ft_contrib_sum[linear, tile_col])
-        f_filter_weight_sum[f_idx] += ft_filter_weight_sum[linear, tile_col]
-        linear += Int32(1)
-    end
-    return
-end
-
-
-@inline function get_tile_index(bounds::Bounds2, p::Point2)
-    j, i = u_int32.((p .- bounds.p_min .+ 1.0f0))
-    ncols = u_int32(inclusive_sides(bounds)[1])
-    return (i - Int32(1)) * ncols + j
-end
-
-@inline function add_sample!(
-        tiles::AbstractMatrix{FilmTilePixel}, tile::Bounds2, tile_column::Int32, point::Point2f, spectrum::RGBSpectrum,
-        filter_table, filter_radius::Point2f, sample_weight::Float32=1.0f0,
-    )
-    # Compute sample's raster bounds.
-    discrete_point = point .- 0.5f0
-    # Compute sample radius around point
-    p0 = u_int32.(ceil.(discrete_point .- filter_radius))
-    p1 = u_int32.(floor.(discrete_point .+ filter_radius)) .+ Int32(1)
-    # Make sure we're inbounds
-    pmin = u_int32.(tile.p_min)
-    pmax = u_int32.(tile.p_max)
-    p0 = max.(p0, max.(pmin, Point2{Int32}(1)))::Point2{Int32}
-    p1 = min.(p1, pmax)::Point2{Int32}
-    # Loop over filter support & add sample to pixel array.
-    contrib_sum = tiles.contrib_sum
-    filter_weight_sum = tiles.filter_weight_sum
-    xrange = p0[1]:p1[1]
-    yrange = p0[2]:p1[2]
-    xn = length(xrange) % Int32
-    yn = length(yrange) % Int32
-    @inbounds for i in Int32(1):xn, j in Int32(1):yn
-        x = xrange[i]
-        y = yrange[j]
-        w = filter_table[i, j]
-        idx = get_tile_index(tile, Point2(x, y))
-        contrib_sum[idx, tile_column] += spectrum * sample_weight * w
-        filter_weight_sum[idx, tile_column] += w
-    end
-end
-
-@inline function filter_offset(x, discrete_point, inv_filter_radius, filter_table_width)
-    fx = abs((x - discrete_point) * inv_filter_radius * filter_table_width)
-    return clamp(u_int32(ceil(fx)), Int32(1), Int32(filter_table_width))  # TODO is clipping ok?
-end
-
-
 function sample_kernel_inner!(
         tiles, tile, tile_column::Int32, max_depth::Int32,
         scene, t_sampler, camera, pixel, spp_sqr, filter_table, filter_radius::Point2f, resolution::Point2f
@@ -164,7 +66,7 @@ function Trace.to_gpu(ArrayType, w::Whitten5; preserve=[])
     )
 end
 
-function Whitten5(film; samples_per_pixel=8, tile_size=16, max_depth=5)
+function Whitten5(film; samples_per_pixel=8, tile_size=4, max_depth=5)
     sample_bounds = get_sample_bounds(film)
     sample_extent = diagonal(sample_bounds)
     resolution = film.resolution
@@ -239,7 +141,7 @@ using AMDGPU
 
 function launch_trace_image!(w::Whitten5, camera, scene)
     backend = KA.get_backend(w.tiles.contrib_sum)
-    kernel! = sample_kernel2!(backend, (16, 16))
+    kernel! = sample_kernel2!(backend)
     spp_sqr = 1.0f0 / √Float32(w.sampler.samples_per_pixel)
     static_filter_table = Mat{size(w.fiter_table)...}(w.fiter_table)
     # open("../trace-tiles.ir", "w") do io
@@ -259,7 +161,7 @@ include("./../docs/code/basic-scene.jl")
 
 begin
     # Trace.clear!(film)
-    w = Whitten5(film; samples_per_pixel=1, max_depth=1)
+    w = Whitten5(film; samples_per_pixel=8, max_depth=8)
     @time launch_trace_image!(w, cam, scene)
     Trace.to_framebuffer!(film.framebuffer, w.pixel)
 end
@@ -267,7 +169,7 @@ end
 begin
     Trace.clear!(film)
     p = []
-    w_gpu = Trace.to_gpu(ROCArray, Whitten5(film; samples_per_pixel=1, max_depth=1); preserve=p)
+    w_gpu = Trace.to_gpu(ROCArray, Whitten5(film; samples_per_pixel=1, max_depth=8); preserve=p)
     gpu_scene = Trace.to_gpu(ROCArray, scene; preserve=p)
     GC.@preserve p begin
         @time launch_trace_image!(w_gpu, cam, gpu_scene)
@@ -283,7 +185,7 @@ end
 
 @code_warntype add_sample!(
     tiles, Bounds2(Point2f(1), Point2f(16)), Int32(1), Point2f(1), RGBSpectrum(1f0), filter_table, Point2f(1), 1.0f0
-)
+)s
 @code_warntype sample_kernel_inner!(tiles, Bounds2(Point2f(1), Point2f(16)), Int32(1), Int32(5), scene, w.sampler, cam, Point2f(1), 1f0, filter_table, filter_radius, resolution)
 @code_warntype sample_kernel2!(
     film.pixels, tiles, Int32(16),
