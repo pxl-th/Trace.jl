@@ -118,7 +118,7 @@ tangents(t::Triangle) = t.tangents
 uvs(t::Triangle) = t.uv
 
 @inline function _edge_function(vs)
-    @inbounds Point3f(
+    @_inbounds Point3f(
         vs[2][1] * vs[3][2] - vs[2][2] * vs[3][1],
         vs[3][1] * vs[1][2] - vs[3][2] * vs[1][1],
         vs[1][1] * vs[2][2] - vs[1][2] * vs[2][1],

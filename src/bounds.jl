@@ -154,7 +154,7 @@ end
 
 function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool,Float32,Float32}
     t0, t1 = 0f0, ray.t_max
-    @inbounds for i in 1:3
+    @_inbounds for i in 1:3
         # Update interval for i-th bbox slab.
         inv_ray_dir = 1f0 / ray.d[i]
         t_near = (b.p_min[i] - ray.o[i]) * inv_ray_dir
@@ -171,7 +171,7 @@ function intersect(b::Bounds3, ray::AbstractRay)::Tuple{Bool,Float32,Float32}
 end
 
 @inline function is_dir_negative(dir::Vec3f)
-    @inbounds Point3{UInt8}(
+    @_inbounds Point3{UInt8}(
         dir[1] < 0 ? 2 : 1,
         dir[2] < 0 ? 2 : 1,
         dir[3] < 0 ? 2 : 1,
@@ -185,7 +185,7 @@ dir_is_negative: 1 -- false, 2 -- true
         b::Bounds3, ray::AbstractRay,
         inv_dir::Vec3f, dir_is_negative::Point3{UInt8},
     )::Bool
-    @inbounds begin
+    @_inbounds begin
         tx_min = (b[dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
         tx_max = (b[3-dir_is_negative[1]][1] - ray.o[1]) * inv_dir[1]
         ty_min = (b[dir_is_negative[2]][2] - ray.o[2]) * inv_dir[2]

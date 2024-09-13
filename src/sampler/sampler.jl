@@ -132,13 +132,13 @@ struct UniformSampler <: AbstractSampler
     UniformSampler(samples_per_pixel::Integer) = new(1, samples_per_pixel)
 end
 
-@inline rand2f() = Point2f(0.5)
+@inline rand2f() = rand(Point2f)
 
 @inline function get_camera_sample(::UniformSampler, p_raster::Point2f)
     p = rand2f()
     p_film = Point2f(p_raster[1] + p[1], p_raster[2] + p[2])
     p_lens = rand2f()
-    CameraSample(p_film, p_lens, 0.5f0)
+    CameraSample(p_film, p_lens, rand(Float32))
 end
 
 @inline function has_next_sample(u::UniformSampler)::Bool

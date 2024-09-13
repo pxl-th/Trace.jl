@@ -12,6 +12,14 @@ function filter_offset(x, discrete_point, inv_filter_radius, filter_table_width)
 end
 
 
+function filter_offsets(start, stop, discrete_point, inv_filter_radius, filter_table_width)
+    range = Int32(start):Int32(stop)
+    return map(range) do r
+        filter_offset(r, discrete_point, inv_filter_radius, filter_table_width)
+    end
+end
+
+
 function generate_filter_table(filter)
     filter_table_width = 16
     filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
@@ -43,7 +51,14 @@ function generate_filter_table(filter)
     return weights
 end
 
-struct Film{Pixels<:AbstractMatrix{Pixel}}
+
+struct FilmTilePixel{S<:Spectrum}
+    contrib_sum::S
+    filter_weight_sum::Float32
+end
+FilmTilePixel() = FilmTilePixel(RGBSpectrum(), 0.0f0)
+
+struct Film{Pixels<:AbstractMatrix{Pixel},Tiles<:AbstractMatrix{FilmTilePixel}, FB <: AbstractMatrix{RGB{Float32}}}
     resolution::Point2f
     """
     Subset of the image to render, bounds are inclusive and start from 1.
@@ -51,68 +66,97 @@ struct Film{Pixels<:AbstractMatrix{Pixel}}
     """
     crop_bounds::Bounds2
     diagonal::Float32
-    filter::F where F<:Filter
-    filename::String
     """
     pixels in (y, x) format
     """
     pixels::Pixels
-    filter_table_width::Int32
+
+    tiles::Tiles
+    tile_size::Int32
+    ntiles::NTuple{2, Int32}
     """
     filter_table in (y, x) format
     """
     filter_table::Matrix{Float32}
+    filter_table_width::Int32
+    filter_radius::Point2f
     scale::Float32
-    framebuffer::Matrix{RGB{Float32}}
+    framebuffer::FB
 
-    """
-    - resolution: full resolution of the image in pixels.
-    - crop_bounds: subset of the image to render in [0, 1] range.
-    - diagonal: length of the diagonal of the film's physical area in mm.
-    - filename: filename for the output image.
-    - scale: scale factor that is applied to the samples when writing image.
-    """
-    function Film(
-        resolution::Point2f, crop_bounds::Bounds2, filter::F,
-        diagonal::Float32, scale::Float32, filename::String,
-    ) where F<:Filter
-        filter_table_width = 16
-        filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
-        # Compute film image bounds.
-        crop_bounds = Bounds2(
-            ceil.(resolution .* crop_bounds.p_min) .+ 1f0,
-            ceil.(resolution .* crop_bounds.p_max),
-        )
-        crop_resolution = Int32.(inclusive_sides(crop_bounds))
-        # Allocate film image storage.
-        pixels = StructArray{Pixel}(undef, crop_resolution[end], crop_resolution[begin])
-        pixels.xyz .= (Point3f(0),)
-        pixels.filter_weight_sum .= 0f0
-        pixels.splat_xyz .= (Point3f(0),)
-        # Precompute filter weight table.
-        r = filter.radius ./ filter_table_width
-        for y in 0:filter_table_width-1, x in 0:filter_table_width-1
-            p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
-            filter_table[y+1, x+1] = filter(p)
-        end
-        framebuffer = Matrix{RGB{Float32}}(undef, size(pixels)...)
-        new{typeof(pixels)}(
-            resolution, crop_bounds, diagonal * 0.001f0, filter, filename,
-            pixels, filter_table_width, filter_table, scale, framebuffer
-        )
-    end
 end
+
+
+"""
+- resolution: full resolution of the image in pixels.
+- crop_bounds: subset of the image to render in [0, 1] range.
+- diagonal: length of the diagonal of the film's physical area in mm.
+- scale: scale factor that is applied to the samples when writing image.
+"""
+function Film(
+        resolution::Point2f, crop_bounds::Bounds2, filter::Filter,
+        diagonal::Float32, scale::Float32;
+        tile_size=4, filter_table_width=16,
+    )
+
+    filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
+    # Compute film image bounds.
+    crop_bounds = Bounds2(
+        ceil.(resolution .* crop_bounds.p_min) .+ 1.0f0,
+        ceil.(resolution .* crop_bounds.p_max),
+    )
+    crop_resolution = Int32.(inclusive_sides(crop_bounds))
+    # Allocate film image storage.
+    pixels = StructArray{Pixel}(undef, crop_resolution[end], crop_resolution[begin])
+    pixels.xyz .= (Point3f(0),)
+    pixels.filter_weight_sum .= 0.0f0
+    pixels.splat_xyz .= (Point3f(0),)
+    # Precompute filter weight table.
+    r = filter.radius ./ filter_table_width
+    for y in 0:filter_table_width-1, x in 0:filter_table_width-1
+        p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
+        filter_table[y+1, x+1] = filter(p)
+    end
+
+    sample_bounds = get_sample_bounds(crop_bounds, filter.radius)
+    sample_extent = Trace.diagonal(sample_bounds)
+    resolution = resolution
+    n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
+    wtiles, htiles = n_tiles .- 1
+    filter_table = generate_filter_table(filter)
+    ntiles = wtiles * htiles
+    tile_size_l = tile_size * tile_size
+    contrib_sum = RGBSpectrum.(zeros(Vec3f, tile_size_l, ntiles))
+    filter_weight_sum = zeros(Float32, tile_size_l, ntiles)
+    tiles = StructArray{FilmTilePixel}(; contrib_sum, filter_weight_sum)
+    framebuffer = Matrix{RGB{Float32}}(undef, size(pixels)...)
+    return Film(
+        resolution,
+        crop_bounds,
+        diagonal * 0.001f0,
+        pixels,
+        tiles, Int32(tile_size), (Int32(wtiles), Int32(htiles)),
+
+        filter_table,
+        Int32(filter_table_width),
+        filter.radius,
+        scale,
+        framebuffer
+    )
+end
+
 
 """
 Range of integer pixels that the `Sampler`
 is responsible for generating samples for.
 """
-function get_sample_bounds(f::Film)
+function get_sample_bounds(crop_bounds::Bounds2, radius::Point)
     Bounds2(
-        floor.(f.crop_bounds.p_min .+ 0.5f0 .- f.filter.radius),
-        ceil.(f.crop_bounds.p_max .- 0.5f0 .+ f.filter.radius),
+        floor.(crop_bounds.p_min .+ 0.5f0 .- radius),
+        ceil.(crop_bounds.p_max .- 0.5f0 .+ radius),
     )
 end
+get_sample_bounds(f::Film) = get_sample_bounds(f.crop_bounds, f.filter_radius)
+
 
 """
 Extent of the film in the scene.
@@ -124,13 +168,6 @@ function get_physical_extension(f::Film)
     y = aspect * x
     Bounds2(Point2f(-x / 2f0, -y / 2f0), Point2f(x / 2f0, y / 2f0))
 end
-
-struct FilmTilePixel{S<:Spectrum}
-    contrib_sum::S
-    filter_weight_sum::Float32
-end
-FilmTilePixel() = FilmTilePixel(RGBSpectrum(), 0f0)
-
 
 
 """
@@ -147,7 +184,7 @@ end
     f_xyz = f.xyz
     f_filter_weight_sum = f.filter_weight_sum
     linear = Int32(1)
-    @inbounds for pixel in tile
+    @_inbounds for pixel in tile
         f_idx = get_pixel_index(crop_bounds, pixel)
         f_xyz[f_idx] += to_XYZ(ft_contrib_sum[linear, tile_col])
         f_filter_weight_sum[f_idx] += ft_filter_weight_sum[linear, tile_col]
@@ -183,7 +220,7 @@ end
     yrange = p0[2]:p1[2]
     xn = length(xrange) % Int32
     yn = length(yrange) % Int32
-    @inbounds for i in Int32(1):xn, j in Int32(1):yn
+    @_inbounds for i in Int32(1):xn, j in Int32(1):yn
         x = xrange[i]
         y = yrange[j]
         w = filter_table[i, j]
@@ -201,9 +238,31 @@ function set_image!(f::Film, spectrum::Matrix{S}) where {S<:Spectrum}
 end
 
 function clear!(film::Film)
+    film.tiles.contrib_sum .= (RGBSpectrum(0.0f0),)
+    film.tiles.filter_weight_sum .= 0.0f0
     film.pixels.xyz .= (Point3f(0),)
     film.pixels.filter_weight_sum .= 0.0f0
     film.pixels.splat_xyz .= (Point3f(0),)
+end
+
+@kernel function film_to_rgb!(image, xyz, filter_weight_sum, splat_xyz, scale, splat_scale)
+    idx = @index(Global)
+    rgb = XYZ_to_RGB(xyz[idx])
+    # Normalize pixel with weight sum.
+    fws = filter_weight_sum[idx]
+    if fws != 0
+        inv_weight = 1.0f0 / fws
+        rgb = max.(0.0f0, rgb .* inv_weight)
+    end
+    # Add splat value at pixel & scale.
+    splat_rgb = XYZ_to_RGB(splat_xyz[idx])
+    rgb = rgb .+ splat_scale .* splat_rgb
+    rgb = rgb .* scale
+    rgb = map(rgb) do c
+        ifelse(isfinite(c), c, 0.0f0)
+    end
+    image[idx] = RGB(rgb...)
+    nothing
 end
 
 function to_framebuffer!(image, pixels, scale=1f0, splat_scale::Float32=1.0f0)
@@ -211,23 +270,10 @@ function to_framebuffer!(image, pixels, scale=1f0, splat_scale::Float32=1.0f0)
     xyz = pixels.xyz
     filter_weight_sum = pixels.filter_weight_sum
     splat_xyz = pixels.splat_xyz
-    @inbounds for idx in eachindex(pixels)
-        rgb = XYZ_to_RGB(xyz[idx])
-        # Normalize pixel with weight sum.
-        fws = filter_weight_sum[idx]
-        if fws != 0
-            inv_weight = 1.0f0 / fws
-            rgb = max.(0.0f0, rgb .* inv_weight)
-        end
-        # Add splat value at pixel & scale.
-        splat_rgb = XYZ_to_RGB(splat_xyz[idx])
-        rgb = rgb .+ splat_scale .* splat_rgb
-        rgb = rgb .* scale
-        rgb = map(rgb) do c
-            return ifelse(isfinite(c), c, 0.0f0)
-        end
-        image[idx] = RGB(rgb...)
-    end
+    backend = KA.get_backend(image)
+    kernel! = film_to_rgb!(backend)
+    kernel!(image, xyz, filter_weight_sum, splat_xyz, scale, splat_scale, ndrange=length(image))
+    KA.synchronize(backend)
     return image
 end
 

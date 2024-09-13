@@ -92,7 +92,7 @@ end
         x = ((linear_idx - 1) % size(img, 1)) + 1
         y = ((linear_idx - 1) ÷ size(img, 1)) + 1
         l = trace_pixel(camera, scene, (x, y))
-        @inbounds img[linear_idx] = RGBf(l.c...)
+        @_inbounds img[linear_idx] = RGBf(l.c...)
     end
 end
 

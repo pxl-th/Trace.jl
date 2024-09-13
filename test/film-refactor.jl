@@ -105,7 +105,6 @@ function (w::Whitten5)(scene::Trace.Scene, camera)
         tb_min = (sample_bounds.p_min .+ tile_start .* w.tile_size) .+ 1
         tb_max = min.(tb_min .+ (w.tile_size - 1), sample_bounds.p_max)
         tile_bounds = Bounds2(tb_min, tb_max)
-        spp_sqr = 1.0f0 / √Float32(sampler.samples_per_pixel)
         for pixel in tile_bounds
             sample_kernel_inner!(tiles, tile_bounds, tile_column, max_depth, scene, sampler, camera, pixel, spp_sqr, filter_table, filter_radius, resolution)
         end
@@ -113,46 +112,17 @@ function (w::Whitten5)(scene::Trace.Scene, camera)
     end
 end
 
-@kernel function sample_kernel2!(
-        pixels, tiles, tile_size::Int32,
-        sample_bounds,
-        max_depth::Int32, scene, camera,
-        sampler, spp_sqr, filter_table,
-        filter_radius::Point2f, resolution, crop_bounds
-    )
-    tile_xy = @index(Global, Cartesian)
-    i, j = u_int32.(Tuple(tile_xy)) .- Int32(1)
-    tc = @index(Global)
-    tile_column = tc % Int32
-    tile_start = Point2f(i, j)
-    tb_min = u_int32.(sample_bounds.p_min .+ tile_start .* tile_size) .+ Int32(1)
-    tb_max = u_int32.(min.(tb_min .+ (tile_size - Int32(1)), sample_bounds.p_max))
-    tile_bounds = Bounds2(tb_min, tb_max)
-    for x in tb_min[1]:tb_max[1]
-        for y in tb_min[2]:tb_max[2]
-            pixel = Point2f(x, y)
-            @inline sample_kernel_inner!(tiles, tile_bounds, tile_column, max_depth, scene, sampler, camera, pixel, spp_sqr, filter_table, filter_radius, resolution)
-        end
-    end
-    merge_film_tile!(pixels, crop_bounds, tiles, tile_bounds, tile_column)
-end
-
-using AMDGPU
-
 function launch_trace_image!(w::Whitten5, camera, scene)
     backend = KA.get_backend(w.tiles.contrib_sum)
     kernel! = sample_kernel2!(backend)
     spp_sqr = 1.0f0 / √Float32(w.sampler.samples_per_pixel)
     static_filter_table = Mat{size(w.fiter_table)...}(w.fiter_table)
-    # open("../trace-tiles.ir", "w") do io
-        # @device_code_llvm io kernel!(
-        kernel!(
-            w.pixel, w.tiles, w.tile_size, w.sample_bounds, w.max_depth,
-            scene, camera, w.sampler, spp_sqr,
-            static_filter_table, w.filter_radius,
-            w.resolution, w.crop_bounds, ndrange=w.ntiles
-        )
-    # end
+    kernel!(
+        w.pixel, w.tiles, w.tile_size, w.sample_bounds, w.max_depth,
+        scene, camera, w.sampler, spp_sqr,
+        static_filter_table, w.filter_radius,
+        w.resolution, w.crop_bounds, ndrange=w.ntiles
+    )
     KA.synchronize(backend)
     return w
 end

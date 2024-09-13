@@ -9,73 +9,83 @@ struct WhittedIntegrator{C<: Camera, S <: AbstractSampler} <: SamplerIntegrator
     max_depth::Int64
 end
 
-function sample_kernel_inner(i::A, scene::B, t_sampler::C, film::D, film_tile::E, camera::F, pixel::G, spp_sqr::H) where {A, B, C, D, E, F, G, H}
-    for _ in 1:t_sampler.samples_per_pixel
-        camera_sample = get_camera_sample(t_sampler, pixel)
+function sample_kernel_inner!(
+        tiles, tile, tile_column::Int32, resolution::Point2f, max_depth::Int32,
+        scene, sampler, camera, pixel, spp_sqr, filter_table,
+        filter_radius::Point2f
+    )
+    campix = Point2f(pixel[2], resolution[1] - pixel[1])
+    for _ in 1:sampler.samples_per_pixel
+        camera_sample = @inline get_camera_sample(sampler, campix)
         ray, ω = generate_ray_differential(camera, camera_sample)
         ray = scale_differentials(ray, spp_sqr)
-        l = RGBSpectrum(0f0)
+        l = RGBSpectrum(0.0f0)
         if ω > 0.0f0
-            # l = li(t_sampler, Int32(i.max_depth), ray, scene, Int32(1))
-            l = li_iterative(t_sampler, Int32(i.max_depth), ray, scene)
+            l = li_iterative(sampler, max_depth, ray, scene)
         end
         # TODO check l for invalid values
         if isnan(l)
-            l = RGBSpectrum(0f0)
+            l = RGBSpectrum(0.0f0)
         end
-        add_sample!(film, film_tile, camera_sample.film, l, ω)
+        add_sample!(
+            tiles, tile, tile_column, pixel, l,
+            filter_table, filter_radius, ω,
+        )
     end
 end
 
-@noinline function sample_kernel(i, camera, scene, film, film_tile, tile_bounds)
-    t_sampler = deepcopy(i.sampler)
-    spp_sqr = 1f0 / √Float32(t_sampler.samples_per_pixel)
+@kernel function whitten_kernel!(pixels, crop_bounds, sample_bounds, tiles, tile_size, max_depth, scene, sampler, camera, filter_table, filter_radius)
+    _tile_xy = @index(Global, Cartesian)
+    linear_idx = @index(Global)
+
+    tile_xy = u_int32.(Tuple(_tile_xy))
+    tile_column = linear_idx % Int32
+    i, j = tile_xy .- Int32(1)
+    tile_start = Point2f(i, j)
+    tb_min = (sample_bounds.p_min .+ tile_start .* tile_size) .+ Int32(1)
+    tb_max = min.(tb_min .+ (tile_size .- Int32(1)), sample_bounds.p_max)
+    tile_bounds = Bounds2(tb_min, tb_max)
+    spp_sqr = 1.0f0 / √Float32(sampler.samples_per_pixel)
+
     for pixel in tile_bounds
-        sample_kernel_inner(i, scene, t_sampler, film, film_tile, camera, pixel, spp_sqr)
+        sample_kernel_inner!(
+            tiles, tile_bounds, tile_column, Point2f(size(pixels)),
+            max_depth, scene, sampler, camera,
+            pixel, spp_sqr, filter_table, filter_radius
+        )
     end
-    merge_film_tile!(film, film_tile)
+    merge_film_tile!(pixels, crop_bounds, tiles, tile_bounds, Int32(tile_column))
 end
 
 """
 Render scene.
 """
-function (i::SamplerIntegrator)(scene::Scene, film)
-    sample_bounds = get_sample_bounds(film)
-    sample_extent = diagonal(sample_bounds)
-    tile_size = 16
-    n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
+function (i::SamplerIntegrator)(scene::Scene, film, camera)
     # TODO visualize tile bounds to see if they overlap
-    width, height = n_tiles
-    total_tiles = width * height - 1
-    bar = Progress(total_tiles, 1)
-    @info "Utilizing $(Threads.nthreads()) threads"
-    camera = i.camera
-    filter_radius = film.filter.radius
-
-    _tile = Point2f(0f0)
-    _tb_min = sample_bounds.p_min .+ _tile .* tile_size
-    _tb_max = min.(_tb_min .+ (tile_size - 1), sample_bounds.p_max)
-    _tile_bounds = Bounds2(_tb_min, _tb_max)
-    filmtiles = [FilmTile(film, _tile_bounds, filter_radius) for _ in 1:Threads.maxthreadid()]
-    Threads.@threads for k in 0:total_tiles
-        x, y = k % width, k ÷ width
-        tile = Point2f(x, y)
-        tb_min = sample_bounds.p_min .+ tile .* tile_size
-        tb_max = min.(tb_min .+ (tile_size - 1), sample_bounds.p_max)
-        if tb_min[1] < tb_max[1] && tb_min[2] < tb_max[2]
-            tile_bounds = Bounds2(tb_min, tb_max)
-            film_tile = filmtiles[Threads.threadid()]
-            film_tile = update_bounds!(film, film_tile, tile_bounds)
-            sample_kernel(i, camera, scene, film, film_tile, tile_bounds)
-        end
-        next!(bar)
-    end
+    sample_bounds = get_sample_bounds(film)
+    tile_size = film.tile_size
+    filter_radius = film.filter_radius
+    filter_table = film.filter_table
+    tiles = film.tiles
+    sampler = i.sampler
+    max_depth = Int32(i.max_depth)
+    backend = KA.get_backend(film.tiles.contrib_sum)
+    kernel! = whitten_kernel!(backend, (Int(tile_size), Int(tile_size)))
+    s_filter_table = Mat{size(filter_table)...}(filter_table)
+    kernel!(
+        film.pixels, film.crop_bounds, sample_bounds,
+        tiles, tile_size,
+        max_depth, scene, sampler,
+        camera, s_filter_table, filter_radius;
+        ndrange=film.ntiles
+    )
+    KA.synchronize(backend)
     to_framebuffer!(film, 1f0)
 end
 
 function get_material(bvh::BVHAccel, shape::Triangle)
     materials = bvh.materials
-    @inbounds if shape.material_idx == 0
+    @_inbounds if shape.material_idx == 0
         return materials[1]
     else
         return materials[shape.material_idx]
@@ -103,7 +113,7 @@ end
     # Worked just fined when the function was defined outside
     Base.Cartesian.@nexprs 8 i -> begin
         if i <= length(lights)
-            @inbounds light = lights[i]
+            @_inbounds light = lights[i]
             sampled_li, wi, pdf, tester = sample_li(light, core, get_2d(sampler))
             if !(is_black(sampled_li) || pdf ≈ 0.0f0)
                 f = bsdf(wo, wi)
@@ -288,7 +298,7 @@ end
     stack = @ntuple(8, (initial_ray, Int32(0), accumulated_l))
     pos = Int32(1)
     # stack[pos] = (initial_ray, Int32(0), accumulated_l)
-    @inbounds while pos > Int32(0)
+    @_inbounds while pos > Int32(0)
         (ray, depth, accumulated_l) = stack[pos]
         pos -= Int32(1)
         if depth == max_depth
@@ -452,4 +462,65 @@ function sample_tiled(scene::Scene, film)
         sample_kernel(i, camera, scene, film, film_tile, tile_bounds)
     end
     return film
+end
+
+struct Whitten5{TMat<:AbstractMatrix{FilmTilePixel},PMat<:AbstractMatrix{Pixel}}
+    tiles::TMat
+    pixel::PMat
+    sample_bounds::Bounds2
+    crop_bounds::Bounds2
+    resolution::Point2f
+    ntiles::NTuple{2,Int32}
+    tile_size::Int32
+    fiter_table::Matrix{Float32}
+    filter_radius::Point2f
+    sampler::Trace.UniformSampler
+    max_depth::Int32
+end
+
+function Whitten5(film; samples_per_pixel=8, tile_size=4, max_depth=5)
+    sample_bounds = get_sample_bounds(film)
+    sample_extent = diagonal(sample_bounds)
+    resolution = film.resolution
+    n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
+    wtiles, htiles = n_tiles .- 1
+    filter_radius = film.filter.radius
+    filter_table = generate_filter_table(film.filter)
+    ntiles = (wtiles) * (htiles)
+    tile_size_l = tile_size * tile_size
+    contrib_sum = RGBSpectrum.(zeros(Vec3f, tile_size_l, ntiles))
+    filter_weight_sum = zeros(Float32, tile_size_l, ntiles)
+    tiles = StructArray{FilmTilePixel}(; contrib_sum, filter_weight_sum)
+    sampler = Trace.UniformSampler(samples_per_pixel)
+    li = LinearIndices((wtiles, htiles))
+    @assert length(li) == ntiles
+    Whitten5(tiles, film.pixels, sample_bounds, film.crop_bounds, resolution, Int32.((wtiles, htiles)), Int32(tile_size), filter_table, filter_radius, sampler, Int32(max_depth))
+end
+
+"""
+Render scene.
+"""
+function (w::Whitten5)(scene::Trace.Scene, camera)
+    tiles = w.tiles
+    resolution = w.resolution
+    filter_table = w.fiter_table
+    filter_radius = w.filter_radius
+    sampler = w.sampler
+    max_depth = w.max_depth
+    sample_bounds = w.sample_bounds
+    tile_linear = LinearIndices(w.ntiles)
+    spp_sqr = 1.0f0 / √Float32(sampler.samples_per_pixel)
+    Threads.@threads for tile_xy in CartesianIndices(w.ntiles)
+        i, j = Int32.(Tuple(tile_xy)) .- Int32(1)
+        tile_column = tile_linear[tile_xy]
+        tile_start = Point2f(i, j)
+        tb_min = (sample_bounds.p_min .+ tile_start .* w.tile_size) .+ 1
+        tb_max = min.(tb_min .+ (w.tile_size - 1), sample_bounds.p_max)
+        tile_bounds = Bounds2(tb_min, tb_max)
+        spp_sqr = 1.0f0 / √Float32(sampler.samples_per_pixel)
+        for pixel in tile_bounds
+            sample_kernel_inner!(tiles, tile_bounds, tile_column, max_depth, scene, sampler, camera, pixel, spp_sqr, filter_table, filter_radius, resolution)
+        end
+        merge_film_tile!(film.pixels, film.crop_bounds, tiles, tile_bounds, Int32(tile_column))
+    end
 end

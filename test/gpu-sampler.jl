@@ -115,7 +115,7 @@ end
         row = (idx - Int32(1)) ÷ cols + Int32(1)
         col = (idx - Int32(1)) % cols + Int32(1)
         l = trace_pixel(camera, scene, (row, cols - col))
-        @inbounds img[idx] = RGBf(l.c...)
+        @_inbounds img[idx] = RGBf(l.c...)
     end
     nothing
 end
@@ -143,7 +143,7 @@ img = zeros(RGBf, res, res)
 
 
 function single_trace_image!(img, camera, scene)
-    @inbounds for idx in eachindex(img)
+    @_inbounds for idx in eachindex(img)
         cols = size(img, 2) % Int32
         row = (idx - Int32(1)) ÷ cols + Int32(1)
         col = (idx - Int32(1)) % cols + Int32(1)
@@ -184,7 +184,7 @@ nothing
 
 # function trace_image!(img, camera, scene)
 #     for xy in CartesianIndices(size(img))
-#         @inbounds img[xy] = RGBf(trace_pixel(camera, scene, xy).c...)
+#         @_inbounds img[xy] = RGBf(trace_pixel(camera, scene, xy).c...)
 #     end
 #     return img
 # end

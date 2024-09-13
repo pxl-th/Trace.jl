@@ -243,9 +243,9 @@ end
     to_visit_offset, current_node_i = Int32(1), Int32(1)
     nodes_to_visit = zeros(MVector{64,Int32})
     primitives = bvh.primitives
-    @inbounds primitive = primitives[1]
+    @_inbounds primitive = primitives[1]
     nodes = bvh.nodes
-    @inbounds while true
+    @_inbounds while true
         ln = nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if !ln.is_interior && ln.n_primitives > Int32(0)
@@ -295,7 +295,7 @@ end
     to_visit_offset, current_node_i = Int32(1), Int32(1)
     nodes_to_visit = zeros(MVector{64,Int32})
     primitives = bvh.primitives
-    @inbounds while true
+    @_inbounds while true
         ln = bvh.nodes[current_node_i]
         if intersect_p(ln.bounds, ray, inv_dir, dir_is_neg)
             if !ln.is_interior && ln.n_primitives > Int32(0)

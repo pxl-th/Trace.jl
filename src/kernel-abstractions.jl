@@ -66,7 +66,7 @@ end
 @kernel function ka_trace_image!(img, camera, scene, sampler, max_depth)
     _idx = @index(Global)
     idx = _idx % Int32
-    @inbounds if checkbounds(Bool, img, idx)
+    @_inbounds if checkbounds(Bool, img, idx)
         cols = size(img, 2) % Int32
         row = (idx - Int32(1)) ÷ cols + Int32(1)
         col = (idx - Int32(1)) % cols + Int32(1)
@@ -84,4 +84,22 @@ function launch_trace_image!(img, camera, scene, samples_per_pixel::Int32, max_d
     kernel!(img, camera, scene, sampler, max_depth, niter, ndrange=size(img), workgroupsize=(16, 16))
     KA.synchronize(backend)
     return img
+end
+
+
+function Trace.to_gpu(ArrayType, film::Film; preserve=[])
+    return Film(
+        film.resolution,
+        film.crop_bounds,
+        film.diagonal,
+        KA.adapt(ArrayType, film.pixels),
+        KA.adapt(ArrayType, film.tiles),
+        film.tile_size,
+        film.ntiles,
+        film.filter_table,
+        film.filter_table_width,
+        film.filter_radius,
+        film.scale,
+        KA.adapt(ArrayType, film.framebuffer),
+    )
 end

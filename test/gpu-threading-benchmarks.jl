@@ -87,7 +87,7 @@ end
     xy = @index(Global, Cartesian)
     if checkbounds(Bool, img, xy)
         l = trace_pixel(camera, scene, xy)
-        @inbounds img[xy] = RGBf(l.c...)
+        @_inbounds img[xy] = RGBf(l.c...)
     end
 end
 
@@ -122,7 +122,7 @@ function cu_trace_image!(img, camera, bvh, lights)
     x = threadIdx().x
     y = threadIdx().y
     if checkbounds(Bool, img, (x, y))
-        @inbounds img[x, y] = trace_pixel(camera, bvh, (x,y), lights)
+        @_inbounds img[x, y] = trace_pixel(camera, bvh, (x,y), lights)
     end
 end
 
@@ -147,14 +147,14 @@ Array(gpu_img)
 
 function trace_image!(img, camera, scene)
     for xy in CartesianIndices(size(img))
-        @inbounds img[xy] = RGBf(trace_pixel(camera, scene, xy).c...)
+        @_inbounds img[xy] = RGBf(trace_pixel(camera, scene, xy).c...)
     end
     return img
 end
 
 function threads_trace_image!(img, camera, bvh)
     Threads.@threads for xy in CartesianIndices(size(img))
-        @inbounds img[xy] = trace_pixel(camera, bvh, xy)
+        @_inbounds img[xy] = trace_pixel(camera, bvh, xy)
     end
     return img
 end
@@ -180,7 +180,7 @@ end
 
 using Tullio
 
-@inbounds function tullio_trace_image!(img, camera, bvh)
+@_inbounds function tullio_trace_image!(img, camera, bvh)
     @tullio img[x, y] = trace_pixel(camera, bvh, (x, y))
     return img
 end

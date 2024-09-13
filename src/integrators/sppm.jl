@@ -283,7 +283,7 @@ function _populate_grid!(
         1, Int64.(floor.(base_grid_resolution .* diag ./ max_diag)),
     )
     # Add visible points to SPPM grid.
-    @inbounds for (i, pixel) in enumerate(pixels)
+    @_inbounds for (i, pixel) in enumerate(pixels)
         is_black(β[i]) && continue
         # Add pixel's visible point to applicable grid cells.
         shift = pradius[i]
@@ -472,7 +472,7 @@ function _sppm_to_image(
     @real_assert iteration > 0
     Np = iteration * i.photons_per_iteration * π
     image = fill(RGBSpectrum(0f0), size(pixels))
-    @inbounds for (i, p) in enumerate(pixels)
+    @_inbounds for (i, p) in enumerate(pixels)
         # Combine direct and indirect radiance estimates.
         image[i] = (p.Ld / iteration) + (p.τ / (Np * (p.radius^2)))
     end

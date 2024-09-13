@@ -31,5 +31,5 @@ function (c::Texture{T})(si::SurfaceInteraction)::T where {T<:TextureType}
     s = unsafe_trunc.(Int32, size(c.data))
     idx = map(x -> unsafe_trunc(Int32, x), Int32(1) .+ ((s .- Int32(1)) .* uv))
     idx = clamp.(idx, Int32(1), s)
-    @inbounds return c.data[idx...]
+    @_inbounds return c.data[idx...]
 end

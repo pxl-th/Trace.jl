@@ -32,6 +32,17 @@ macro real_assert(expr, msg="")
     end
 end
 
+const ENABLE_INBOUNDS = true
+
+macro _inbounds(ex)
+    if ENABLE_INBOUNDS
+        esc(:(@inbounds $ex))
+    else
+        esc(ex)
+    end
+end
+
+
 # GeometryBasics.@fixed_vector Normal StaticVector
 include("typeNormal3f.jl")
 include("mempool.jl")

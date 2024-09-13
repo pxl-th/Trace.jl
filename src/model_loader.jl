@@ -30,7 +30,7 @@ function _node_to_triangle_mesh!(
 
         indices = Vector{UInt32}(undef, length(m_faces) * 3)
         fi = 1
-        @inbounds for face in m_faces, i in face
+        @_inbounds for face in m_faces, i in face
             @real_assert i <= length(m_vertices)
             indices[fi] = i + 1 # 1-based indexing
             fi += 1

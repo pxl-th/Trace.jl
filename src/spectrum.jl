@@ -61,7 +61,7 @@ RGBSpectrum(v::Float32 = 0f0) = RGBSpectrum(Point3f(v))
 RGBSpectrum(r, g, b) = RGBSpectrum(Point3f(r, g, b))
 
 to_XYZ(s::RGBSpectrum) = RGB_to_XYZ(s.c)
-@inbounds function to_Y(s::RGBSpectrum)::Float32
+@_inbounds function to_Y(s::RGBSpectrum)::Float32
     0.212671f0 * s.c[1] + 0.715160f0 * s.c[2] + 0.072169f0 * s.c[3]
 end
 function from_XYZ(::Type{RGBSpectrum}, xyz::Point3f)
