@@ -5,6 +5,7 @@ using KernelAbstractions
 using KernelAbstractions: @kernel, @index, @Const
 import KernelAbstractions as KA
 
+
 # ============================================================================
 # VolPath Integrator
 # ============================================================================
@@ -45,6 +46,12 @@ mutable struct VolPath <: Integrator
 
     # Cached adapted scene (avoids re-uploading BVH every sample)
     _adapted_scene_cache::Any  # (scene_id, adapted) or nothing
+
+    # Cached initial medium detection (avoids per-sample GPU alloc + flush)
+    _initial_medium_cache::Any  # (camera_pos, SetKey) or nothing
+
+    # Cached GPU-adapted filter sampler data (avoids re-uploading every sample)
+    _filter_sampler_gpu::Any  # adapted GPUFilterSamplerData or nothing
 end
 
 """
@@ -96,7 +103,7 @@ function VolPath(;
     @assert accumulation_eltype in (Float32, Float64) "accumulation_eltype must be Float32 or Float64"
     # Build filter sampler data for importance sampling (nothing for Box/Triangle)
     sampler_data = GPUFilterSamplerData(filter)
-    return VolPath(
+    vp = VolPath(
         Int32(max_depth),
         Int32(samples),
         Int32(russian_roulette_depth),
@@ -108,8 +115,28 @@ function VolPath(;
         accumulation_eltype,
         hw_accel,
         nothing,  # state
-        nothing   # _adapted_scene_cache
+        nothing,  # _adapted_scene_cache
+        nothing,  # _initial_medium_cache
+        nothing   # _filter_sampler_gpu
     )
+    finalizer(close, vp)
+    return vp
+end
+
+"""
+    Base.close(vp::VolPath)
+
+Release all GPU memory held by the integrator's cached render state and adapted scene.
+"""
+function Base.close(vp::VolPath)
+    vp._filter_sampler_gpu = nothing
+    if vp.state !== nothing
+        free!(vp.state)
+        vp.state = nothing
+    end
+    vp._adapted_scene_cache = nothing
+    vp._initial_medium_cache = nothing
+    return nothing
 end
 
 # Dispatch wrappers: pass `vp` so external packages (e.g. hikari_integration.jl)
@@ -534,9 +561,15 @@ function render!(
     filter_weight_per_pixel = state.filter_weight_per_pixel
 
     # Detect which medium the camera is inside (vacuum if outside all media)
-    # HW RT overrides this to run on CPU (only consumer of accel, not perf-critical)
+    # Cached: camera position doesn't change between samples, so detect once per render
     camera_pos = get_camera_position(camera)
-    initial_medium = _detect_initial_medium(backend, accel, media_interfaces, camera_pos, vp)
+    cached_medium = vp._initial_medium_cache
+    if cached_medium !== nothing && cached_medium[1] === camera_pos
+        initial_medium = cached_medium[2]
+    else
+        initial_medium = _detect_initial_medium(backend, accel, media_interfaces, camera_pos, vp)
+        vp._initial_medium_cache = (camera_pos, initial_medium)
+    end
 
     # Clear spectral buffer (pixel_L) for this sample iteration
     # This is per-sample, not per-render - pixel_rgb accumulates across all samples
@@ -546,8 +579,11 @@ function render!(
     empty!(current_ray_queue(state))
 
     # Generate camera rays with filter sampling (pbrt-v4 style) and ZSobol sampler
-    # Adapt filter sampler data to GPU (nothing passes through unchanged)
-    filter_sampler_data_gpu = Adapt.adapt(backend, vp.filter_sampler_data)
+    # Adapt filter sampler data to GPU — cache on struct to avoid re-uploading every sample
+    if vp._filter_sampler_gpu === nothing
+        vp._filter_sampler_gpu = Adapt.adapt(backend, vp.filter_sampler_data)
+    end
+    filter_sampler_data_gpu = vp._filter_sampler_gpu
 
     kernel! = vp_generate_camera_rays_kernel!(backend)
     kernel!(
@@ -571,9 +607,12 @@ function render!(
     multi_queue = state.multi_material_queue
 
     # Path tracing loop - following pbrt-v4 wavefront architecture
+    # All inner kernels use indirect dispatch (0 rays = GPU no-op), so we
+    # do NOT check queue sizes on CPU. Reading queue.size triggers a vk_flush!
+    # per bounce — 500 flushes/render kills GPU pipelining and doubles render time.
+    # Instead, we run all bounces and rely on CB auto-split (cb_split_threshold)
+    # to prevent NVIDIA CTX SWITCH TIMEOUT on large command buffers.
     for depth in 0:(vp.max_depth - 1)
-        n_rays = length(current_ray_queue(state))
-        n_rays == 0 && break
 
         # Generate pre-computed Sobol samples for this bounce (pbrt-v4 RaySamples pattern)
         # Must be called BEFORE any kernel that uses pixel_samples

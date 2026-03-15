@@ -646,7 +646,7 @@ end
 end
 
 # Shadow ray tracing dispatch (indirect — minimal CPU readbacks)
-function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media_interfaces, media, materials, ::VolPath)
+function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media_interfaces, media, materials, vp::VolPath)
     hwtlas = accel.hwtlas
     hw = hwtlas.hw_accel
 
@@ -683,8 +683,12 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
                media_interfaces, media, materials, state.rgb2spec_table,
                Int32(cap); ndrange=n_rays_gpu)
 
-    # Rounds 2-10: RT trace uses active counter (0 active = hardware no-op)
-    for _round in 2:10
+    # Extra rounds for medium traversal in shadow rays.
+    # Without media, round 1 suffices (opaque occlusion only).
+    # With media, shadow rays may cross medium boundaries and need re-tracing.
+    # 3 rounds handles up to 2 medium transitions (enter+exit a fog region).
+    max_shadow_rounds = isempty(media) ? 1 : 3
+    for _round in 2:max_shadow_rounds
         fill!(active_counter, Int32(0))
         count_k!(active_counter, states, Int32(cap); ndrange=n_rays_gpu)
 

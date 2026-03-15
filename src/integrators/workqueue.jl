@@ -85,6 +85,17 @@ struct WorkQueue{T, V <: AbstractVector{T}, S <: AbstractVector{Int32}}
 end
 
 """
+    free!(queue::WorkQueue)
+
+Release GPU memory held by the work queue's items and size arrays.
+"""
+function free!(queue::WorkQueue)
+    finalize(queue.items)
+    finalize(queue.size)
+    return nothing
+end
+
+"""
     WorkQueue{T}(backend, capacity; soa=false)
 
 Create a new work queue with the given capacity on the specified backend.

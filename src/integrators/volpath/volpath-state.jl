@@ -95,6 +95,60 @@ mutable struct VolPathState{Backend}
     multi_material_queue::Any  # MultiMaterialQueue{N} or nothing
 end
 
+"""
+    free!(state::VolPathState)
+
+Release all GPU memory held by the VolPath render state (work queues, pixel buffers, tables).
+"""
+function free!(state::VolPathState)
+    # Work queues (bulk of GPU memory — each holds items + size arrays)
+    free!(state.ray_queue_a)
+    free!(state.ray_queue_b)
+    free!(state.medium_sample_queue)
+    free!(state.medium_scatter_queue)
+    free!(state.hit_surface_queue)
+    free!(state.material_queue)
+    free!(state.shadow_queue)
+    free!(state.escaped_queue)
+
+    # Pixel buffers
+    finalize(state.pixel_L)
+    finalize(state.pixel_rgb)
+    finalize(state.pixel_weight_sum)
+    finalize(state.wavelengths_per_pixel)
+    finalize(state.pdf_per_pixel)
+    finalize(state.filter_weight_per_pixel)
+
+    # BVH light sampler data
+    finalize(state.bvh_nodes)
+    finalize(state.light_to_bit_trail)
+    finalize(state.infinite_light_indices)
+
+    # Pixel samples (StructArray — finalize component arrays)
+    if state.pixel_samples !== nothing
+        sa = state.pixel_samples
+        for name in propertynames(sa)
+            arr = getproperty(sa, name)
+            if arr isa AbstractArray
+                finalize(arr)
+            end
+        end
+    end
+
+    # Sobol RNG state
+    if state.sobol_rng !== nothing
+        rng = state.sobol_rng
+        for name in fieldnames(typeof(rng))
+            arr = getfield(rng, name)
+            if arr isa AbstractArray
+                finalize(arr)
+            end
+        end
+    end
+
+    return nothing
+end
+
 function VolPathState(
     backend,
     width::Integer,
