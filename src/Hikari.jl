@@ -44,8 +44,9 @@ abstract type BxDF end
 abstract type Integrator end
 abstract type Medium end
 
-# Default no-op close for integrators without cached state
+# Default no-op close/clear for integrators without cached state
 Base.close(::Integrator) = nothing
+clear!(::Integrator) = nothing
 
 const Radiance = UInt8(1)
 const Importance = UInt8(2)
