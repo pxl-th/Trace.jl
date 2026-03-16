@@ -17,7 +17,7 @@ using Adapt
 using KernelAbstractions: @kernel, @index, @Const
 import KernelAbstractions as KA
 using GPUArraysCore: @allowscalar
-using Lava
+# Lava is a weak dependency — hw-rt.jl is loaded via ext/HikariLavaExt.jl
 
 # Re-export Raycore types and functions that Trace uses
 import Raycore: AbstractRay, Ray, RayDifferentials, apply, check_direction, scale_differentials
@@ -151,8 +151,7 @@ include("integrators/volpath/surface-eval.jl")
 include("integrators/volpath/multi-material-eval.jl")
 include("integrators/volpath/volpath.jl")
 # Hardware RT integration (HWTLAS, HWAdaptedAccel, dispatch overrides)
-include("integrators/volpath/hw-rt.jl")
-export HWTLAS
+# Loaded via ext/HikariLavaExt.jl when Lava is available
 include("kernel-abstractions.jl")
 # Postprocessing pipeline
 include("postprocess.jl")
