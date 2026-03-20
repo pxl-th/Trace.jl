@@ -184,7 +184,7 @@ end
 end
 
 # Default workgroupsize=256 gives ~14% speedup on CUDA (Ampere) vs auto-selection.
-# Static workgroupsize helps the compiler optimize register allocation and enables
+# Static workgroupsize helps GPU compilers optimize register allocation and enables
 # more concurrent blocks per SM.
 const DEFAULT_WORKGROUPSIZE = 256
 
@@ -195,7 +195,9 @@ Get the ndrange for dispatching over a queue's GPU-resident size buffer.
 Default: CPU readback (works on AMDGPU, CUDA, CPU).
 Lava overrides this to return the GPU array directly for indirect dispatch (no flush).
 """
-_gpu_ndrange(backend, size_buf) = max(Int(Array(size_buf)[1]), 0)
+# Clamp to 1 (not 0) because ndrange=0 crashes on some backends (AMDGPU).
+# The kernel's bounds check (idx > queue_size) handles the empty case.
+_gpu_ndrange(backend, size_buf) = max(Int(Array(size_buf)[1]), 1)
 
 function Base.foreach(f, queue::WorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
     backend = KA.get_backend(queue.items)
