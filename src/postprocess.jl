@@ -244,7 +244,7 @@ end
             b = b * (1f0 - alpha) + bg_b * alpha
         end
 
-        dst[i] = RGB{Float32}(r, g, b)
+        dst[i] = RGBA{Float32}(r, g, b, 1f0)
     end
 end
 

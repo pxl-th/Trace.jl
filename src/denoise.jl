@@ -359,14 +359,9 @@ function denoise!(film::Film; config::DenoiseConfig=DenoiseConfig())
         KA.synchronize(backend)
     end
 
-    # Copy result to postprocess buffer
-    if config.iterations % 2 == 1
-        # Result is in buffer_b
-        copyto!(film.postprocess, buffer_b)
-    else
-        # Result is in buffer_a (framebuffer)
-        copyto!(film.postprocess, buffer_a)
-    end
+    # Copy result to postprocess buffer (RGB → RGBA)
+    result = config.iterations % 2 == 1 ? buffer_b : buffer_a
+    film.postprocess .= RGBA{Float32}.(result)
 
     return nothing
 end
@@ -378,7 +373,7 @@ Like denoise!, but modifies framebuffer directly instead of using postprocess.
 """
 function denoise_inplace!(film::Film; config::DenoiseConfig=DenoiseConfig())
     denoise!(film; config=config)
-    # Copy postprocess back to framebuffer
-    copyto!(film.framebuffer, film.postprocess)
+    # Copy denoised postprocess (RGBA) back to framebuffer (RGB)
+    film.framebuffer .= RGB{Float32}.(film.postprocess)
     return nothing
 end

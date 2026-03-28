@@ -15,7 +15,8 @@ import Hikari: _default_accel, _gpu_ndrange, _detect_initial_medium,
                compute_transmittance_ratio_tracking,
                vp_compute_geometric_normal, vp_compute_uv_barycentric,
                get_surface_alpha_dispatch, pbrt_hash, pcg32_init, pcg32_uniform_f32,
-               is_black, average, accumulate_spectrum!
+               is_black, average, accumulate_spectrum!,
+               CameraSample, generate_ray
 
 import Raycore
 import Raycore: TLASHandle, Bounds3, Normal3f, bounding_sphere,

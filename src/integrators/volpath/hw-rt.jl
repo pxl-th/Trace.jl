@@ -93,6 +93,9 @@ mutable struct HWTLAS
     shadow_ray_buf::Union{Nothing, LavaArray{RTRay, 1}}
     shadow_result_buf::Union{Nothing, LavaArray{RTHitResult, 1}}
     shadow_active_counter::Union{Nothing, LavaArray{Int32, 1}}
+    # ── Pre-allocated depth ray trace buffers ──
+    depth_ray_buf::Union{Nothing, LavaArray{RTRay, 1}}
+    depth_result_buf::Union{Nothing, LavaArray{RTHitResult, 1}}
 end
 
 """
@@ -109,6 +112,7 @@ HWTLAS() = HWTLAS(
     nothing, nothing, nothing, nothing,
     true,
     nothing, nothing, nothing, nothing, nothing, nothing,
+    nothing, nothing,
 )
 
 # ── push! — build Vulkan BLAS immediately ──
@@ -305,15 +309,90 @@ function Adapt.adapt_structure(to, hwtlas::HWTLAS)
     HWAdaptedAccel(hwtlas)
 end
 
-# ── fill_aux_buffers! override for HWTLAS scenes ──
-# The default kernel calls intersect! inside compute, which can't use HW RT.
-# Fill with defaults (depth=miss, normal=0, albedo=0.8) — rendering is correct,
-# denoising won't have useful normals/depth but still functions.
+# ── fill_aux_buffers! for HWTLAS: trace primary rays via HW RT for depth ──
+
+@kernel inbounds = true function _hw_generate_primary_rays_kernel!(
+    rays, @Const(camera), @Const(crop_p_min),
+    @Const(width::Int32), @Const(height::Int32),
+)
+    idx = @index(Global)
+    if idx <= width * height
+        h = height
+        row = Int32(((idx - Int32(1)) % h) + Int32(1))
+        col = Int32(((idx - Int32(1)) ÷ h) + Int32(1))
+        px = Float32(col) + crop_p_min[1] - 1f0
+        py = Float32(row) + crop_p_min[2] - 1f0
+        pixel = Point2f(px + 0.5f0, py + 0.5f0)
+        cs = CameraSample(pixel, Point2f(0.5f0, 0.5f0), 0f0)
+        ray, ω = generate_ray(camera, cs)
+        if ω > 0f0
+            o = ray.o
+            d = ray.d
+            rays[idx] = RTRay(o[1], o[2], o[3], 0f0, d[1], d[2], d[3], 1f10)
+        else
+            rays[idx] = RTRay(0f0, 0f0, 0f0, 0f0, 0f0, 0f0, 1f0, 0f0)
+        end
+    end
+end
+
+@kernel inbounds = true function _hw_extract_depth_kernel!(
+    depth, normal, albedo,
+    @Const(results), @Const(rays),
+    @Const(miss_depth::Float32), @Const(n::Int32),
+)
+    idx = @index(Global)
+    if idx <= n
+        r = results[idx]
+        if r.hit == UInt32(1)
+            # depth = t * |d| = t (direction is normalized)
+            depth[idx] = r.t
+            normal[idx] = Vec3f(0f0, 0f0, 1f0)
+            albedo[idx] = RGB{Float32}(0.8f0, 0.8f0, 0.8f0)
+        else
+            depth[idx] = miss_depth
+            normal[idx] = Vec3f(0f0, 0f0, 0f0)
+            albedo[idx] = RGB{Float32}(0f0, 0f0, 0f0)
+        end
+    end
+end
+
 function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera; has_infinite_lights::Bool=false)
-    fill!(film.depth, 0f0)  # Must be finite — Inf triggers escaped-pixel masking in postprocess
-    fill!(film.normal, Vec3f(0f0, 0f0, 0f0))
-    fill!(film.albedo, RGB{Float32}(0.8f0, 0.8f0, 0.8f0))
-    return nothing
+    hwtlas = scene.accel.hwtlas
+    hw = hwtlas.hw_accel
+    hw === nothing && return nothing  # no geometry built yet
+
+    backend = KernelAbstractions.get_backend(film.depth)
+    h, w = size(film.depth)
+    n = h * w
+    miss_depth = has_infinite_lights ? Float32(1e30) : Inf32
+
+    # Reuse cached buffers if correct size, otherwise allocate
+    if hwtlas.depth_ray_buf === nothing || length(hwtlas.depth_ray_buf) != n
+        hwtlas.depth_ray_buf = KernelAbstractions.allocate(backend, RTRay, n)
+        hwtlas.depth_result_buf = KernelAbstractions.allocate(backend, RTHitResult, n)
+    end
+    rays = hwtlas.depth_ray_buf
+    results = hwtlas.depth_result_buf
+
+    # Generate primary rays
+    _hw_generate_primary_rays_kernel!(backend)(
+        rays, camera, film.crop_bounds.p_min,
+        Int32(w), Int32(h);
+        ndrange=n
+    )
+
+    # Trace via HW RT
+    Lava.trace_closest_hits!(results, rays, hw, n)
+
+    # Extract depth from results
+    _hw_extract_depth_kernel!(backend)(
+        film.depth, film.normal, film.albedo,
+        results, rays, miss_depth, Int32(n);
+        ndrange=n
+    )
+
+    KernelAbstractions.synchronize(backend)
+    return film
 end
 
 # ── PrecomputedHitsAccel ──

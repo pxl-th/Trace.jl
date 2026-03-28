@@ -62,6 +62,7 @@ struct Film{
     Pixels<:AbstractMatrix{Pixel},
     Tiles<:AbstractMatrix{FilmTilePixel},
     FB<:AbstractMatrix{RGB{Float32}},
+    PP<:AbstractMatrix{RGBA{Float32}},
     AB<:AbstractMatrix{RGB{Float32}},
     NB<:AbstractMatrix{Vec3f},
     DB<:AbstractMatrix{Float32},
@@ -98,8 +99,8 @@ struct Film{
     normal::NB
     depth::DB
 
-    # Postprocessed output (overwritten each postprocess! call)
-    postprocess::FB
+    # Postprocessed output (overwritten each postprocess! call) — RGBA for direct GPU blit
+    postprocess::PP
 
     # Render state - tracks iteration/sample progress for progressive rendering
     iteration_index::Base.RefValue{Int32}
@@ -160,7 +161,7 @@ function Film(
     depth = fill(0.0f0, pixel_size...)
 
     # Postprocess target buffer
-    postprocess = Matrix{RGB{Float32}}(undef, pixel_size...)
+    postprocess = Matrix{RGBA{Float32}}(undef, pixel_size...)
 
     return Film(
         resolution,
