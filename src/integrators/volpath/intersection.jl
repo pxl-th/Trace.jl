@@ -627,7 +627,12 @@ end
     work,
     pixel_L,
     rgb2spec_table,
-    lights
+    lights,
+    bvh_nodes,
+    light_to_bit_trail,
+    infinite_light_indices,
+    num_infinite_lights::Int32,
+    num_bvh_lights::Int32
 )
     # Evaluate environment lights
     Le = evaluate_escaped_ray_spectral(rgb2spec_table, lights, work.ray_d, work.lambda)
@@ -639,18 +644,30 @@ end
         # MIS weighting following pbrt-v4 (integrator.cpp HandleEscapedRays)
         # depth=0 or specular bounce: L = beta * Le / r_u.Average()
         # Otherwise: L = beta * Le / (r_u + r_l).Average()
-        #   where r_l = work.r_l * lightChoicePDF * light.PDF_Li(ctx, wi)
+        #   where r_l = sum over infinite lights of: work.r_l * bvh_pmf(light) * light.PDF_Li(wi)
         final_contrib = if work.depth == Int32(0) || work.specular_bounce
             contribution / average(work.r_u)
         else
-            # Full MIS: compute light sampling PDF and combine with BSDF PDF
-            # r_l = work.r_l * lightChoicePDF * light.PDF_Li
-            num_lights = Int32(length(lights))
-            light_choice_pdf = num_lights > 0 ? 1f0 / Float32(num_lights) : 0f0
-
-            # Compute PDF from environment light for this direction
-            light_pdf = compute_env_light_pdf(lights, work.ray_d)
-            r_l = work.r_l * light_choice_pdf * light_pdf
+            # Full MIS: for each infinite light, accumulate r_l weighted by BVH PMF
+            # Following pbrt-v4 HandleEscapedRay: iterate infinite lights, use bvh_pmf per light
+            r_l = SpectralRadiance(0f0)
+            for i in Int32(1):num_infinite_lights
+                light_flat_idx = infinite_light_indices[i]
+                light_choice_pdf = bvh_pmf(
+                    bvh_nodes, light_to_bit_trail,
+                    num_infinite_lights, num_bvh_lights,
+                    work.prev_intr_p, work.prev_intr_n, light_flat_idx
+                )
+                if light_choice_pdf > 0f0
+                    # Get PDF_Li for this specific light
+                    # _env_light_pdf_single(light, lights, wi) is with_index-compatible (element first)
+                    light_idx = flat_to_light_index(lights, light_flat_idx)
+                    light_pdf_li = with_index(_env_light_pdf_single, lights, light_idx,
+                        lights, work.ray_d
+                    )
+                    r_l = r_l + work.r_l * light_choice_pdf * light_pdf_li
+                end
+            end
 
             # Combine r_u and r_l
             r_sum = work.r_u + r_l
@@ -677,6 +694,11 @@ function vp_handle_escaped_rays!(state::VolPathState, lights)
         state.pixel_L,
         state.rgb2spec_table,
         lights,
+        state.bvh_nodes,
+        state.light_to_bit_trail,
+        state.infinite_light_indices,
+        state.num_infinite_lights,
+        state.num_bvh_lights,
     )
     return nothing
 end

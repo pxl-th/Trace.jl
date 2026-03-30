@@ -29,7 +29,6 @@ end
 
 # Accessors for scene bounds (dereference the RefValue)
 @inline world_bound(scene::Scene) = scene.bounds[][1]
-@inline world_sphere(scene::Scene) = scene.bounds[][2]
 @inline world_center(scene::Scene) = scene.bounds[][2].center
 @inline world_radius(scene::Scene) = scene.bounds[][2].r
 
@@ -162,9 +161,6 @@ function Adapt.adapt_structure(to, scene::Scene)
         Adapt.adapt(to, scene.bounds)  # RefValue → device RefValue
     )
 end
-
-# Type alias for scenes with materials (used for get_material dispatch)
-const MaterialScene = AbstractScene
 
 # Common interface for both scene types
 @propagate_inbounds function intersect!(scene::AbstractScene, ray::AbstractRay)

@@ -92,7 +92,7 @@ end
         hit_surface_queue,
         escaped_queue,
         pixel_L,
-        work, media, rgb2spec_table, max_depth, Int32(0)  # max_queued not needed anymore
+        work, media, rgb2spec_table, max_depth
     )
 end
 
@@ -124,7 +124,6 @@ significantly reducing null scattering events in sparse heterogeneous media.
     media,
     medium_idx::SetKey,
     max_depth::Int32,
-    max_queued::Int32,
     template_grid::MajorantGrid
 )
     # Create iterator using template grid for type consistency across all media
@@ -135,7 +134,7 @@ significantly reducing null scattering events in sparse heterogeneous media.
         iter, T_maj_accum, beta, r_u, r_l, rng_state,
         scatter_queue,
         pixel_L,
-        work, media, medium_idx, table, max_depth, max_queued
+        work, media, medium_idx, table, max_depth
     )
 end
 
@@ -149,8 +148,7 @@ end
     work::VPMediumSampleWorkItem,
     media,
     rgb2spec_table,
-    max_depth::Int32,
-    max_queued::Int32
+    max_depth::Int32
 )
     medium_idx = work.medium_idx
     t_max = work.t_max
@@ -179,7 +177,7 @@ end
         T_maj_accum, beta, r_u, r_l, rng_state,
         scatter_queue,
         pixel_L,
-        work, media, medium_idx, max_depth, max_queued,
+        work, media, medium_idx, max_depth,
         template_grid
     )
 
@@ -247,8 +245,7 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
     media,
     medium_idx::SetKey,
     rgb2spec_table,
-    max_depth::Int32,
-    max_queued::Int32
+    max_depth::Int32
 )
     # Iterate over majorant segments (bounded for GPU)
     # For homogeneous media this loops once, for DDA it traverses voxels
@@ -272,7 +269,7 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
             seg, T_maj_accum, beta, r_u, r_l, current_rng,
             scatter_queue,
             pixel_L,
-            work, media, medium_idx, rgb2spec_table, max_depth, max_queued,
+            work, media, medium_idx, rgb2spec_table, max_depth,
             ray_d
         )
 
@@ -315,7 +312,6 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
     medium_idx::SetKey,
     rgb2spec_table,
     max_depth::Int32,
-    max_queued::Int32,
     ray_d::Vec3f
 )
     σ_maj = seg.σ_maj
@@ -416,7 +412,8 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
                 r_u,
                 work.depth,
                 work.medium_idx,
-                mp.g
+                mp.g,
+                work.eta_scale
             )
 
             push!(scatter_queue, scatter_item)

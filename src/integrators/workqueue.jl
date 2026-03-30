@@ -145,11 +145,6 @@ function Base.empty!(queue::WorkQueue)
     return queue
 end
 
-function cleanup!(queue::WorkQueue)
-    finalize(queue.items)
-    finalize(queue.size)
-    return nothing
-end
 
 # ============================================================================
 # Adapt.jl Integration for GPU Kernels

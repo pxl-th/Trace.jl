@@ -190,6 +190,7 @@ struct VPMediumScatterWorkItem
     depth::Int32
     medium_idx::SetKey         # Which medium we're in
     g::Float32                      # HG asymmetry at this point
+    eta_scale::Float32              # Accumulated IOR ratio (carried from path state)
 end
 
 # ============================================================================

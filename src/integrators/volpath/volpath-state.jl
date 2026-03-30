@@ -84,6 +84,7 @@ mutable struct VolPathState{Backend}
 
     # Render parameters
     max_depth::Int32
+    rr_depth::Int32
     width::Int32
     height::Int32
 
@@ -155,6 +156,7 @@ function VolPathState(
     height::Integer,
     lights::Raycore.MultiTypeSet;  # MultiTypeSet of lights (has backend for GPU allocation)
     max_depth::Integer = 8,
+    rr_depth::Integer = 1,
     queue_capacity::Integer = width * height,
     scene_radius::Float32 = 10f0,  # Scene bounding sphere radius for light power estimation
     samples_per_pixel::Integer = 1,  # For SobolRNG parameter computation
@@ -228,7 +230,7 @@ function VolPathState(
         rgb2spec_table, cie_table,
         bvh_nodes, light_to_bit_trail, infinite_light_indices,
         num_bvh_lights, num_infinite_lights, Int32(n_lights),
-        Int32(max_depth), Int32(width), Int32(height),
+        Int32(max_depth), Int32(rr_depth), Int32(width), Int32(height),
         sobol_rng,
         nothing  # multi_material_queue
     )
@@ -280,48 +282,3 @@ function reset_film!(state::VolPathState)
     KA.fill!(state.pixel_L, 0f0)
 end
 
-# ============================================================================
-# Resource Cleanup
-# ============================================================================
-
-"""
-    cleanup!(state::VolPathState)
-
-Release GPU memory held by the VolPath state.
-"""
-function cleanup!(state::VolPathState)
-    # Cleanup work queues
-    cleanup!(state.ray_queue_a)
-    cleanup!(state.ray_queue_b)
-    cleanup!(state.medium_sample_queue)
-    cleanup!(state.medium_scatter_queue)
-    cleanup!(state.hit_surface_queue)
-    cleanup!(state.material_queue)
-    cleanup!(state.shadow_queue)
-    cleanup!(state.escaped_queue)
-
-    # Cleanup film buffers
-    finalize(state.pixel_L)
-    finalize(state.pixel_rgb)
-    finalize(state.pixel_weight_sum)
-    finalize(state.wavelengths_per_pixel)
-    finalize(state.pdf_per_pixel)
-    finalize(state.filter_weight_per_pixel)
-    finalize(state.pixel_samples)
-
-    # Cleanup lookup tables
-    finalize(state.rgb2spec_table)
-    finalize(state.cie_table)
-
-    # Cleanup BVH light sampler
-    finalize(state.bvh_nodes)
-    finalize(state.light_to_bit_trail)
-    finalize(state.infinite_light_indices)
-
-    # Cleanup SobolRNG
-    if state.sobol_rng !== nothing
-        cleanup!(state.sobol_rng)
-    end
-
-    return nothing
-end

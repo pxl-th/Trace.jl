@@ -373,15 +373,6 @@ function Adapt.adapt_structure(to, rng::SobolRNG)
     )
 end
 
-"""
-    cleanup!(rng::SobolRNG)
-
-Release GPU memory held by the SobolRNG.
-"""
-function cleanup!(rng::SobolRNG)
-    finalize(rng.matrices)
-    return nothing
-end
 
 # =============================================================================
 # SobolRNG Sampling Interface

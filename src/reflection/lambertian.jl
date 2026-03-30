@@ -6,10 +6,6 @@ end
 
 const LAMENTIAN_TRANSMISSION = UInt8(5)
 
-function LambertianTransmission(active::Bool, t::S) where {S<:Spectrum}
-    UberBxDF{S}(active, LAMENTIAN_TRANSMISSION; t=t, type=BSDF_DIFFUSE | BSDF_TRANSMISSION)
-end
-
 """
 Reflection distribution is constant and divides reflectance spectrum
 equally over the hemisphere.
@@ -18,42 +14,8 @@ function distribution_lambertian_reflection(l::UberBxDF{S}, ::Vec3f, ::Vec3f)::S
     l.r * (1f0 / π)
 end
 
-"""
-Directional-hemisphirical reflectance value is constant.
-"""
-function ρ_lambertian_reflection(
-        l::UberBxDF{S}, ::Vec3f, ::Int32, ::Vector{Point2f},
-    ) where S<:Spectrum
-
-    l.r
-end
-
-"""
-Hemispherical-hemisphirical reflectance value is constant.
-"""
-function ρ_lambertian_reflection(
-        l::UberBxDF{S}, ::Vector{Point2f}, ::Vector{Point2f},
-    ) where S<:Spectrum
-
-    l.r
-end
-
 function distribution_lambertian_transmission(t::UberBxDF{S}, ::Vec3f, ::Vec3f)::S where {S<:Spectrum}
     t.t * (1f0 / π)
-end
-
-function ρ_lambertian_transmission(
-    t::UberBxDF{S}, ::Vec3f, ::Int32, ::Vector{Point2f},
-) where S<:Spectrum
-
-    t.t
-end
-
-function ρ_lambertian_transmission(
-    t::UberBxDF{S}, ::Vector{Point2f}, ::Vector{Point2f},
-) where S<:Spectrum
-
-    t.t
 end
 
 @propagate_inbounds function sample_lambertian_transmission(

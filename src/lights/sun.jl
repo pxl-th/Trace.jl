@@ -88,6 +88,3 @@ function sample_li(
     s.scale * s.i, wi, 1f0, tester
 end
 
-@propagate_inbounds function power(s::SunLight{S}, scene::AbstractScene)::S where S<:Spectrum
-    s.scale * s.i * π * world_radius(scene)^2
-end

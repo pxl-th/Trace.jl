@@ -470,15 +470,6 @@ Following pbrt-v4's RGBFilm::GetPixelRGB:
     end
 end
 
-@propagate_inbounds function linear_to_srgb(x::Float32)
-    x = clamp(x, 0f0, 1f0)
-    if x <= 0.0031308f0
-        return 12.92f0 * x
-    else
-        return 1.055f0 * x^0.41666666f0 - 0.055f0
-    end
-end
-
 # ============================================================================
 # Main Render Function
 # ============================================================================
@@ -537,6 +528,7 @@ function render!(
         sobol_spp = max(Int(vp.samples_per_pixel), 4096)
         vp.state = VolPathState(backend, width, height, scene.lights;
                                 max_depth=vp.max_depth,
+                                rr_depth=vp.russian_roulette_depth,
                                 scene_radius=world_radius(scene),
                                 samples_per_pixel=sobol_spp,
                                 sampler_seed=UInt32(0),

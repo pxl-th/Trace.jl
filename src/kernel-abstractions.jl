@@ -1,8 +1,6 @@
 import KernelAbstractions as KA
 import Adapt
 
-KA.@kernel some_kernel_f() = nothing
-
 # ============================================================================
 # Adapt.adapt_structure methods for GPU conversion
 # ============================================================================
@@ -10,18 +8,6 @@ KA.@kernel some_kernel_f() = nothing
 # Texture - adapt data array
 function Adapt.adapt_structure(to, m::Hikari.Texture)
     Hikari.Texture(Adapt.adapt(to, m.data))
-end
-
-# CloudVolume - adapt density array
-function Adapt.adapt_structure(to, m::Hikari.CloudVolume)
-    Hikari.CloudVolume(
-        Adapt.adapt(to, m.density),
-        m.origin,
-        m.extent,
-        m.extinction_scale,
-        m.asymmetry_g,
-        m.single_scatter_albedo
-    )
 end
 
 # HomogeneousMedium - already bitstype, no adaptation needed
@@ -90,15 +76,6 @@ function Adapt.adapt_structure(to, m::Hikari.NanoVDBMedium)
     )
 end
 
-# Distribution1D - adapt func and cdf arrays
-function Adapt.adapt_structure(to, d::Hikari.Distribution1D)
-    Hikari.Distribution1D(
-        Adapt.adapt(to, d.func),
-        Adapt.adapt(to, d.cdf),
-        d.func_int
-    )
-end
-
 # Distribution2D - adapt all arrays
 function Adapt.adapt_structure(to, d::Hikari.Distribution2D)
     Hikari.Distribution2D(
@@ -162,29 +139,3 @@ function Adapt.adapt_structure(to, film::Film)
     )
 end
 
-# ============================================================================
-# Kernels and launch functions
-# ============================================================================
-
-@kernel inbounds=true function ka_trace_image!(img, camera, scene, sampler, max_depth)
-    _idx = @index(Global)
-    idx = _idx % Int32
-    if checkbounds(Bool, img, idx)
-        cols = size(img, 2) % Int32
-        row = (idx - Int32(1)) ÷ cols + Int32(1)
-        col = (idx - Int32(1)) % cols + Int32(1)
-        pixel = Point2f((row, cols - col))
-        l = trace_pixel(camera, scene, pixel, sampler, max_depth)
-        img[idx] = RGB{Float32}((l.c)...)
-    end
-    nothing
-end
-
-function launch_trace_image!(img, camera, scene, samples_per_pixel::Int32, max_depth::Int32, niter::Int32)
-    backend = KA.get_backend(img)
-    kernel! = ka_trace_image!(backend)
-    sampler = UniformSampler(samples_per_pixel)
-    kernel!(img, camera, scene, sampler, max_depth, niter, ndrange=size(img), workgroupsize=(16, 16))
-    KA.synchronize(backend)
-    return img
-end

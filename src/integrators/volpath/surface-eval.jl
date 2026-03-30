@@ -406,7 +406,8 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     pixel_samples_indirect_rr,
     # Camera for texture filtering (pbrt-v4 style)
     camera,
-    samples_per_pixel::Int32
+    samples_per_pixel::Int32,
+    rr_depth::Int32
 )
     # Check depth limit
     new_depth = work.depth + Int32(1)
@@ -455,7 +456,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
 
         # Russian roulette
         should_continue, final_beta = russian_roulette_spectral(
-            new_beta, new_depth, rr_sample
+            new_beta, work.r_u, new_eta_scale, new_depth, rr_sample, rr_depth
         )
 
         if should_continue
@@ -489,10 +490,17 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
                 time = 0f0
             )
 
+            # Terminate secondary wavelengths for dispersive refraction (pbrt-v4)
+            new_lambda = if sample.secondary_terminated
+                terminate_secondary_wavelengths(work.lambda)
+            else
+                work.lambda
+            end
+
             ray_item = VPRayWorkItem(
                 new_ray,
                 new_depth,
-                work.lambda,
+                new_lambda,
                 work.pixel_index,
                 final_beta,
                 work.r_u,  # r_u unchanged
@@ -523,14 +531,16 @@ end
     max_depth::Int32,
     do_regularize::Bool,
     pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
-    camera, samples_per_pixel::Int32
+    camera, samples_per_pixel::Int32,
+    rr_depth::Int32
 )
     evaluate_material_inner!(
         next_ray_queue,
         work, materials, rgb2spec_table, max_depth,
         do_regularize,
         pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
-        camera, samples_per_pixel
+        camera, samples_per_pixel,
+        rr_depth
     )
 end
 
@@ -546,13 +556,8 @@ function vp_evaluate_materials!(state::VolPathState, materials, camera, samples_
         regularize,
         pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
         camera, samples_per_pixel,
+        state.rr_depth,
     )
     return nothing
 end
 
-# ============================================================================
-# Helper: Check for pure emissive material
-# ============================================================================
-
-# With DiffuseAreaLight, no material is ever purely emissive — all materials have BSDF.
-@propagate_inbounds is_pure_emissive_dispatch(materials, mat_idx::SetKey) = false

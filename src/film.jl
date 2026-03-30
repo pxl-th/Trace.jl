@@ -1,55 +1,18 @@
+# GPU-safe integer conversion helpers (avoid InexactError)
+u_int32(x) = Base.unsafe_trunc(Int32, x)
+u_int(x) = Base.unsafe_trunc(Int, x)
+u_uint32(x) = Base.unsafe_trunc(UInt32, x)
+u_uint64(x) = Base.unsafe_trunc(UInt64, x)
+floor_int32(x) = Base.unsafe_trunc(Int32, floor(x))
+floor_int(x) = Base.unsafe_trunc(Int, floor(x))
+round_int32(x) = Base.unsafe_trunc(Int32, round(x))
+
 struct Pixel
     xyz::Point3f
     filter_weight_sum::Float32
     splat_xyz::Point3f
 end
 Pixel() = Pixel(Point3f(0.0f0), 0.0f0, Point3f(0.0f0))
-
-
-function filter_offset(x, discrete_point, inv_filter_radius, filter_table_width)
-    fx = abs((x - discrete_point) * inv_filter_radius * filter_table_width)
-    return clamp(u_int32(ceil(fx)), Int32(1), Int32(filter_table_width))  # TODO is clipping ok?
-end
-
-
-function filter_offsets(start, stop, discrete_point, inv_filter_radius, filter_table_width)
-    range = Int32(start):Int32(stop)
-    return map(range) do r
-        filter_offset(r, discrete_point, inv_filter_radius, filter_table_width)
-    end
-end
-
-
-function generate_filter_table(filter)
-    filter_table_width = 16
-    filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
-    r = filter.radius ./ filter_table_width
-    for y in 0:filter_table_width-1, x in 0:filter_table_width-1
-        p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
-        filter_table[y+1, x+1] = filter(p)
-    end
-
-    point = Point2f(filter_table_width)
-    # Compute sample's raster bounds.
-    discrete_point = point .- 0.5f0
-    # Compute sample radius around point
-    p0 = ceil.(Int, discrete_point .- filter.radius)
-    p1 = floor.(Int, discrete_point .+ filter.radius) .+ 1
-    # Make sure we're inbounds
-    inv_radius = 1.0f0 ./ filter.radius
-    # Precompute x & y filter offsets.
-    offsets_x = filter_offsets(p0[1], p1[1], discrete_point[1], inv_radius[1], filter_table_width)
-    offsets_y = filter_offsets(p0[2], p1[2], discrete_point[2], inv_radius[2], filter_table_width)
-    # Loop over filter support & add sample to pixel array.
-    xrange = p0[1]:p1[1]
-    yrange = p0[2]:p1[2]
-    weights = zeros(Float32, length(xrange), length(yrange))
-    for i in 1:length(xrange), j in 1:length(yrange)
-        w = filter_table[offsets_y[j], offsets_x[i]]
-        weights[i, j] = w
-    end
-    return weights
-end
 
 
 struct FilmTilePixel{S<:Spectrum}
@@ -121,7 +84,6 @@ function Film(
         tile_size=4, filter_table_width=16,
     )
 
-    filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
     # Compute film image bounds.
     crop_bounds = Bounds2(
         ceil.(resolution .* crop_bounds.p_min) .+ 1.0f0,
@@ -133,19 +95,24 @@ function Film(
     pixels.xyz .= (Point3f(0),)
     pixels.filter_weight_sum .= 0.0f0
     pixels.splat_xyz .= (Point3f(0),)
+
+    # Compute sample bounds for tile layout.
+    sample_bounds = Bounds2(
+        floor.(crop_bounds.p_min .+ 0.5f0 .- filter.radius),
+        ceil.(crop_bounds.p_max .- 0.5f0 .+ filter.radius),
+    )
+    sample_extent = Hikari.diagonal(sample_bounds)
+    resolution = resolution
+    n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
+    wtiles, htiles = n_tiles .- 1
+
     # Precompute filter weight table.
+    filter_table = Matrix{Float32}(undef, filter_table_width, filter_table_width)
     r = filter.radius ./ filter_table_width
     for y in 0:filter_table_width-1, x in 0:filter_table_width-1
         p = Point2f((x + 0.5f0) * r[1], (y + 0.5f0) * r[2])
         filter_table[y+1, x+1] = filter(p)
     end
-
-    sample_bounds = get_sample_bounds(crop_bounds, filter.radius)
-    sample_extent = Hikari.diagonal(sample_bounds)
-    resolution = resolution
-    n_tiles = Int64.(floor.((sample_extent .+ tile_size) ./ tile_size))
-    wtiles, htiles = n_tiles .- 1
-    filter_table = generate_filter_table(filter)
     ntiles = wtiles * htiles
     tile_size_l = tile_size * tile_size
     contrib_sum = RGBSpectrum.(zeros(Vec3f, tile_size_l, ntiles))
@@ -183,158 +150,6 @@ function Film(
     )
 end
 
-
-"""
-Range of integer pixels that the `Sampler`
-is responsible for generating samples for.
-"""
-function get_sample_bounds(crop_bounds::Bounds2, radius::Point)
-    Bounds2(
-        floor.(crop_bounds.p_min .+ 0.5f0 .- radius),
-        ceil.(crop_bounds.p_max .- 0.5f0 .+ radius),
-    )
-end
-get_sample_bounds(f::Film) = get_sample_bounds(f.crop_bounds, f.filter_radius)
-
-
-"""
-Extent of the film in the scene.
-This is needed for realistic cameras.
-"""
-function get_physical_extension(f::Film)
-    aspect = f.resolution[2] / f.resolution[1]
-    x = sqrt(f.diagonal^2 / (1 + aspect^2))
-    y = aspect * x
-    Bounds2(Point2f(-x / 2f0, -y / 2f0), Point2f(x / 2f0, y / 2f0))
-end
-
-
-"""
-Point p is in (x, y) format.
-Returns CartesianIndex in (row, col) = (y, x) format for Julia array indexing.
-"""
-@propagate_inbounds function get_pixel_index(crop_bounds, p::Point2)
-    ix, iy = u_int32.((p .- crop_bounds.p_min .+ 1.0f0))
-    return CartesianIndex(iy, ix)  # (row, col) = (y, x) for Julia arrays
-end
-
-@propagate_inbounds function merge_film_tile!(f::AbstractMatrix{Pixel}, crop_bounds::Bounds2, ft::AbstractMatrix{FilmTilePixel}, tile::Bounds2, tile_col::Int32)
-    ft_contrib_sum = ft.contrib_sum
-    ft_filter_weight_sum = ft.filter_weight_sum
-    f_xyz = f.xyz
-    f_filter_weight_sum = f.filter_weight_sum
-    linear = Int32(1)
-
-    # Clamp tile bounds to crop bounds to avoid out-of-bounds access
-    crop_min_x = u_int32(crop_bounds.p_min[1])
-    crop_min_y = u_int32(crop_bounds.p_min[2])
-    crop_max_x = u_int32(crop_bounds.p_max[1])
-    crop_max_y = u_int32(crop_bounds.p_max[2])
-
-    # Use while loops to avoid iterate() protocol (causes PHI node errors in SPIR-V)
-    py = u_int32(tile.p_min[2])
-    py_max = u_int32(tile.p_max[2])
-     while py <= py_max
-        px = u_int32(tile.p_min[1])
-        px_max = u_int32(tile.p_max[1])
-        while px <= px_max
-            # Only process pixels within crop bounds
-            if px >= crop_min_x && px <= crop_max_x && py >= crop_min_y && py <= crop_max_y
-                pixel = Point2f(px, py)
-                f_idx = get_pixel_index(crop_bounds, pixel)
-                f_xyz[f_idx] += to_XYZ(ft_contrib_sum[linear, tile_col])
-                f_filter_weight_sum[f_idx] += ft_filter_weight_sum[linear, tile_col]
-            end
-            linear += Int32(1)
-            px += Int32(1)
-        end
-        py += Int32(1)
-    end
-    return
-end
-
-@propagate_inbounds function get_tile_index(bounds::Bounds2, p::Point2)
-    j, i = u_int32.((p .- bounds.p_min .+ 1.0f0))
-    ncols = u_int32(inclusive_sides(bounds)[1])
-    return (i - Int32(1)) * ncols + j
-end
-
-# pbrt-v4 compatible single-pixel add_sample
-# The filter weight is pre-computed during camera sample generation via importance sampling.
-# This adds the sample to exactly one pixel (the pixel containing the sample point).
-@propagate_inbounds function add_sample!(
-    tiles::AbstractMatrix{FilmTilePixel}, tile::Bounds2, tile_column::Int32,
-    point::Point2f, spectrum::RGBSpectrum, filter_weight::Float32, sample_weight::Float32=1.0f0,
-)
-    # Get the pixel containing this sample point (use floor_int32 for GPU compatibility)
-    pixel_x = u_int32(floor_int32(point[1]))
-    pixel_y = u_int32(floor_int32(point[2]))
-
-    # Check if pixel is within tile bounds
-    pmin = u_int32.(tile.p_min)
-    pmax = u_int32.(tile.p_max)
-    if pixel_x < pmin[1] || pixel_x > pmax[1] || pixel_y < pmin[2] || pixel_y > pmax[2]
-        return  # Sample falls outside tile bounds
-    end
-
-    # Combined weight = filter_weight * sample_weight (camera ray contribution)
-    w = filter_weight * sample_weight
-
-    # Add to pixel
-    idx = get_tile_index(tile, Point2(pixel_x, pixel_y))
-    contrib_sum = tiles.contrib_sum
-    filter_weight_sum = tiles.filter_weight_sum
-    contrib_sum[idx, tile_column] += spectrum * w
-    filter_weight_sum[idx, tile_column] += w
-end
-
-# Legacy multi-pixel splatting version (kept for backwards compatibility)
-# This distributes a sample to multiple pixels based on filter radius.
-@propagate_inbounds function add_sample_splat!(
-    tiles::AbstractMatrix{FilmTilePixel}, tile::Bounds2, tile_column::Int32, point::Point2f, spectrum::RGBSpectrum,
-    filter_table, filter_radius::Point2f, sample_weight::Float32=1.0f0,
-)
-    # Compute sample's raster bounds.
-    discrete_point = point .- 0.5f0
-    # Compute sample radius around point
-    p0 = u_int32.(ceil.(discrete_point .- filter_radius))
-    p1 = u_int32.(floor.(discrete_point .+ filter_radius)) .+ Int32(1)
-    # Make sure we're inbounds
-    pmin = u_int32.(tile.p_min)
-    pmax = u_int32.(tile.p_max)
-    p0 = max.(p0, max.(pmin, Point2{Int32}(1)))::Point2{Int32}
-    p1 = min.(p1, pmax)::Point2{Int32}
-    # Loop over filter support & add sample to pixel array.
-    contrib_sum = tiles.contrib_sum
-    filter_weight_sum = tiles.filter_weight_sum
-    xrange = p0[1]:p1[1]
-    yrange = p0[2]:p1[2]
-    xn = length(xrange) % Int32
-    yn = length(yrange) % Int32
-
-    # Use while loops to avoid iterate() protocol (causes PHI node errors in SPIR-V)
-    i = Int32(1)
-     while i <= xn
-        j = Int32(1)
-        while j <= yn
-            x = xrange[i]
-            y = yrange[j]
-            w = filter_table[i, j]
-            idx = get_tile_index(tile, Point2(x, y))
-            contrib_sum[idx, tile_column] += spectrum * sample_weight * w
-            filter_weight_sum[idx, tile_column] += w
-            j += Int32(1)
-        end
-        i += Int32(1)
-    end
-end
-
-function set_image!(f::Film, spectrum::Matrix{S}) where {S<:Spectrum}
-    @real_assert size(f.pixels) == size(spectrum)
-    f.pixels.xyz .= to_XYZ.(spectrum)
-    f.pixels.filter_weight_sum .= 1.0f0
-    f.pixels.splat_xyz .= (Point3f(0.0f0),)
-end
 
 function clear!(film::Film)
     # Reset iteration counter for progressive rendering

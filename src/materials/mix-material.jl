@@ -216,27 +216,7 @@ Type-stable dispatch to check if a material is MixMaterial.
     return with_index(is_mix_material, materials, idx)
 end
 
-"""
-    choose_material_dispatch(materials::StaticMultiTypeSet, idx::SetKey, p, wo, uv) -> SetKey
-
-Type-stable dispatch for choosing material from MixMaterial.
-If the material is not MixMaterial, returns the input index unchanged.
-`materials` is used both for material lookup and texture evaluation.
-"""
-@propagate_inbounds function choose_material_dispatch(
-    materials::StaticMultiTypeSet,
-    idx::SetKey,
-    p::Point3f, wo::Vec3f, uv::Point2f
-)::SetKey
-    return with_index(_choose_material_impl, materials, idx, materials, p, wo, uv)
-end
-
-# Helper for choose_material_dispatch - called with concrete material type
-@propagate_inbounds function _choose_material_impl(mat, ctx, p, wo, uv)
-    return is_mix_material(mat) ? choose_material(mat, ctx, p, wo, uv) : SetKey()
-end
-
-# Overload that preserves the index for non-mix materials
+# Helper for resolve_mix_material - called with concrete material type
 @propagate_inbounds function _choose_material_impl(mat, ctx, p, wo, uv, idx::SetKey)
     return is_mix_material(mat) ? choose_material(mat, ctx, p, wo, uv) : idx
 end

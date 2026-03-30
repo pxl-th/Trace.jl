@@ -257,8 +257,14 @@ only the hero wavelength (first) should contribute to the pixel.
 """
 @propagate_inbounds function terminate_secondary_wavelengths(lambda::Wavelengths)
     # Keep first wavelength, zero out others
-    new_pdf = (lambda.pdf[1], 0.0f0, 0.0f0, 0.0f0)
+    # Divide hero PDF by N to account for the N wavelengths now being represented by 1
+    # (matches pbrt-v4: pdf[0] /= NSpectrumSamples)
+    new_pdf = (lambda.pdf[1] / 4f0, 0.0f0, 0.0f0, 0.0f0)
     return Wavelengths(lambda.lambda, new_pdf)
+end
+
+@propagate_inbounds function secondary_terminated(lambda::Wavelengths)
+    return lambda.pdf[2] == 0f0 && lambda.pdf[3] == 0f0 && lambda.pdf[4] == 0f0
 end
 
 """

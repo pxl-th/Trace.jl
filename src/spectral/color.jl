@@ -640,27 +640,6 @@ Remove sRGB gamma curve from an sRGB value to get linear RGB.
 end
 
 """
-    spectral_to_srgb(table::CIEXYZTable, L::SpectralRadiance, lambda::Wavelengths) -> Vec3f
-
-Convert spectral radiance to sRGB:
-1. Convert to XYZ using color matching functions
-2. Transform XYZ to linear sRGB using standard matrix (D65 white point)
-3. Apply sRGB gamma curve
-
-This matches pbrt-v4's RGBFilm pipeline. Light sources use `uplift_rgb_illuminant`
-which multiplies by D65 illuminant spectrum, so no chromatic adaptation is needed.
-"""
-@propagate_inbounds function spectral_to_srgb(table::CIEXYZTable, L::SpectralRadiance, lambda::Wavelengths)
-    xyz = spectral_to_xyz(table, L, lambda)
-    rgb = max(0f0, xyz_to_linear_srgb(xyz))
-    return Vec3f(
-        linear_to_srgb_gamma(rgb[1]),
-        linear_to_srgb_gamma(rgb[2]),
-        linear_to_srgb_gamma(rgb[3])
-    )
-end
-
-"""
     spectral_to_linear_rgb(table::CIEXYZTable, L::SpectralRadiance, lambda::Wavelengths) -> Vec3f
 
 Convert spectral radiance to linear RGB (no gamma):

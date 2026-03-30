@@ -175,7 +175,8 @@ end
     max_depth::Int32,
     do_regularize::Bool,
     pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
-    camera, samples_per_pixel::Int32
+    camera, samples_per_pixel::Int32,
+    rr_depth::Int32
 )
     # Direct lookup - all items have same type, so mat_array is correct
     mat = mat_array[work.material_idx.vec_idx]
@@ -185,7 +186,8 @@ end
         work, mat, materials, rgb2spec_table,
         max_depth, do_regularize,
         pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
-        camera, samples_per_pixel
+        camera, samples_per_pixel,
+        rr_depth
     )
 end
 
@@ -208,7 +210,8 @@ Uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
     pixel_samples_indirect_rr,
     # Camera for texture filtering (pbrt-v4 style)
     camera,
-    samples_per_pixel::Int32
+    samples_per_pixel::Int32,
+    rr_depth::Int32
 )
     new_depth = work.depth + Int32(1)
     new_depth >= max_depth && return
@@ -247,7 +250,7 @@ Uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
         end
 
         should_continue, final_beta = russian_roulette_spectral(
-            new_beta, new_depth, rr_sample
+            new_beta, work.r_u, new_eta_scale, new_depth, rr_sample, rr_depth
         )
 
         if should_continue
@@ -263,10 +266,17 @@ Uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
                 time = 0f0
             )
 
+            # Terminate secondary wavelengths for dispersive refraction (pbrt-v4)
+            new_lambda = if sample.secondary_terminated
+                terminate_secondary_wavelengths(work.lambda)
+            else
+                work.lambda
+            end
+
             ray_item = VPRayWorkItem(
                 new_ray,
                 new_depth,
-                work.lambda,
+                new_lambda,
                 work.pixel_index,
                 final_beta,
                 work.r_u,
@@ -287,38 +297,6 @@ end
 
 # Medium helper - returns current medium for regular materials
 _get_medium_for_type(mat, wi, n, current) = current
-
-"""
-DEBUG helper: Copy items from multi_queue to standard material_queue for testing.
-"""
-function _copy_multi_to_standard!(backend, state::VolPathState, multi_queue::MultiMaterialQueue{N}) where {N}
-    # Reset the standard material queue
-    empty!(state.material_queue)
-
-    # Copy items from all per-type queues to standard queue
-    total = 0
-    for type_idx in 1:N
-        type_queue = multi_queue.queues[type_idx]
-        n_type = length(type_queue)
-        if n_type > 0
-            # Copy items
-            src_items = Array(type_queue.items)
-            dst_items = Array(state.material_queue.items)
-            for i in 1:n_type
-                dst_items[total + i] = src_items[i]
-            end
-            copyto!(state.material_queue.items, dst_items)
-            total += n_type
-        end
-    end
-
-    # Set the size
-    size_arr = Array(state.material_queue.size)
-    size_arr[1] = Int32(total)
-    copyto!(state.material_queue.size, size_arr)
-
-    return nothing
-end
 
 # ============================================================================
 # Coherent Processing Entry Points
@@ -387,6 +365,7 @@ function vp_evaluate_materials_coherent!(
             regularize,
             pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
             camera, samples_per_pixel,
+            state.rr_depth,
         )
     end
 end
@@ -497,7 +476,8 @@ function vp_evaluate_materials_sorted!(
         state.rgb2spec_table,
         state.max_depth, regularize,
         pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
-        camera, samples_per_pixel;
+        camera, samples_per_pixel,
+        state.rr_depth;
         ndrange=Int(n_total)
     )
     return nothing
@@ -556,7 +536,8 @@ end
     @Const(max_depth::Int32),
     @Const(do_regularize::Bool),
     @Const(pixel_samples_indirect_uc), @Const(pixel_samples_indirect_u), @Const(pixel_samples_indirect_rr),
-    @Const(camera), @Const(samples_per_pixel::Int32)
+    @Const(camera), @Const(samples_per_pixel::Int32),
+    @Const(rr_depth::Int32)
 )
     idx = @index(Global)
 
@@ -567,7 +548,8 @@ end
             work, materials, rgb2spec_table, max_depth,
             do_regularize,
             pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
-            camera, samples_per_pixel
+            camera, samples_per_pixel,
+            rr_depth
         )
     end
 end

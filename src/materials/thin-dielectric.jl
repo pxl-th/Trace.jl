@@ -42,13 +42,17 @@ window = ThinDielectric(eta=1.5)
 film = ThinDielectric(eta=1.4)
 ```
 """
-struct ThinDielectricMaterial <: Material
-    eta::Float32
+struct ThinDielectricMaterial{E} <: Material
+    eta::E  # Float32 or PiecewiseLinearSpectrum
 end
 
 # Keyword constructor
-function ThinDielectricMaterial(; eta::Real=1.5f0)
-    ThinDielectricMaterial(Float32(eta))
+function ThinDielectricMaterial(; eta=1.5f0)
+    if eta isa PiecewiseLinearSpectrum
+        ThinDielectricMaterial(eta)
+    else
+        ThinDielectricMaterial(Float32(eta))
+    end
 end
 
 # Mark as non-emissive

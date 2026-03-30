@@ -49,31 +49,6 @@ function generate_ray(
     )::Tuple{Ray,Float32} where C<:Camera
 end
 
-"""
-Same as `generate_ray`, but also computes rays for pixels shifted one pixel
-in x & y directions on the film plane.
-Useful for anti-aliasing textures.
-"""
-@inline function generate_ray_differential(
-        camera::C, sample::CameraSample,
-    )::Tuple{RayDifferentials,Float32} where C<:Camera
-
-    ray, wt = generate_ray(camera, sample)
-    shifted_x = CameraSample(
-        sample.film + Point2f(1f0, 0f0), sample.lens, sample.time,
-    )
-    shifted_y = CameraSample(
-        sample.film + Point2f(0f0, 1f0), sample.lens, sample.time,
-    )
-    ray_x, wt_x = generate_ray(camera, shifted_x)
-    ray_y, wt_y = generate_ray(camera, shifted_y)
-    rayd = RayDifferentials(
-        ray.o, ray.d, ray.t_max, ray.time,
-        true, ray_x.o, ray_y.o, ray_x.d, ray_y.d
-    )
-    rayd, wt
-end
-
 include("perspective.jl")
 include("matrix.jl")
 

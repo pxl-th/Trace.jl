@@ -62,18 +62,3 @@ function sample_li(a::AmbientLight, i::Interaction, ::Point2f, ::AbstractScene)
     inew = Interaction()
     radiance, Vec3f(normalize(i.p)), pdf, VisibilityTester(inew, inew)
 end
-
-function sample_le(
-        a::AmbientLight, u1::Point2f, ::Point2f, ::Float32,
-    )::Tuple{RGBSpectrum,Ray,Normal3f,Float32,Float32}
-    ray = Ray(o=Point3f(0.0f0), d=uniform_sample_sphere(u1))
-    @real_assert norm(ray.d) ≈ 1.0f0
-    light_normal = Normal3f(ray.d)
-    pdf_pos = 1.0f0
-    pdf_dir = uniform_sphere_pdf()
-    return a.scale * a.i, ray, light_normal, pdf_pos, pdf_dir
-end
-
-@propagate_inbounds function power(p::AmbientLight)
-    4f0 * π * π * p.scale * p.i
-end

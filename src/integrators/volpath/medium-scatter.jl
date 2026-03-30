@@ -191,7 +191,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
             new_r_l,
             work.p,           # prev_intr_p
             work.wo,          # prev_intr_n (use wo as pseudo-normal for MIS)
-            1f0,              # eta_scale (no refraction in medium)
+            work.eta_scale,   # eta_scale (carry through from path state)
             false,            # specular_bounce
             true,             # any_non_specular_bounces
             work.medium_idx   # Stay in same medium

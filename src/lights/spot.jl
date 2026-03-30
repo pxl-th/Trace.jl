@@ -142,23 +142,3 @@ function falloff(s::SpotLight, w::Vec3f)::Float32
     δ^4
 end
 
-"""
-Total power emitted by the spotlight.
-"""
-@propagate_inbounds function power(s::SpotLight)
-    # pbrt-v4: scale * Iemit * 2π * ((1 - cosFalloffStart) + (cosFalloffStart - cosFalloffEnd) / 2)
-    s.scale * s.i * 2f0 * π * (1f0 - 0.5f0 * (s.cos_falloff_start + s.cos_total_width))
-end
-
-function sample_le(
-        s::SpotLight, u1::Point2f, ::Point2f, ::Float32,
-    )::Tuple{RGBSpectrum,Ray,Normal3f,Float32,Float32}
-
-    w = s.light_to_world(uniform_sample_cone(u1, s.cos_total_width))
-    ray = Ray(o=s.position, d=w)
-    light_normal = Normal3f(ray.d)
-    pdf_pos = 1f0
-    pdf_dir = uniform_cone_pdf(s.cos_total_width)
-    # Use scale * i (matching pbrt-v4)
-    s.scale * s.i * falloff(s, ray.d), ray, light_normal, pdf_pos, pdf_dir
-end

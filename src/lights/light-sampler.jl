@@ -539,30 +539,3 @@ GPU-compatible light sampling using pre-computed alias table arrays.
     end
 end
 
-# ============================================================================
-# Light Sampler Factory
-# ============================================================================
-
-"""
-    create_light_sampler(lights::MultiTypeSet; method::Symbol=:power, scene_radius::Float32=10f0) -> LightSampler
-
-Create a light sampler for the given lights.
-
-# Arguments
-- `lights::MultiTypeSet`: Collection of light sources
-- `method::Symbol`: Sampling method (`:uniform` or `:power`)
-- `scene_radius::Float32`: Scene bounding sphere radius (for power-weighted sampling of infinite lights)
-
-# Methods
-- `:uniform`: Uniform random selection (baseline)
-- `:power`: Power-weighted selection (recommended for varying light intensities)
-"""
-function create_light_sampler(lights::Raycore.MultiTypeSet; method::Symbol=:power, scene_radius::Float32=10f0)
-    if method == :uniform
-        return UniformLightSampler(lights)
-    elseif method == :power
-        return PowerLightSampler(lights; scene_radius=scene_radius)
-    else
-        error("Unknown light sampler method: $method")
-    end
-end

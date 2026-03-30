@@ -90,8 +90,6 @@ function PerspectiveCamera(eyepos, lookat, film; up=Vec3f(0, 1, 0), fov=55)
     )
 end
 
-@propagate_inbounds get_film(c::PerspectiveCamera)::Film  = c.core.core.film
-
 @propagate_inbounds function generate_ray(
         camera::PerspectiveCamera, sample::CameraSample,
     )::Tuple{Ray,Float32}
