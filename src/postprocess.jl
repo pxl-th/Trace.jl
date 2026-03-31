@@ -77,7 +77,7 @@ end
 """
 Simple Reinhard tonemapping: L / (1 + L)
 """
-@propagate_inbounds function _tonemap_reinhard(r::Float32, g::Float32, b::Float32)
+@propagate_inbounds function tonemap_reinhard(r::Float32, g::Float32, b::Float32)
     lum = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
     scale = ifelse(lum > 0f0, 1f0 / (1f0 + lum), 1f0)
     clamp(r * scale, 0f0, 1f0), clamp(g * scale, 0f0, 1f0), clamp(b * scale, 0f0, 1f0)
@@ -86,7 +86,7 @@ end
 """
 Extended Reinhard with white point control.
 """
-@propagate_inbounds function _tonemap_reinhard_extended(r::Float32, g::Float32, b::Float32, Lwhite::Float32)
+@propagate_inbounds function tonemap_reinhard_extended(r::Float32, g::Float32, b::Float32, Lwhite::Float32)
     lum = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
     Lwhite2 = Lwhite * Lwhite
     scale = ifelse(lum > 0f0, (1f0 + lum / Lwhite2) / (1f0 + lum), 1f0)
@@ -97,7 +97,7 @@ end
 ACES filmic approximation (Narkowicz).
 Industry-standard filmic curve used in games and film.
 """
-@propagate_inbounds function _tonemap_aces(r::Float32, g::Float32, b::Float32)
+@propagate_inbounds function tonemap_aces(r::Float32, g::Float32, b::Float32)
     a = 2.51f0
     b_c = 0.03f0
     c = 2.43f0
@@ -113,7 +113,7 @@ end
 """
 Uncharted 2 filmic curve helper.
 """
-@propagate_inbounds function _uncharted2_partial(x::Float32)
+@propagate_inbounds function uncharted2_partial(x::Float32)
     A = 0.15f0
     B = 0.50f0
     C = 0.10f0
@@ -127,15 +127,15 @@ end
 Uncharted 2 filmic tonemapping.
 Good for high-contrast scenes, preserves detail in shadows.
 """
-@propagate_inbounds function _tonemap_uncharted2(r::Float32, g::Float32, b::Float32)
+@propagate_inbounds function tonemap_uncharted2(r::Float32, g::Float32, b::Float32)
     W = 11.2f0
     exposure_bias = 2.0f0
 
-    r_out = _uncharted2_partial(r * exposure_bias)
-    g_out = _uncharted2_partial(g * exposure_bias)
-    b_out = _uncharted2_partial(b * exposure_bias)
+    r_out = uncharted2_partial(r * exposure_bias)
+    g_out = uncharted2_partial(g * exposure_bias)
+    b_out = uncharted2_partial(b * exposure_bias)
 
-    white_scale = 1f0 / _uncharted2_partial(W)
+    white_scale = 1f0 / uncharted2_partial(W)
 
     clamp(r_out * white_scale, 0f0, 1f0),
     clamp(g_out * white_scale, 0f0, 1f0),
@@ -146,7 +146,7 @@ end
 Filmic tonemapping (Hejl-Dawson).
 Alternative filmic curve with good highlight rolloff.
 """
-@propagate_inbounds function _tonemap_filmic(r::Float32, g::Float32, b::Float32)
+@propagate_inbounds function tonemap_filmic(r::Float32, g::Float32, b::Float32)
     # Attempt to preserve some color saturation
     function filmic_channel(x::Float32)
         x = max(0f0, x - 0.004f0)
@@ -167,17 +167,17 @@ const TONEMAP_ACES = UInt8(3)
 const TONEMAP_UNCHARTED2 = UInt8(4)
 const TONEMAP_FILMIC = UInt8(5)
 
-@propagate_inbounds function _apply_tonemap(r::Float32, g::Float32, b::Float32, mode::UInt8, wp::Float32)
+@propagate_inbounds function apply_tonemap(r::Float32, g::Float32, b::Float32, mode::UInt8, wp::Float32)
     if mode == TONEMAP_REINHARD
-        return _tonemap_reinhard(r, g, b)
+        return tonemap_reinhard(r, g, b)
     elseif mode == TONEMAP_REINHARD_EXT
-        return _tonemap_reinhard_extended(r, g, b, wp)
+        return tonemap_reinhard_extended(r, g, b, wp)
     elseif mode == TONEMAP_ACES
-        return _tonemap_aces(r, g, b)
+        return tonemap_aces(r, g, b)
     elseif mode == TONEMAP_UNCHARTED2
-        return _tonemap_uncharted2(r, g, b)
+        return tonemap_uncharted2(r, g, b)
     elseif mode == TONEMAP_FILMIC
-        return _tonemap_filmic(r, g, b)
+        return tonemap_filmic(r, g, b)
     else
         # Linear clamp
         return clamp(r, 0f0, 1f0), clamp(g, 0f0, 1f0), clamp(b, 0f0, 1f0)
@@ -210,7 +210,7 @@ end
         r = r * imaging_ratio
         g = g * imaging_ratio
         b = b * imaging_ratio
-        r, g, b = _apply_tonemap(r, g, b, tonemap_mode, white_point)
+        r, g, b = apply_tonemap(r, g, b, tonemap_mode, white_point)
         if apply_gamma
             r = r^inv_gamma
             g = g^inv_gamma

@@ -3,7 +3,7 @@ using LinearAlgebra
 using Hikari
 
 function render()
-    glass = Hikari.GlassMaterial(
+    glass = Hikari.Dielectric(
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
         Hikari.ConstantTexture(0f0),
@@ -11,11 +11,9 @@ function render()
         Hikari.ConstantTexture(1.2f0),
         true,
     )
-    plastic = Hikari.PlasticMaterial(
-        Hikari.ConstantTexture(Hikari.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
-        Hikari.ConstantTexture(Hikari.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-        Hikari.ConstantTexture(0.010408001f0),
-        true,
+    plastic = Hikari.Plastic(
+        color=(0.64, 0.64, 0.64),
+        roughness=0.01,
     )
 
     model = "./scenes/models/caustic-glass.ply"

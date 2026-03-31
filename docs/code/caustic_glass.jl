@@ -5,7 +5,7 @@ using RayMakie, GLMakie
 
 model = load(joinpath(@__DIR__, "..", "..", "src", "assets", "models", "caustic-glass.ply"))
 
-glass = Hikari.GlassMaterial(
+glass = Hikari.Dielectric(
     Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
     Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
     Hikari.ConstantTexture(0f0),
@@ -13,11 +13,9 @@ glass = Hikari.GlassMaterial(
     Hikari.ConstantTexture(1.25f0),
     true,
 )
-plastic = Hikari.PlasticMaterial(
-    Hikari.ConstantTexture(Hikari.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
-    Hikari.ConstantTexture(Hikari.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-    Hikari.ConstantTexture(0.010408001f0),
-    true,
+plastic = Hikari.Plastic(
+    color=(0.64, 0.64, 0.64),
+    roughness=0.01,
 )
 
 scene = Scene(size=(1024, 1024); lights=[

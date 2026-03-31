@@ -150,10 +150,10 @@ function vp_trace_shadow_rays!(state::VolPathState, accel, media_interfaces, med
 end
 
 # Scene adaptation dispatch — overridden for HWAdaptedAccel in hikari_integration.jl
-_adapt_scene_for_render(backend, scene, ::VolPath) = Adapt.adapt(backend, scene)
+adapt_scene_for_render(backend, scene, ::VolPath) = Adapt.adapt(backend, scene)
 
 # Camera medium detection dispatch — overridden for HWAdaptedAccel in hikari_integration.jl
-_detect_initial_medium(backend, accel, media_interfaces, camera_pos, ::VolPath) =
+detect_initial_medium(backend, accel, media_interfaces, camera_pos, ::VolPath) =
     detect_camera_medium(backend, accel, media_interfaces, camera_pos)
 
 """
@@ -354,7 +354,7 @@ function vp_generate_ray_samples!(
         sample_idx,
         depth,
         sobol_rng;  # Pass whole SobolRNG, Adapt handles conversion
-        ndrange=_gpu_ndrange(backend, ray_queue.size)
+        ndrange=gpu_ndrange(backend, ray_queue.size)
     )
 end
 
@@ -504,7 +504,7 @@ function render!(
     if cached !== nothing && cached[1] === scene_id
         adapted = cached[2]
     else
-        adapted = _adapt_scene_for_render(backend, scene, vp)
+        adapted = adapt_scene_for_render(backend, scene, vp)
         vp._adapted_scene_cache = (scene_id, adapted)
     end
     accel = adapted.accel
@@ -559,7 +559,7 @@ function render!(
     if cached_medium !== nothing && cached_medium[1] === camera_pos
         initial_medium = cached_medium[2]
     else
-        initial_medium = _detect_initial_medium(backend, accel, media_interfaces, camera_pos, vp)
+        initial_medium = detect_initial_medium(backend, accel, media_interfaces, camera_pos, vp)
         vp._initial_medium_cache = (camera_pos, initial_medium)
     end
 
@@ -716,5 +716,6 @@ function (vp::VolPath)(
         render!(vp, scene, film, camera)
     end
 
+    postprocess!(film)
     return film.postprocess
 end

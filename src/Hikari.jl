@@ -40,19 +40,12 @@ import Raycore: SetKey, MultiTypeSet, StaticMultiTypeSet, with_index, is_invalid
 abstract type Spectrum end
 abstract type Light end
 abstract type Material end
-abstract type BxDF end
 abstract type Integrator end
 abstract type Medium end
 
 # Default no-op close/clear for integrators without cached state
 Base.close(::Integrator) = nothing
 clear!(::Integrator) = nothing
-
-const Radiance = UInt8(1)
-const Importance = UInt8(2)
-
-struct Reflect end
-struct Transmit end
 
 const DO_ASSERTS = false
 macro real_assert(expr, msg="")
@@ -84,23 +77,26 @@ include("textures/mapping.jl")
 include("textures/basic.jl")
 include("textures/texture-ref.jl")
 include("textures/environment_map.jl")
-include("materials/uber-material.jl")
-include("reflection/Reflection.jl")
-include("materials/material.jl")
-include("materials/coated-diffuse.jl")
-include("materials/mix-material.jl")
-include("materials/thin-dielectric.jl")
-include("materials/diffuse-transmission.jl")
-include("materials/coated-conductor.jl")
-include("materials/coated-diffuse-transmission.jl")
-include("materials/emissive.jl")
 
 # Spectral rendering support
-# spectral.jl, piecewise-linear.jl, metal-spectra.jl included above (before textures)
 include("spectral/color.jl")
 include("spectral/uplift.jl")
-include("materials/spectral-eval.jl")
-# Sobol sampler (needs mix_bits from spectral-eval.jl)
+
+# Materials: shared math first, then each material, then dispatch
+include("materials/common.jl")
+include("materials/material.jl")
+include("materials/diffuse.jl")
+include("materials/dielectric.jl")
+include("materials/conductor.jl")
+include("materials/coated-diffuse.jl")
+include("materials/mix-material.jl")
+include("materials/coated-conductor.jl")
+include("materials/coated-diffuse-transmission.jl")
+include("materials/diffuse-transmission.jl")
+include("materials/emissive.jl")
+include("materials/dispatch.jl")
+
+# Sobol sampler (needs mix_bits from materials/common.jl)
 include("sampler/sobol_matrices.jl")
 include("sampler/sobol.jl")
 # Stratified sampler (needs murmur_hash_64a from spectral-eval.jl, sobol functions from sobol.jl)
@@ -146,6 +142,11 @@ include("postprocess.jl")
 
 # Denoising
 include("denoise.jl")
+
+# PBRT file parser
+include("pbrt/tokenizer.jl")
+include("pbrt/parser.jl")
+include("pbrt/scene_builder.jl")
 
 # include("model_loader.jl")
 

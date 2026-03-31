@@ -35,8 +35,8 @@ using GeometryBasics: decompose, decompose_normals, TriangleFace
 
 const Mat4f = SMatrix{4, 4, Float32, 16}
 
-# Override Scene's _default_accel for LavaBackend + hw_accel=true
-_default_accel(::LavaBackend, ::Val{true}) = HWTLAS()
+# Override Scene's default_accel for LavaBackend + hw_accel=true
+default_accel(::LavaBackend, ::Val{true}) = HWTLAS()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HWTLAS — Hardware-accelerated TLAS (no CPU BVH)
@@ -291,7 +291,7 @@ function Base.getproperty(hwtlas::HWTLAS, s::Symbol)
 end
 
 # ── Indirect dispatch for WorkQueue foreach (no CPU readback) ──
-_gpu_ndrange(::LavaBackend, size_buf::LavaArray) = size_buf
+gpu_ndrange(::LavaBackend, size_buf::LavaArray) = size_buf
 
 # ── HWAdaptedAccel — GPU-adapted form of HWTLAS ──
 
@@ -311,7 +311,7 @@ end
 
 # ── fill_aux_buffers! for HWTLAS: trace primary rays via HW RT for depth ──
 
-@kernel inbounds = true function _hw_generate_primary_rays_kernel!(
+@kernel inbounds = true function hw_generate_primary_rays_kernel!(
     rays, @Const(camera), @Const(crop_p_min),
     @Const(width::Int32), @Const(height::Int32),
 )
@@ -335,7 +335,7 @@ end
     end
 end
 
-@kernel inbounds = true function _hw_extract_depth_kernel!(
+@kernel inbounds = true function hw_extract_depth_kernel!(
     depth, normal, albedo,
     @Const(results), @Const(rays),
     @Const(miss_depth::Float32), @Const(n::Int32),
@@ -375,7 +375,7 @@ function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera; h
     results = hwtlas.depth_result_buf
 
     # Generate primary rays
-    _hw_generate_primary_rays_kernel!(backend)(
+    hw_generate_primary_rays_kernel!(backend)(
         rays, camera, film.crop_bounds.p_min,
         Int32(w), Int32(h);
         ndrange=n
@@ -385,7 +385,7 @@ function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera; h
     Lava.trace_closest_hits!(results, rays, hw, n)
 
     # Extract depth from results
-    _hw_extract_depth_kernel!(backend)(
+    hw_extract_depth_kernel!(backend)(
         film.depth, film.normal, film.albedo,
         results, rays, miss_depth, Int32(n);
         ndrange=n
@@ -435,7 +435,7 @@ end
 
 # ── Ray Extraction Kernel ──
 
-@kernel function _extract_rays_kernel!(ray_buf, @Const(queue_items), @Const(queue_size))
+@kernel function extract_rays_kernel!(ray_buf, @Const(queue_items), @Const(queue_size))
     i = @index(Global)
     if i <= queue_size[1]
         work = queue_items[i]
@@ -456,7 +456,7 @@ end
 # Camera medium detection: use bounding box check (no CPU BVH needed)
 # For now, assume camera is outside all media (correct for most scenes).
 # A proper implementation would do a single HW RT trace on GPU.
-function _detect_initial_medium(backend, accel::HWAdaptedAccel, mi, pos, vp::VolPath)
+function detect_initial_medium(backend, accel::HWAdaptedAccel, mi, pos, vp::VolPath)
     return Raycore.SetKey()  # No medium (camera outside all geometry)
 end
 
@@ -478,7 +478,7 @@ function vp_trace_rays!(state::VolPathState, accel::HWAdaptedAccel, media_interf
     result_buf = hwtlas.primary_result_buf
 
     # Phase 1: Extract rays (indirect dispatch — reads n_rays from queue.size on GPU)
-    extract_kernel! = _extract_rays_kernel!(backend, 256)
+    extract_kernel! = extract_rays_kernel!(backend, 256)
     extract_kernel!(ray_buf, input_queue.items, input_queue.size; ndrange=input_queue.size)
     # No vk_flush!() — stays in same command buffer
 
@@ -531,7 +531,7 @@ struct ShadowIterState
     visible::UInt32
 end
 
-@kernel inbounds=true function _init_shadow_states_kernel!(
+@kernel inbounds=true function init_shadow_states_kernel!(
     states, @Const(queue_items), @Const(queue_size), @Const(n::Int32)
 )
     i = @index(Global)
@@ -546,7 +546,7 @@ end
     end
 end
 
-@kernel inbounds=true function _extract_shadow_rays2_kernel!(
+@kernel inbounds=true function extract_shadow_rays2_kernel!(
     ray_buf, @Const(states), @Const(n::Int32)
 )
     i = @index(Global)
@@ -565,7 +565,7 @@ end
     end
 end
 
-@kernel inbounds=true function _process_shadow_round_kernel!(
+@kernel inbounds=true function process_shadow_round_kernel!(
     states, @Const(result_buf), @Const(tri_gpu), @Const(off_gpu),
     media_interfaces, media, materials, rgb2spec_table,
     @Const(n::Int32)
@@ -692,7 +692,7 @@ end
     end
 end
 
-@kernel inbounds=true function _count_active_shadows_kernel!(
+@kernel inbounds=true function count_active_shadows_kernel!(
     counter, @Const(states), @Const(n::Int32)
 )
     i = @index(Global)
@@ -703,7 +703,7 @@ end
     end
 end
 
-@kernel inbounds=true function _finalize_shadow_kernel!(
+@kernel inbounds=true function finalize_shadow_kernel!(
     states, pixel_L, @Const(n::Int32)
 )
     i = @index(Global)
@@ -747,13 +747,13 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
     n_rays_gpu = shadow_queue.size  # GPU-resident ray count
 
     # Initialize shadow ray iteration state (indirect — reads count from GPU)
-    init_k! = _init_shadow_states_kernel!(backend, 256)
+    init_k! = init_shadow_states_kernel!(backend, 256)
     init_k!(states, shadow_queue.items, shadow_queue.size, Int32(cap); ndrange=n_rays_gpu)
     # No flush — stays in command buffer
 
-    extract_k! = _extract_shadow_rays2_kernel!(backend, 256)
-    process_k! = _process_shadow_round_kernel!(backend, 256)
-    count_k! = _count_active_shadows_kernel!(backend, 256)
+    extract_k! = extract_shadow_rays2_kernel!(backend, 256)
+    process_k! = process_shadow_round_kernel!(backend, 256)
+    count_k! = count_active_shadows_kernel!(backend, 256)
 
     # Round 1: full dispatch (all rays active initially)
     extract_k!(ray_buf, states, Int32(cap); ndrange=n_rays_gpu)
@@ -779,7 +779,7 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
     end
 
     # Finalize — accumulate completed visible rays to pixel_L
-    finalize_k! = _finalize_shadow_kernel!(backend, 256)
+    finalize_k! = finalize_shadow_kernel!(backend, 256)
     finalize_k!(states, state.pixel_L, Int32(cap); ndrange=n_rays_gpu)
 
     return nothing
@@ -804,7 +804,7 @@ Same as `_hw_raygen` but receives extra args for the any-hit shader's BDA access
 The extra args aren't used by raygen directly — they're in the shared BDA buffer
 so the any-hit shader can load them via the same push constant.
 """
-function _hw_raygen_shadow(rays::Ptr{RTRay}, results::Ptr{RTHitResult},
+function hw_raygen_shadow(rays::Ptr{RTRay}, results::Ptr{RTHitResult},
                            tri_gpu, off_gpu, media_interfaces)
     lid = lava_rt_launch_id_x()
 
@@ -847,10 +847,10 @@ If the hit surface is a medium transition (glass/dielectric boundary),
 calls OpIgnoreIntersectionKHR to skip it and continue traversal.
 Opaque surfaces are accepted normally (closest-hit shader runs).
 
-BDA arg buffer layout matches `_hw_raygen_shadow`:
+BDA arg buffer layout matches `hw_raygen_shadow`:
   (rays, results, tri_gpu, off_gpu, media_interfaces)
 """
-function _hw_anyhit_shadow(rays::Ptr{RTRay}, results::Ptr{RTHitResult},
+function hw_anyhit_shadow(rays::Ptr{RTRay}, results::Ptr{RTHitResult},
                            tri_gpu, off_gpu, media_interfaces)
     prim_id = lava_rt_primitive_id()
     inst_idx = lava_rt_instance_custom_index()
@@ -875,7 +875,7 @@ end
     _ensure_anyhit_pipeline!(hwtlas::HWTLAS)
 
 Lazily create the any-hit RT pipeline for shadow rays.
-Uses `_hw_raygen_shadow` + `_hw_anyhit_shadow` with the concrete
+Uses `hw_raygen_shadow` + `hw_anyhit_shadow` with the concrete
 Triangle and MediumInterfaceIdx types from the scene's triangle data.
 """
 function _ensure_anyhit_pipeline!(hwtlas::HWTLAS)
@@ -883,6 +883,6 @@ function _ensure_anyhit_pipeline!(hwtlas::HWTLAS)
     hw === nothing && error("HWTLAS not synced — call sync! first")
     hw.anyhit_pipeline !== nothing && return hw
 
-    set_anyhit_pipeline!(hw, _hw_anyhit_shadow, _hw_raygen_shadow)
+    set_anyhit_pipeline!(hw, hw_anyhit_shadow, hw_raygen_shadow)
     return hw
 end

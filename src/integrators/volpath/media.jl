@@ -647,12 +647,12 @@ Returns (segment, new_iter, valid) where valid=false means exhausted.
 
     else
         # DDA mode - voxel traversal
-        return _ray_majorant_next_dda(iter, media)
+        return ray_majorant_next_dda(iter, media)
     end
 end
 
 """DDA next implementation (separated for clarity)"""
-@inline @propagate_inbounds function _ray_majorant_next_dda(iter::RayMajorantIterator{M}, media) where {M}
+@inline @propagate_inbounds function ray_majorant_next_dda(iter::RayMajorantIterator{M}, media) where {M}
     t_min = iter.t_min
     t_max = iter.t_max
 
@@ -1251,7 +1251,7 @@ Returns default RGBSpectrum(1.0) if σ_a_grid is nothing.
 """
 @propagate_inbounds function sample_σ_a(σ_a_grid, medium::RGBGridMedium, p_norm::Point3f)::RGBSpectrum
     isnothing(σ_a_grid) && return RGBSpectrum(1f0)
-    return _sample_rgb_grid(σ_a_grid, medium.grid_res, p_norm)
+    return sample_rgb_grid(σ_a_grid, medium.grid_res, p_norm)
 end
 
 """
@@ -1260,7 +1260,7 @@ Returns default RGBSpectrum(1.0) if σ_s_grid is nothing.
 """
 @propagate_inbounds function sample_σ_s(σ_s_grid, medium::RGBGridMedium, p_norm::Point3f)::RGBSpectrum
     isnothing(σ_s_grid) && return RGBSpectrum(1f0)
-    return _sample_rgb_grid(σ_s_grid, medium.grid_res, p_norm)
+    return sample_rgb_grid(σ_s_grid, medium.grid_res, p_norm)
 end
 
 """
@@ -1269,14 +1269,14 @@ Returns RGBSpectrum(0.0) if Le_grid is nothing.
 """
 @propagate_inbounds function sample_Le(Le_grid, medium::RGBGridMedium, p_norm::Point3f)::RGBSpectrum
     isnothing(Le_grid) && return RGBSpectrum(0f0)
-    return _sample_rgb_grid(Le_grid, medium.grid_res, p_norm)
+    return sample_rgb_grid(Le_grid, medium.grid_res, p_norm)
 end
 
 """
 Trilinear interpolation for RGB grid.
 p_norm is in [0,1]³ normalized coordinates within bounds.
 """
-@propagate_inbounds function _sample_rgb_grid(
+@propagate_inbounds function sample_rgb_grid(
     grid::AbstractArray{RGBSpectrum,3},
     grid_res::Vec{3, Int32},
     p_norm::Point3f
@@ -1766,7 +1766,7 @@ end
 # - "A Practical Model for Subsurface Light Transport" (Jensen et al., SIGGRAPH 2001)
 # - "Acquiring Scattering Properties of Participating Media by Dilution" (SIGGRAPH 2006)
 
-const _MEDIUM_PRESETS = Dict{String, NamedTuple{(:σ_s, :σ_a), Tuple{NTuple{3,Float32}, NTuple{3,Float32}}}}(
+const MEDIUM_PRESETS = Dict{String, NamedTuple{(:σ_s, :σ_a), Tuple{NTuple{3,Float32}, NTuple{3,Float32}}}}(
     # === Milk and dairy products ===
     "Wholemilk" => (σ_s=(2.55f0, 3.21f0, 3.77f0), σ_a=(0.0011f0, 0.0024f0, 0.014f0)),
     "Skimmilk" => (σ_s=(0.70f0, 1.22f0, 1.90f0), σ_a=(0.0014f0, 0.0025f0, 0.0142f0)),
@@ -1849,8 +1849,8 @@ Available presets include:
 - Water: "PacificOceanSurfaceWater"
 """
 function get_medium_preset(name::String)
-    haskey(_MEDIUM_PRESETS, name) || error("Unknown medium preset: $name. Available: $(keys(_MEDIUM_PRESETS))")
-    return _MEDIUM_PRESETS[name]
+    haskey(MEDIUM_PRESETS, name) || error("Unknown medium preset: $name. Available: $(keys(MEDIUM_PRESETS))")
+    return MEDIUM_PRESETS[name]
 end
 
 # ============================================================================
@@ -1871,7 +1871,7 @@ Milk(g=0.8)              # Forward-scattering milk
 ```
 """
 function Milk(; scale::Real=1f0, g::Real=0f0)
-    props = _MEDIUM_PRESETS["Wholemilk"]
+    props = MEDIUM_PRESETS["Wholemilk"]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))
@@ -1955,7 +1955,7 @@ function Juice(name::Symbol; scale::Real=1f0, g::Real=0f0)
     else
         error("Unknown juice type: $name. Available: :apple, :cranberry, :grape, :grapefruit")
     end
-    props = _MEDIUM_PRESETS[preset_name]
+    props = MEDIUM_PRESETS[preset_name]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))
@@ -1985,7 +1985,7 @@ function Wine(name::Symbol; scale::Real=1f0, g::Real=0f0)
     else
         error("Unknown wine type: $name. Available: :chardonnay, :zinfandel, :merlot")
     end
-    props = _MEDIUM_PRESETS[preset_name]
+    props = MEDIUM_PRESETS[preset_name]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))
@@ -2003,7 +2003,7 @@ Coffee(scale=0.3)         # Diluted coffee (americano-like)
 ```
 """
 function Coffee(; scale::Real=1f0, g::Real=0f0)
-    props = _MEDIUM_PRESETS["Espresso"]
+    props = MEDIUM_PRESETS["Espresso"]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))

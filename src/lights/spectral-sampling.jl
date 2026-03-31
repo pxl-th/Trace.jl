@@ -178,13 +178,15 @@ end
     return map_pdf / (4f0 * Float32(π))
 end
 
+@propagate_inbounds pdf_li_spectral(::AmbientLight, ::Point3f, ::Vec3f) = 1f0 / (4f0 * Float32(π))
+
 @propagate_inbounds pdf_li_spectral(::Light, ::Point3f, ::Vec3f) = 0f0
 
 # ============================================================================
 # StaticMultiTypeSet Dispatch
 # ============================================================================
 
-@propagate_inbounds _sample_light_spectral(light, lights, table, p, lambda, u) =
+@propagate_inbounds sample_light_spectral_element(light, lights, table, p, lambda, u) =
     sample_light_spectral(table, lights, light, p, lambda, u)
 
 @propagate_inbounds function sample_light_spectral(
@@ -195,7 +197,7 @@ end
     lambda::Wavelengths,
     u::Point2f
 )
-    return with_index(_sample_light_spectral, lights, idx, lights, table, p, lambda, u)
+    return with_index(sample_light_spectral_element, lights, idx, lights, table, p, lambda, u)
 end
 
 @propagate_inbounds function sample_light_spectral(
@@ -207,7 +209,7 @@ end
     u::Point2f
 )
     idx = flat_to_light_index(lights, flat_idx)
-    return with_index(_sample_light_spectral, lights, idx, lights, table, p, lambda, u)
+    return with_index(sample_light_spectral_element, lights, idx, lights, table, p, lambda, u)
 end
 
 # ============================================================================
@@ -235,14 +237,16 @@ end
     return mapreduce(evaluate_environment_spectral, +, lights, lights, table, ray_d, lambda; init=SpectralRadiance(0f0))
 end
 
-@propagate_inbounds function _env_light_pdf_single(light::EnvironmentLight, lights, wi::Vec3f)::Float32
+@propagate_inbounds function env_light_pdf_single(light::EnvironmentLight, lights, wi::Vec3f)::Float32
     return pdf_li_spectral(lights, light, Point3f(0f0, 0f0, 0f0), wi)
 end
 
-@propagate_inbounds _env_light_pdf_single(::Light, lights, ::Vec3f)::Float32 = 0f0
+@propagate_inbounds env_light_pdf_single(::AmbientLight, lights, ::Vec3f)::Float32 = 1f0 / (4f0 * Float32(π))
+
+@propagate_inbounds env_light_pdf_single(::Light, lights, ::Vec3f)::Float32 = 0f0
 
 @propagate_inbounds function compute_env_light_pdf(lights::Raycore.StaticMultiTypeSet, ray_d::Vec3f)::Float32
-    return mapreduce(_env_light_pdf_single, +, lights, lights, ray_d; init=0f0)
+    return mapreduce(env_light_pdf_single, +, lights, lights, ray_d; init=0f0)
 end
 
 # ============================================================================

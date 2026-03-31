@@ -18,7 +18,7 @@ function _make_test_scene()
     scene = Hikari.Scene()
 
     # Floor
-    floor_mat = Hikari.MatteMaterial(Kd=Hikari.RGBSpectrum(0.7f0, 0.7f0, 0.7f0))
+    floor_mat = Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.7f0, 0.7f0, 0.7f0))
     floor_mesh = normal_mesh(Rect3f(Vec3f(-2, -2, -0.01), Vec3f(4, 4, 0.01)))
     push!(scene, floor_mesh, floor_mat)
 

@@ -28,10 +28,10 @@ Allocate array with AOS (soa=false) or SOA (soa=true) layout.
 Both support identical indexing: arr[i] returns T, arr[i] = val stores T.
 """
 function allocate_array(backend, ::Type{T}, n::Integer; soa::Bool=false) where T
-    soa ? _allocate_soa(backend, T, n) : KA.allocate(backend, T, n)
+    soa ? allocate_soa(backend, T, n) : KA.allocate(backend, T, n)
 end
 
-function _allocate_soa(backend, ::Type{T}, n::Integer) where T
+function allocate_soa(backend, ::Type{T}, n::Integer) where T
     if !should_use_soa(T)
         return KA.allocate(backend, T, n)
     end
@@ -39,7 +39,7 @@ function _allocate_soa(backend, ::Type{T}, n::Integer) where T
         fnames = fieldnames(T)
         ftypes = fieldtypes(T)
         components = NamedTuple{fnames}(
-            ntuple(i -> _allocate_soa(backend, ftypes[i], n), length(fnames))
+            ntuple(i -> allocate_soa(backend, ftypes[i], n), length(fnames))
         )
         return StructArray{T}(components)
     end
@@ -171,7 +171,7 @@ end
 # ============================================================================
 # Map Operations for GPU Kernel Execution
 # ============================================================================
-@kernel function _workqueue_map_kernel!(f, queue, args...)
+@kernel function workqueue_map_kernel!(f, queue, args...)
     i = @index(Global)
     if i <= queue.size[1]
         @inbounds f(queue.items[i], args...)
@@ -184,7 +184,7 @@ end
 const DEFAULT_WORKGROUPSIZE = 256
 
 """
-    _gpu_ndrange(backend, size_buf)
+    gpu_ndrange(backend, size_buf)
 
 Get the ndrange for dispatching over a queue's GPU-resident size buffer.
 Default: CPU readback (works on AMDGPU, CUDA, CPU).
@@ -192,12 +192,12 @@ Lava overrides this to return the GPU array directly for indirect dispatch (no f
 """
 # Clamp to 1 (not 0) because ndrange=0 crashes on some backends (AMDGPU).
 # The kernel's bounds check (idx > queue_size) handles the empty case.
-_gpu_ndrange(backend, size_buf) = max(Int(Array(size_buf)[1]), 1)
+gpu_ndrange(backend, size_buf) = max(Int(Array(size_buf)[1]), 1)
 
 function Base.foreach(f, queue::WorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
     backend = KA.get_backend(queue.items)
-    kernel! = _workqueue_map_kernel!(backend, workgroupsize)
-    kernel!(f, queue, args...; ndrange=_gpu_ndrange(backend, queue.size))
+    kernel! = workqueue_map_kernel!(backend, workgroupsize)
+    kernel!(f, queue, args...; ndrange=gpu_ndrange(backend, queue.size))
     return nothing
 end
 

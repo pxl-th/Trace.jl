@@ -51,7 +51,7 @@ function SpotLight(
     total_width::Float32, falloff_start::Float32,
     scale::Float32=1f0,
 ) where S<:Spectrum
-    light_to_world = _spotlight_transform(position, target)
+    light_to_world = spotlight_transform(position, target)
     SpotLight(light_to_world, i, total_width, falloff_start, scale)
 end
 
@@ -89,7 +89,7 @@ function SpotLight(
         k_e = 2f0 * Float32(π) * ((1f0 - cos_falloff_start_val) + (cos_falloff_start_val - cos_falloff_end) / 2f0)
         scale *= power / k_e
     end
-    light_to_world = _spotlight_transform(position, target)
+    light_to_world = spotlight_transform(position, target)
     SpotLight(light_to_world, spectrum, total_width, falloff_start, scale)
 end
 
@@ -102,7 +102,7 @@ end
 Create a transformation that positions a spotlight and orients it to point at a target.
 The spotlight points in +Z direction in local space.
 """
-function _spotlight_transform(position::Point3f, target::Point3f)
+function spotlight_transform(position::Point3f, target::Point3f)
     dir = normalize(Vec3f(target - position))
     # Choose up vector that's not parallel to dir
     up = abs(dir[2]) < 0.99f0 ? Vec3f(0f0, 1f0, 0f0) : Vec3f(1f0, 0f0, 0f0)

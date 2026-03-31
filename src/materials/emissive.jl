@@ -20,7 +20,7 @@ light (via the MediumInterface's BSDF material) AND emits light.
 # Usage
 ```julia
 # Surface that reflects AND glows:
-MediumInterface(MatteMaterial(Kd=diffuse_tex);
+MediumInterface(Diffuse(Kd=diffuse_tex);
     arealight=Emissive(Le=glow_color, scale=10))
 
 # Pure emitter (no reflection):
@@ -45,7 +45,7 @@ Create emission data for use in `MediumInterface.arealight`.
 # Examples
 ```julia
 # Diffuse surface with warm glow
-MediumInterface(MatteMaterial(Kd=wood_tex);
+MediumInterface(Diffuse(Kd=wood_tex);
     arealight=Emissive(Le=RGBSpectrum(15, 12, 8), scale=5.0, two_sided=true))
 
 # Pure area light
@@ -57,7 +57,7 @@ function Emissive(;
     scale::Real=1f0,
     two_sided::Bool=false
 )
-    Emissive(_to_texture(Le), Float32(scale), two_sided)
+    Emissive(to_texture(Le), Float32(scale), two_sided)
 end
 
 # ============================================================================
@@ -106,35 +106,6 @@ Check if a material emits light.
 Check if a material is purely emissive (no BSDF, only emits light).
 """
 @propagate_inbounds is_pure_emissive(::Emissive) = true
-
-# ============================================================================
-# BSDF Implementation for Emissive
-# ============================================================================
-
-"""
-    compute_bsdf(mat::Emissive, si::SurfaceInteraction, ::Bool, transport)
-
-Emissive has no BSDF (pure emitter, doesn't scatter light).
-Returns an empty BSDF.
-"""
-@propagate_inbounds function compute_bsdf(mat::Emissive, textures, si::SurfaceInteraction, ::Bool, transport)
-    # No scattering - just emission
-    return BSDF(si)
-end
-
-"""
-    shade(mat::Emissive, ray, si, scene, beta, depth, max_depth) -> RGBSpectrum
-
-Shading for emissive material returns the emission directly.
-Emissive materials don't reflect light, they only emit.
-"""
-@propagate_inbounds function shade(mat::Emissive, ray::RayDifferentials, si::SurfaceInteraction,
-                       scene::Scene, beta::RGBSpectrum, depth::Int32, max_depth::Int32)
-    wo = si.core.wo
-    n = si.core.n
-    uv = si.core.uv
-    return beta * get_emission(mat, wo, n, uv)
-end
 
 # ============================================================================
 # GPU Support

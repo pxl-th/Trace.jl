@@ -13,25 +13,20 @@ end
 
 function random_spheres()
     primitives = []
-    push!(primitives, tmesh(Sphere(Point3(0, -1000, 0), 1000.0), Hikari.MirrorMaterial(Hikari.ConstantTexture(Hikari.RGBSpectrum(0.5f0)))))
+    push!(primitives, tmesh(Sphere(Point3(0, -1000, 0), 1000.0), Hikari.Mirror(Hikari.ConstantTexture(Hikari.RGBSpectrum(0.5f0)))))
 
     function rand_material()
         p = rand()
         if p < 0.8
-            Hikari.MatteMaterial(
+            Hikari.Diffuse(
                 Hikari.ConstantTexture(Hikari.RGBSpectrum(0.796f0, 0.235f0, 0.2f0)),
                 Hikari.ConstantTexture(0.0f0),
             )
         elseif p < 0.95
             rf = rand(Float32)
-            Hikari.MirrorMaterial(Hikari.ConstantTexture(Hikari.RGBSpectrum(rf)))
+            Hikari.Mirror(Hikari.ConstantTexture(Hikari.RGBSpectrum(rf)))
         else
-            Hikari.PlasticMaterial(
-                Hikari.ConstantTexture(Hikari.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
-                Hikari.ConstantTexture(Hikari.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-                Hikari.ConstantTexture(0.010408001f0),
-                true,
-            )
+            Hikari.Plastic(color=(0.64, 0.64, 0.64), roughness=0.01)
         end
     end
 
@@ -41,7 +36,7 @@ function random_spheres()
             push!(primitives, tmesh(Sphere(center, 0.2), rand_material()))
         end
     end
-    glass = Hikari.GlassMaterial(
+    glass = Hikari.Dielectric(
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1.0f0)),
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1.0f0)),
         Hikari.ConstantTexture(0.0f0),

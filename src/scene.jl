@@ -46,11 +46,11 @@ push!(scene, AmbientLight(...))
 sync!(scene)  # Build acceleration structure
 ```
 """
-_default_accel(backend, ::Val{false}) = TLAS(backend)
-_default_accel(backend, ::Val{true}) = TLAS(backend)  # overridden in hw-rt.jl for LavaBackend
+default_accel(backend, ::Val{false}) = TLAS(backend)
+default_accel(backend, ::Val{true}) = TLAS(backend)  # overridden in hw-rt.jl for LavaBackend
 
 function Scene(; backend=KA.CPU(), accel=nothing, hw_accel::Bool=false)
-    tlas = accel !== nothing ? accel : _default_accel(backend, Val(hw_accel))
+    tlas = accel !== nothing ? accel : default_accel(backend, Val(hw_accel))
     lights = MultiTypeSet(backend)
     materials = MultiTypeSet(backend)
     media = MultiTypeSet(backend)

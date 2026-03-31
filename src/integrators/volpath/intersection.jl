@@ -427,25 +427,25 @@ Returns (T_ray, r_u, r_l) where:
     template_grid = get_template_grid_from_tuple(media)
     ray = Raycore.Ray(o=origin, d=dir)
     return Raycore.with_index(
-        _transmittance_dda_helper,
+        transmittance_dda_helper,
         media, medium_idx,
         rgb2spec_table, ray, t_max, lambda, origin, dir, media, medium_idx, template_grid
     )
 end
 
 """Helper dispatched via with_index to get concrete medium type for DDA iterator."""
-@propagate_inbounds function _transmittance_dda_helper(
+@propagate_inbounds function transmittance_dda_helper(
     medium, rgb2spec_table, ray, t_max, lambda, origin, dir, media, medium_idx, template_grid
 )
     iter = create_majorant_iterator(medium, rgb2spec_table, ray, t_max, lambda, template_grid)
-    return _ratio_tracking_dda(iter, origin, dir, media, medium_idx, rgb2spec_table, lambda)
+    return ratio_tracking_dda(iter, origin, dir, media, medium_idx, rgb2spec_table, lambda)
 end
 
 """
 Ratio tracking using DDA majorant iterator segments.
 Iterates over per-voxel majorant bounds, doing ratio tracking within each segment.
 """
-@propagate_inbounds function _ratio_tracking_dda(
+@propagate_inbounds function ratio_tracking_dda(
     iter::RayMajorantIterator,
     origin::Point3f, dir::Vec3f,
     media, medium_idx::SetKey, rgb2spec_table, lambda::Wavelengths
@@ -660,9 +660,9 @@ end
                 )
                 if light_choice_pdf > 0f0
                     # Get PDF_Li for this specific light
-                    # _env_light_pdf_single(light, lights, wi) is with_index-compatible (element first)
+                    # env_light_pdf_single(light, lights, wi) is with_index-compatible (element first)
                     light_idx = flat_to_light_index(lights, light_flat_idx)
-                    light_pdf_li = with_index(_env_light_pdf_single, lights, light_idx,
+                    light_pdf_li = with_index(env_light_pdf_single, lights, light_idx,
                         lights, work.ray_d
                     )
                     r_l = r_l + work.r_l * light_choice_pdf * light_pdf_li
@@ -708,12 +708,12 @@ end
 # ============================================================================
 
 """
-    _detect_camera_medium_kernel!(result, accel, media_interfaces, camera_pos)
+    detect_camera_medium_kernel!(result, accel, media_interfaces, camera_pos)
 
 Single-workitem kernel that traces a ray from the camera position to determine
 which medium the camera is inside. Writes a SetKey to result[1].
 """
-@kernel inbounds=true function _detect_camera_medium_kernel!(
+@kernel inbounds=true function detect_camera_medium_kernel!(
     result,
     accel,
     media_interfaces,
@@ -767,7 +767,7 @@ position. Returns a SetKey identifying the medium, or SetKey() for vacuum.
 """
 function detect_camera_medium(backend, accel, media_interfaces, camera_pos::Point3f)
     result = KA.allocate(backend, SetKey, (1,))
-    kernel! = _detect_camera_medium_kernel!(backend)
+    kernel! = detect_camera_medium_kernel!(backend)
     kernel!(result, accel, media_interfaces, camera_pos; ndrange=1)
     return @allowscalar result[1]
 end

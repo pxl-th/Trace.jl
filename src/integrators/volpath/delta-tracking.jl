@@ -107,7 +107,7 @@ significantly reducing null scattering events in sparse heterogeneous media.
 """
 
 """Helper to call sample_T_maj_loop! with created iterator (no capture)"""
-@propagate_inbounds function _sample_with_iterator_helper(
+@propagate_inbounds function sample_with_iterator_helper(
     medium,
     table::RGBToSpectrumTable,
     ray::Raycore.Ray,
@@ -171,7 +171,7 @@ end
 
     # Use with_index pattern to avoid Union types (GPU-safe)
     result = Raycore.with_index(
-        _sample_with_iterator_helper,
+        sample_with_iterator_helper,
         media, medium_idx,
         rgb2spec_table, work.ray, t_max, work.lambda,
         T_maj_accum, beta, r_u, r_l, rng_state,
@@ -436,7 +436,7 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
             t = t_sample
             # Advance ray origin to interaction point and apply deflection
             ray_o = p
-            ray_d = apply_deflection_dispatch(media, medium_idx, p, ray_d, dt)
+            ray_d = Raycore.with_index(apply_deflection, media, medium_idx, p, ray_d, dt)
 
             # Check throughput
             if is_black(beta) || is_black(r_u)

@@ -6,7 +6,7 @@ using Lava
 using Base: @propagate_inbounds
 
 # Re-import Hikari internals that hw-rt.jl extends or uses
-import Hikari: _default_accel, _gpu_ndrange, _detect_initial_medium,
+import Hikari: default_accel, gpu_ndrange, detect_initial_medium,
                vp_trace_rays!, vp_trace_shadow_rays!, vp_trace_rays_kernel!,
                fill_aux_buffers!, sync!,
                Scene, Film, VolPath, VolPathState,

@@ -184,8 +184,8 @@ using Adapt
 
 function gen_gpu_test_scene()
     # Materials
-    white_matte = Hikari.MatteMaterial(Kd=Hikari.RGBSpectrum(0.73f0))
-    glass = Hikari.GlassMaterial(index=1.5f0)
+    white_matte = Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.73f0))
+    glass = Hikari.Dielectric(index=1.5f0)
     emissive = Hikari.Emissive(Le=Hikari.RGBSpectrum(10f0))
 
     # Media

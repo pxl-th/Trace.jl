@@ -222,16 +222,16 @@ include("rgb2spec.jl")
 
 # Global table - initialized at module load time to avoid type instability
 # Will be set by __init__ or on first access
-const _RGB2SPEC_TABLE_REF = Ref{RGBToSpectrumTable}()
-const _RGB2SPEC_TABLE_LOADED = Ref{Bool}(false)
+const RGB2SPEC_TABLE_REF = Ref{RGBToSpectrumTable}()
+const RGB2SPEC_TABLE_LOADED = Ref{Bool}(false)
 
 """Get the global sRGB to spectrum table (loads on first access)"""
-@propagate_inbounds function _get_rgb2spec_table()::RGBToSpectrumTable
-    if !_RGB2SPEC_TABLE_LOADED[]
-        _RGB2SPEC_TABLE_REF[] = get_srgb_table()
-        _RGB2SPEC_TABLE_LOADED[] = true
+@propagate_inbounds function get_rgb2spec_table()::RGBToSpectrumTable
+    if !RGB2SPEC_TABLE_LOADED[]
+        RGB2SPEC_TABLE_REF[] = get_srgb_table()
+        RGB2SPEC_TABLE_LOADED[] = true
     end
-    return _RGB2SPEC_TABLE_REF[]
+    return RGB2SPEC_TABLE_REF[]
 end
 
 """
@@ -243,7 +243,7 @@ This provides the smoothest spectra and lowest variance for spectral rendering.
 Note: Uses global table, not GPU-compatible. Use the version with explicit table for GPU kernels.
 """
 @propagate_inbounds function rgb_to_spectral_sigmoid(r::Float32, g::Float32, b::Float32, lambda::Wavelengths)
-    table = _get_rgb2spec_table()
+    table = get_rgb2spec_table()
     return rgb_to_spectral_sigmoid(table, r, g, b, lambda)
 end
 
@@ -274,7 +274,7 @@ Scales the spectrum to preserve the maximum RGB component.
 Note: Uses global table, not GPU-compatible. Use the version with explicit table for GPU kernels.
 """
 @propagate_inbounds function rgb_to_spectral_sigmoid_unbounded(r::Float32, g::Float32, b::Float32, lambda::Wavelengths)
-    table = _get_rgb2spec_table()
+    table = get_rgb2spec_table()
     return rgb_to_spectral_sigmoid_unbounded(table, r, g, b, lambda)
 end
 
@@ -429,12 +429,12 @@ const D65_ILLUMINANT_VALUES = (
 )
 
 """
-    _d65_cpu_values() -> Vector{Float32}
+    d65_cpu_values() -> Vector{Float32}
 
 Return D65 illuminant values as a CPU Vector for use in RGBToSpectrumTable.
 This avoids runtime NTuple indexing which fails on Metal GPU.
 """
-function _d65_cpu_values()::Vector{Float32}
+function d65_cpu_values()::Vector{Float32}
     return collect(Float32, D65_ILLUMINANT_VALUES)
 end
 

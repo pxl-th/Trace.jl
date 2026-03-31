@@ -181,7 +181,7 @@ end
     # Direct lookup - all items have same type, so mat_array is correct
     mat = mat_array[work.material_idx.vec_idx]
 
-    _evaluate_typed_material!(
+    evaluate_typed_material!(
         next_ray_queue,
         work, mat, materials, rgb2spec_table,
         max_depth, do_regularize,
@@ -196,7 +196,7 @@ Inner evaluation for a typed material (no dispatch needed).
 
 Uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
 """
-@propagate_inbounds function _evaluate_typed_material!(
+@propagate_inbounds function evaluate_typed_material!(
     next_ray_queue,
     work::VPMaterialEvalWorkItem,
     mat,  # Concrete material type (known at compile time)
@@ -254,7 +254,7 @@ Uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
         )
 
         if should_continue
-            new_medium = _get_medium_for_type(mat, sample.wi, work.n, work.current_medium)
+            new_medium = get_medium_for_type(mat, sample.wi, work.n, work.current_medium)
 
             offset_dir = dot(sample.wi, work.n) > 0f0 ? work.n : -work.n
             ray_origin = Point3f(work.pi + offset_dir * 0.0001f0)
@@ -296,7 +296,7 @@ Uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
 end
 
 # Medium helper - returns current medium for regular materials
-_get_medium_for_type(mat, wi, n, current) = current
+get_medium_for_type(mat, wi, n, current) = current
 
 # ============================================================================
 # Coherent Processing Entry Points
@@ -370,7 +370,7 @@ function vp_evaluate_materials_coherent!(
     end
 end
 
-function _copy_multi_to_material_queue!(state::VolPathState, multi_queue::MultiMaterialQueue{N}) where {N}
+function copy_multi_to_material_queue!(state::VolPathState, multi_queue::MultiMaterialQueue{N}) where {N}
     empty!(state.material_queue)
 
     for type_idx in 1:N
@@ -447,7 +447,7 @@ function vp_evaluate_materials_sorted!(
     backend = KA.get_backend(state.material_queue.items)
 
     # Count items per type
-    type_counts = _count_material_types(state.material_queue, N)
+    type_counts = count_material_types(state.material_queue, N)
 
     # Check if sorting is beneficial
     max_count = maximum(type_counts)
@@ -461,7 +461,7 @@ function vp_evaluate_materials_sorted!(
 
     # Scatter to sorted order
     sorted_items = KernelAbstractions.allocate(backend, VPMaterialEvalWorkItem, n_total)
-    _scatter_by_material_type!(state.material_queue, sorted_items, type_offsets, N)
+    scatter_by_material_type!(state.material_queue, sorted_items, type_offsets, N)
 
     # Evaluate sorted buffer
     output_queue = next_ray_queue(state)
@@ -483,7 +483,7 @@ function vp_evaluate_materials_sorted!(
     return nothing
 end
 
-function _count_material_types(queue::WorkQueue{VPMaterialEvalWorkItem}, N::Int)
+function count_material_types(queue::WorkQueue{VPMaterialEvalWorkItem}, N::Int)
     backend = KA.get_backend(queue.items)
     counts_gpu = KernelAbstractions.allocate(backend, Int32, N)
     KernelAbstractions.fill!(counts_gpu, Int32(0))
@@ -500,7 +500,7 @@ end
     end
 end
 
-function _scatter_by_material_type!(
+function scatter_by_material_type!(
     src_queue::WorkQueue{VPMaterialEvalWorkItem},
     dst_items::AbstractVector{VPMaterialEvalWorkItem},
     type_offsets::Vector{Int},

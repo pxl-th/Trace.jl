@@ -91,7 +91,7 @@ function MixMaterial(;
     MixMaterial(
         materials[1],
         materials[2],
-        _to_texture(amount),
+        to_texture(amount),
         material_indices[1],
         material_indices[2]
     )
@@ -217,7 +217,7 @@ Type-stable dispatch to check if a material is MixMaterial.
 end
 
 # Helper for resolve_mix_material - called with concrete material type
-@propagate_inbounds function _choose_material_impl(mat, ctx, p, wo, uv, idx::SetKey)
+@propagate_inbounds function choose_material_impl(mat, ctx, p, wo, uv, idx::SetKey)
     return is_mix_material(mat) ? choose_material(mat, ctx, p, wo, uv) : idx
 end
 
@@ -241,7 +241,7 @@ This should be called at intersection time before creating material work items.
         if !is_mix_material_dispatch(materials, current_idx)
             return current_idx
         end
-        current_idx = with_index(_choose_material_impl, materials, current_idx, materials, p, wo, uv, current_idx)
+        current_idx = with_index(choose_material_impl, materials, current_idx, materials, p, wo, uv, current_idx)
     end
     return current_idx
 end
@@ -251,5 +251,3 @@ end
 # to a concrete material before any BSDF evaluation occurs.
 # See pbrt-v4 materials.h line 339-344: GetBxDF() is LOG_FATAL if called.
 
-"""Type alias: `Mix` is the same as `MixMaterial`"""
-const Mix = MixMaterial

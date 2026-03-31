@@ -415,7 +415,7 @@ function VPHitSurfaceWorkItem(
 end
 
 # Constructor for VPMaterialEvalWorkItem from VPHitSurfaceWorkItem
-# (wo and material_idx are computed externally, e.g. after MixMaterial resolution)
+# (wo and material_idx are computed externally, e.g. after Mix resolution)
 function VPMaterialEvalWorkItem(work::VPHitSurfaceWorkItem, wo::Vec3f, material_idx::SetKey)
     VPMaterialEvalWorkItem(
         work.pi, work.n, work.dpdu, work.dpdv, work.ray.time,

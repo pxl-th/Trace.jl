@@ -11,20 +11,20 @@ function tmesh(prim, material)
 end
 
 function render()
-    material_red = Hikari.MatteMaterial(
+    material_red = Hikari.Diffuse(
         Hikari.ConstantTexture(Hikari.RGBSpectrum(0.796f0, 0.235f0, 0.2f0)),
         Hikari.ConstantTexture(0f0),
     )
-    material_blue = Hikari.MatteMaterial(
+    material_blue = Hikari.Diffuse(
         Hikari.ConstantTexture(Hikari.RGBSpectrum(0.251f0, 0.388f0, 0.847f0)),
         Hikari.ConstantTexture(0f0),
     )
-    material_white = Hikari.MatteMaterial(
+    material_white = Hikari.Diffuse(
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
         Hikari.ConstantTexture(0f0),
     )
-    mirror = Hikari.MirrorMaterial(Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)))
-    glass = Hikari.GlassMaterial(
+    mirror = Hikari.Mirror(Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)))
+    glass = Hikari.Dielectric(
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
         Hikari.ConstantTexture(Hikari.RGBSpectrum(1f0)),
         Hikari.ConstantTexture(0f0),

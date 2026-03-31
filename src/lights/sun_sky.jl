@@ -3,7 +3,7 @@
 # Copyright (c) 2012-2013, Lukas Hosek and Alexander Wilkie (BSD 3-clause)
 
 # Bernstein polynomial evaluation for degree 5 (6 control points)
-function _hosek_bernstein5(t::Float64, c0, c1, c2, c3, c4, c5)
+function hosek_bernstein5(t::Float64, c0, c1, c2, c3, c4, c5)
     s = 1.0 - t
     return (s^5 * c0 +
             5.0 * s^4 * t * c1 +
@@ -29,7 +29,7 @@ function hosek_cook_config(dataset::Vector{Float64}, turbidity::Float64, albedo:
     offset = 9 * 6 * (int_turbidity - 1) + 1  # +1 for Julia 1-indexing
     for i in 1:9
         config[i] = (1.0 - albedo) * (1.0 - turbidity_rem) *
-            _hosek_bernstein5(t,
+            hosek_bernstein5(t,
                 dataset[offset + i - 1],
                 dataset[offset + i - 1 + 9],
                 dataset[offset + i - 1 + 18],
@@ -42,7 +42,7 @@ function hosek_cook_config(dataset::Vector{Float64}, turbidity::Float64, albedo:
     offset = 9 * 6 * 10 + 9 * 6 * (int_turbidity - 1) + 1
     for i in 1:9
         config[i] += albedo * (1.0 - turbidity_rem) *
-            _hosek_bernstein5(t,
+            hosek_bernstein5(t,
                 dataset[offset + i - 1],
                 dataset[offset + i - 1 + 9],
                 dataset[offset + i - 1 + 18],
@@ -56,7 +56,7 @@ function hosek_cook_config(dataset::Vector{Float64}, turbidity::Float64, albedo:
         offset = 9 * 6 * int_turbidity + 1
         for i in 1:9
             config[i] += (1.0 - albedo) * turbidity_rem *
-                _hosek_bernstein5(t,
+                hosek_bernstein5(t,
                     dataset[offset + i - 1],
                     dataset[offset + i - 1 + 9],
                     dataset[offset + i - 1 + 18],
@@ -69,7 +69,7 @@ function hosek_cook_config(dataset::Vector{Float64}, turbidity::Float64, albedo:
         offset = 9 * 6 * 10 + 9 * 6 * int_turbidity + 1
         for i in 1:9
             config[i] += albedo * turbidity_rem *
-                _hosek_bernstein5(t,
+                hosek_bernstein5(t,
                     dataset[offset + i - 1],
                     dataset[offset + i - 1 + 9],
                     dataset[offset + i - 1 + 18],
@@ -93,14 +93,14 @@ function hosek_cook_radiance(dataset::Vector{Float64}, turbidity::Float64, albed
     # albedo 0, low turbidity
     offset = 6 * (int_turbidity - 1) + 1
     res = (1.0 - albedo) * (1.0 - turbidity_rem) *
-        _hosek_bernstein5(t,
+        hosek_bernstein5(t,
             dataset[offset], dataset[offset+1], dataset[offset+2],
             dataset[offset+3], dataset[offset+4], dataset[offset+5])
 
     # albedo 1, low turbidity
     offset = 6 * 10 + 6 * (int_turbidity - 1) + 1
     res += albedo * (1.0 - turbidity_rem) *
-        _hosek_bernstein5(t,
+        hosek_bernstein5(t,
             dataset[offset], dataset[offset+1], dataset[offset+2],
             dataset[offset+3], dataset[offset+4], dataset[offset+5])
 
@@ -108,14 +108,14 @@ function hosek_cook_radiance(dataset::Vector{Float64}, turbidity::Float64, albed
         # albedo 0, high turbidity
         offset = 6 * int_turbidity + 1
         res += (1.0 - albedo) * turbidity_rem *
-            _hosek_bernstein5(t,
+            hosek_bernstein5(t,
                 dataset[offset], dataset[offset+1], dataset[offset+2],
                 dataset[offset+3], dataset[offset+4], dataset[offset+5])
 
         # albedo 1, high turbidity
         offset = 6 * 10 + 6 * int_turbidity + 1
         res += albedo * turbidity_rem *
-            _hosek_bernstein5(t,
+            hosek_bernstein5(t,
                 dataset[offset], dataset[offset+1], dataset[offset+2],
                 dataset[offset+3], dataset[offset+4], dataset[offset+5])
     end
@@ -189,28 +189,28 @@ function hosek_spectral_radiance(state::HosekState, theta::Float64, gamma::Float
 end
 
 # Port of arhosekskymodel_sr_internal — solar radiance piecewise polynomial
-const _SOLAR_PIECES = 45
-const _SOLAR_ORDER = 4
+const SOLAR_PIECES = 45
+const SOLAR_ORDER = 4
 
-function _hosek_solar_sr_internal(state::HosekState, turbidity_idx::Int, wl_idx::Int, elevation::Float64)
-    pos = floor(Int, (2.0 * elevation / π)^(1.0 / 3.0) * _SOLAR_PIECES)
+function hosek_solar_sr_internal(state::HosekState, turbidity_idx::Int, wl_idx::Int, elevation::Float64)
+    pos = floor(Int, (2.0 * elevation / π)^(1.0 / 3.0) * SOLAR_PIECES)
     if pos > 44
         pos = 44
     end
 
-    break_x = (Float64(pos) / Float64(_SOLAR_PIECES))^3.0 * (π * 0.5)
+    break_x = (Float64(pos) / Float64(SOLAR_PIECES))^3.0 * (π * 0.5)
 
     # Coefficients pointer: C uses 0-indexed turbidity and 0-indexed wl
     # solarDatasets[wl] + (order * pieces * turbidity + order * (pos+1) - 1)
     # In Julia: 1-indexed array, coefs walks backwards
     dataset = HOSEK_SOLAR_DATA[wl_idx]
-    base = _SOLAR_ORDER * _SOLAR_PIECES * turbidity_idx + _SOLAR_ORDER * (pos + 1)
+    base = SOLAR_ORDER * SOLAR_PIECES * turbidity_idx + SOLAR_ORDER * (pos + 1)
     # C code reads coefs[0], coefs[-1], coefs[-2], coefs[-3] (walks backwards)
 
     x = elevation - break_x
     x_exp = 1.0
     res = 0.0
-    for i in 0:(_SOLAR_ORDER - 1)
+    for i in 0:(SOLAR_ORDER - 1)
         res += x_exp * dataset[base - i]  # Julia 1-indexed: base corresponds to C's (base-1 + 1)
         x_exp *= x
     end
@@ -219,7 +219,7 @@ function _hosek_solar_sr_internal(state::HosekState, turbidity_idx::Int, wl_idx:
 end
 
 # Port of arhosekskymodel_solar_radiance_internal2 — direct solar radiance with limb darkening
-function _hosek_solar_radiance_direct(state::HosekState, wavelength::Float64, elevation::Float64, gamma::Float64)
+function hosek_solar_radiance_direct(state::HosekState, wavelength::Float64, elevation::Float64, gamma::Float64)
     sol_rad_sin = sin(state.solar_radius)
     ar2 = 1.0 / (sol_rad_sin * sol_rad_sin)
     singamma = sin(gamma)
@@ -251,12 +251,12 @@ function _hosek_solar_radiance_direct(state::HosekState, wavelength::Float64, el
 
     direct_radiance =
         (1.0 - turb_frac) * (
-            (1.0 - wl_frac) * _hosek_solar_sr_internal(state, turb_low, wl_idx_lo, elevation) +
-            wl_frac * _hosek_solar_sr_internal(state, turb_low, wl_idx_hi, elevation)
+            (1.0 - wl_frac) * hosek_solar_sr_internal(state, turb_low, wl_idx_lo, elevation) +
+            wl_frac * hosek_solar_sr_internal(state, turb_low, wl_idx_hi, elevation)
         ) +
         turb_frac * (
-            (1.0 - wl_frac) * _hosek_solar_sr_internal(state, turb_low + 1, wl_idx_lo, elevation) +
-            wl_frac * _hosek_solar_sr_internal(state, turb_low + 1, wl_idx_hi, elevation)
+            (1.0 - wl_frac) * hosek_solar_sr_internal(state, turb_low + 1, wl_idx_lo, elevation) +
+            wl_frac * hosek_solar_sr_internal(state, turb_low + 1, wl_idx_hi, elevation)
         )
 
     # Limb darkening: interpolate coefficients between wavelength bands
@@ -279,7 +279,7 @@ end
 function hosek_solar_radiance(state::HosekState, theta::Float64, gamma::Float64, wavelength::Float64)
     # Direct solar radiance (limb-darkened sun disk)
     elevation = (π / 2.0) - theta
-    direct = _hosek_solar_radiance_direct(state, wavelength, elevation, gamma)
+    direct = hosek_solar_radiance_direct(state, wavelength, elevation, gamma)
     # Inscattered sky radiance
     inscattered = hosek_spectral_radiance(state, theta, gamma, wavelength)
     return direct + inscattered
@@ -291,7 +291,7 @@ end
 # ============================================================================
 
 # Evaluate piecewise linear spectrum at a single wavelength
-function _piecewise_linear_eval(lambdas::Vector{Float64}, values::Vector{Float64}, lambda::Float64)
+function piecewise_linear_eval(lambdas::Vector{Float64}, values::Vector{Float64}, lambda::Float64)
     n = length(lambdas)
     if lambda <= lambdas[1]
         return values[1]
@@ -316,13 +316,13 @@ end
 
 # Convert spectral sky samples to XYZ, matching pbrt-v4's SpectrumToXYZ
 # Integrates piecewise linear spectrum against CIE CMFs from 360-830nm at 1nm steps
-function _spectrum_to_xyz(lambdas::Vector{Float64}, values::Vector{Float64})
+function spectrum_to_xyz_hosek(lambdas::Vector{Float64}, values::Vector{Float64})
     x_sum = 0.0
     y_sum = 0.0
     z_sum = 0.0
     for i in 1:N_CIE_SAMPLES
         lambda = Float64(CIE_LAMBDA_MIN + i - 1)
-        s = _piecewise_linear_eval(lambdas, values, lambda)
+        s = piecewise_linear_eval(lambdas, values, lambda)
         x_sum += Float64(CIE_X[i]) * s
         y_sum += Float64(CIE_Y[i]) * s
         z_sum += Float64(CIE_Z[i]) * s
@@ -407,7 +407,7 @@ function sunsky_to_envlight(;
 
             # Convert spectrum to XYZ then sRGB
             # Matches pbrt-v4: SpectrumToXYZ divides by CIE_Y_integral
-            x, y, z = _spectrum_to_xyz(sample_lambdas, sky_values)
+            x, y, z = spectrum_to_xyz_hosek(sample_lambdas, sky_values)
             rgb = xyz_to_linear_srgb(Vec3f(Float32(x), Float32(y), Float32(z)))
 
             sky_data[v_idx, u_idx] = RGBSpectrum(

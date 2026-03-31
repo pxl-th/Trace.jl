@@ -1,0 +1,22 @@
+# Single diffuse sphere with a point light
+LookAt 0 -4 2   0 0 0.5   0 0 1
+Camera "perspective" "float fov" 45
+Film "rgb" "integer xresolution" 256 "integer yresolution" 256
+Integrator "volpath" "integer maxdepth" 5
+
+WorldBegin
+
+# Point light
+LightSource "point" "rgb I" [40 40 40]
+    "point3 from" [3 -2 5]
+
+# Ground
+Material "diffuse" "rgb reflectance" [0.5 0.5 0.5]
+Shape "trianglemesh"
+    "point3 P" [-5 -5 0  5 -5 0  5 5 0  -5 5 0]
+    "integer indices" [0 1 2  0 2 3]
+
+# Sphere
+Material "diffuse" "rgb reflectance" [0.8 0.2 0.2]
+Shape "sphere" "float radius" 0.5
+

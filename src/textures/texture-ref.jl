@@ -49,7 +49,7 @@ Materials should always use TextureRef or raw values, never Texture directly.
 # TextureRef path
 @propagate_inbounds function eval_tex(ctx::Raycore.StaticMultiTypeSet, tref::Raycore.TextureRef, uv::Point2f)
     data = Raycore.deref(ctx, tref)
-    return _sample_texture_data(data, uv)
+    return sample_texture_data(data, uv)
 end
 
 # Raw value path (constant) - for Float32, RGB, Spectrum types
@@ -71,7 +71,7 @@ and UV derivatives for future mipmap support.
 # TextureRef path with context
 @propagate_inbounds function eval_tex(ctx::Raycore.StaticMultiTypeSet, tref::Raycore.TextureRef, tfc::TextureFilterContext)
     data = Raycore.deref(ctx, tref)
-    return _sample_texture_data_filtered(data, tfc.uv, tfc.dudx, tfc.dudy, tfc.dvdx, tfc.dvdy)
+    return sample_texture_data_filtered(data, tfc.uv, tfc.dudx, tfc.dudy, tfc.dvdx, tfc.dvdy)
 end
 
 # Raw value path (constant) - context ignored
@@ -103,7 +103,7 @@ The derivatives are passed through for future mipmap implementation.
     dudx::Float32, dudy::Float32, dvdx::Float32, dvdy::Float32
 )
     data = Raycore.deref(ctx, tref)
-    return _sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy)
+    return sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy)
 end
 
 # Raw value path (constant) - derivatives ignored
@@ -115,7 +115,7 @@ end
 end
 
 """
-    _sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy) -> T
+    sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy) -> T
 
 Sample texture with filtering based on UV derivatives.
 Uses the derivatives to compute the filter footprint for mipmap selection.
@@ -123,7 +123,7 @@ Uses the derivatives to compute the filter footprint for mipmap selection.
 TODO: Implement proper mipmap-based filtering. Currently uses bilinear sampling
 as a simple improvement over point sampling.
 """
-@propagate_inbounds function _sample_texture_data_filtered(
+@propagate_inbounds function sample_texture_data_filtered(
     data::AbstractArray{T,N}, uv::Point2f,
     dudx::Float32, dudy::Float32, dvdx::Float32, dvdy::Float32
 )::T where {T,N}
@@ -131,11 +131,11 @@ as a simple improvement over point sampling.
     # TODO: Implement mipmap selection based on derivatives:
     #   width = max(sqrt(dudx^2 + dvdx^2), sqrt(dudy^2 + dvdy^2)) * tex_size
     #   level = log2(max(1, width))
-    return _sample_texture_bilinear(data, uv)
+    return sample_texture_bilinear(data, uv)
 end
 
 # 0-dim arrays (scalar constants) - just return the value
-@propagate_inbounds function _sample_texture_data_filtered(
+@propagate_inbounds function sample_texture_data_filtered(
     data::AbstractArray{T,0}, ::Point2f,
     ::Float32, ::Float32, ::Float32, ::Float32
 )::T where T
@@ -143,12 +143,12 @@ end
 end
 
 """
-    _sample_texture_bilinear(data, uv) -> T
+    sample_texture_bilinear(data, uv) -> T
 
 Bilinear texture sampling for 2D textures.
 Provides smoother results than point sampling.
 """
-@propagate_inbounds function _sample_texture_bilinear(data::AbstractArray{T,2}, uv::Point2f)::T where T
+@propagate_inbounds function sample_texture_bilinear(data::AbstractArray{T,2}, uv::Point2f)::T where T
     # Apply UV flip (standard texture coordinate convention)
     uv_adj = Vec2f(1f0 - uv[2], uv[1])
 
@@ -186,8 +186,8 @@ Provides smoother results than point sampling.
 end
 
 # Fallback for non-2D textures
-@propagate_inbounds function _sample_texture_bilinear(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
-    return _sample_texture_data(data, uv)
+@propagate_inbounds function sample_texture_bilinear(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
+    return sample_texture_data(data, uv)
 end
 
 # ============================================================================

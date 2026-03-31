@@ -1,0 +1,37 @@
+# Test transform directives: Translate, Rotate, Scale
+LookAt 0 -5 3   0 0 0.5   0 0 1
+Camera "perspective" "float fov" 45
+Film "rgb" "integer xresolution" 256 "integer yresolution" 256
+Integrator "volpath" "integer maxdepth" 5
+
+WorldBegin
+
+LightSource "point" "rgb I" [50 50 50] "point3 from" [3 -2 5]
+
+# Ground
+Material "diffuse" "rgb reflectance" [0.4 0.4 0.4]
+Shape "disk" "float radius" 5
+
+# Translated sphere
+AttributeBegin
+    Translate -1.5 0 0.5
+    Material "diffuse" "rgb reflectance" [0.8 0.2 0.2]
+    Shape "sphere" "float radius" 0.5
+AttributeEnd
+
+# Scaled sphere (ellipsoid)
+AttributeBegin
+    Translate 0 0 0.3
+    Scale 1 1 0.5
+    Material "diffuse" "rgb reflectance" [0.2 0.8 0.2]
+    Shape "sphere" "float radius" 0.5
+AttributeEnd
+
+# Rotated + translated sphere
+AttributeBegin
+    Translate 1.5 0 0.5
+    Rotate 45 0 0 1
+    Material "diffuse" "rgb reflectance" [0.2 0.2 0.8]
+    Shape "sphere" "float radius" 0.5
+AttributeEnd
+

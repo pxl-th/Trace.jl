@@ -1,7 +1,7 @@
 using Hikari, ImageShow, Colors, FileIO, LinearAlgebra, GeometryBasics
 using RayMakie, GLMakie
 
-glass = Hikari.GlassMaterial(
+glass = Hikari.Dielectric(
     Hikari.ConstantTexture(Hikari.RGBSpectrum(1.0f0)),
     Hikari.ConstantTexture(Hikari.RGBSpectrum(1.0f0)),
     Hikari.ConstantTexture(0.0f0),
@@ -9,12 +9,10 @@ glass = Hikari.GlassMaterial(
     Hikari.ConstantTexture(1.25f0),
     true,
 )
-mirror = Hikari.MirrorMaterial(Hikari.ConstantTexture(Hikari.RGBSpectrum(1.0f0)))
-plastic = Hikari.PlasticMaterial(
-    Hikari.ConstantTexture(Hikari.RGBSpectrum(0.6399999857f0, 0.6399999857f0, 0.6399999857f0)),
-    Hikari.ConstantTexture(Hikari.RGBSpectrum(0.1000000015f0, 0.1000000015f0, 0.1000000015f0)),
-    Hikari.ConstantTexture(0.010408001f0),
-    true,
+mirror = Hikari.Mirror(Hikari.ConstantTexture(Hikari.RGBSpectrum(1.0f0)))
+plastic = Hikari.Plastic(
+    color=(0.64, 0.64, 0.64),
+    roughness=0.01,
 )
 
 dragon = load(joinpath(@__DIR__, "dragon.obj"))

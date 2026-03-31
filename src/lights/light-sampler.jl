@@ -335,13 +335,8 @@ end
 @kernel function estimate_powers_kernel!(powers, @Const(lights), @Const(scene_radius::Float32))
     idx = @index(Global)
     light_idx = flat_to_light_index(lights, Int32(idx))
-    power = Raycore.with_index(_estimate_power_impl, lights, light_idx, scene_radius)
+    power = Raycore.with_index(estimate_light_power, lights, light_idx, scene_radius)
     @inbounds powers[idx] = power
-end
-
-# Implementation function for with_index dispatch
-@inline function _estimate_power_impl(light, scene_radius::Float32)::Float32
-    estimate_light_power(light, scene_radius)
 end
 
 """
