@@ -155,7 +155,7 @@ Uses Fresnel to choose between reflection and transmission.
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::Dielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -225,8 +225,7 @@ Uses Fresnel to choose between reflection and transmission.
         # === Rough case (microfacet dielectric) ===
         # Matches pbrt-v4 DielectricBxDF::Sample_f (bxdfs.cpp:117-169)
         # Work in local shading space where n = (0,0,1)
-        dpdus_oriented = entering ? dpdus : -dpdus
-        tangent, bitangent = shading_frame(n_oriented, dpdus_oriented)
+        tangent, bitangent = coordinate_system(n)
         wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n_oriented))
 
         wm = trowbridge_reitz_sample_wm(wo_local, sample_u, alpha_x, alpha_y)
@@ -275,7 +274,7 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Dielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     ior, _ = eval_dielectric_ior(textures, mat.index, tfc, lambda)
     ior == 0f0 && (ior = 1f0)
@@ -300,10 +299,7 @@ end
     entering = cos_theta_o > 0f0
     n_oriented = entering ? n : -n
 
-    # Use shading frame matching pbrt-v4's Frame::FromXZ(Normalize(dpdus), ns)
-    # Flip dpdus with normal to keep frame consistent
-    dpdus_oriented = entering ? dpdus : -dpdus
-    tangent, bitangent = shading_frame(n_oriented, dpdus_oriented)
+    tangent, bitangent = coordinate_system(n_oriented)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n_oriented))
     wi_local = Vec3f(dot(wi, tangent), dot(wi, bitangent), dot(wi, n_oriented))
 
@@ -368,7 +364,7 @@ Key physics (pbrt-v4 lines 225-230):
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::ThinDielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -382,7 +378,7 @@ Key physics (pbrt-v4 lines 225-230):
     eta, is_dispersive = eval_dielectric_ior(textures, mat.eta, tfc, lambda)
 
     # Build local coordinate frame
-    tangent, bitangent = shading_frame(n, dpdus)
+    tangent, bitangent = coordinate_system(n)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), wo_dot_n)
 
     # Compute single-interface Fresnel reflectance
@@ -443,7 +439,7 @@ ThinDielectric is purely specular, so f() and PDF() both return 0.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::ThinDielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     # ThinDielectric is purely specular - f() returns 0 for all non-delta directions
     return (SpectralRadiance(), 0f0)

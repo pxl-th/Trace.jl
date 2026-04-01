@@ -240,7 +240,7 @@ to reduce fireflies from near-specular paths (matches pbrt-v4 BSDF::Regularize).
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::CoatedConductor, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -296,7 +296,7 @@ to reduce fireflies from near-specular paths (matches pbrt-v4 BSDF::Regularize).
     # === LayeredBxDF random walk — identical to CoatedDiffuse but with conductor bottom ===
     # Matches pbrt-v4 bxdfs.h LayeredBxDF<DielectricBxDF, ConductorBxDF>::Sample_f
 
-    tangent, bitangent = shading_frame(n, dpdus)
+    tangent, bitangent = coordinate_system(n)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), wo_dot_n)
 
     flip_wi = wo_local[3] < 0f0
@@ -418,7 +418,7 @@ Exact port — same as CoatedDiffuse evaluate but with conductor bottom interfac
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedConductor, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     ieta = mat.interface_eta
     ieta == 0f0 && (ieta = 1f0)
@@ -446,7 +446,7 @@ Exact port — same as CoatedDiffuse evaluate but with conductor bottom interfac
     is_smooth = trowbridge_reitz_effectively_smooth(i_alpha_x, i_alpha_y)
     c_is_smooth = trowbridge_reitz_effectively_smooth(c_alpha_x, c_alpha_y)
 
-    tangent, bitangent = shading_frame(n, dpdus)
+    tangent, bitangent = coordinate_system(n)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n))
     wi_local = Vec3f(dot(wi, tangent), dot(wi, bitangent), dot(wi, n))
     if wo_local[3] < 0f0; wo_local = -wo_local; wi_local = -wi_local; end

@@ -183,7 +183,7 @@ end
 
 @propagate_inbounds function sample_bsdf_spectral(
     mat::CoatedDiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng_in::Float32,
     regularize::Bool = false
 )
@@ -224,7 +224,7 @@ end
     max_depth = Int(mat.max_depth)
 
     # Build local frame
-    tangent, bitangent = shading_frame(n, dpdus)
+    tangent, bitangent = coordinate_system(n)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), wo_dot_n)
 
     # Two-sided: flip if entering from below
@@ -347,7 +347,7 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedDiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     # Get material properties
     refl_rgb = eval_tex(textures, mat.reflectance, tfc)
@@ -376,7 +376,7 @@ end
     max_depth = Int(mat.max_depth)
 
     # Build local frame
-    tangent, bitangent = shading_frame(n, dpdus)
+    tangent, bitangent = coordinate_system(n)
     cos_θo = dot(wo, n)
     cos_θi = dot(wi, n)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), cos_θo)

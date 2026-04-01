@@ -102,7 +102,7 @@ and transmission (opposite hemisphere). Sampling is proportional to max(R) and m
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::DiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -132,7 +132,7 @@ and transmission (opposite hemisphere). Sampling is proportional to max(R) and m
     end
 
     # Build local coordinate frame
-    tangent, bitangent = shading_frame(n, dpdus)
+    tangent, bitangent = coordinate_system(n)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), wo_dot_n)
 
     prob_reflect = pr / (pr + pt)
@@ -191,7 +191,7 @@ Evaluate diffuse transmission BSDF matching pbrt-v4's DiffuseTransmissionBxDF::f
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::DiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     cos_θi = dot(wi, n)
     cos_θo = dot(wo, n)
