@@ -11,11 +11,11 @@ Returns SpectralBSDFSample from the appropriate material type.
 @propagate_inbounds function sample_spectral_material(
     table::RGBToSpectrumTable, materials::StaticMultiTypeSet,
     idx::SetKey,
-    wo::Vec3f, ns::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, u::Point2f, rng::Float32,
     regularize::Bool = false
 )
-    return with_index(sample_bsdf_spectral, materials, idx, table, materials, wo, ns, tfc, lambda, u, rng, regularize)
+    return with_index(sample_bsdf_spectral, materials, idx, table, materials, wo, ns, dpdus, tfc, lambda, u, rng, regularize)
 end
 
 """
@@ -27,10 +27,10 @@ Returns (f::SpectralRadiance, pdf::Float32).
 @propagate_inbounds function evaluate_spectral_material(
     table::RGBToSpectrumTable, materials::StaticMultiTypeSet,
     idx::SetKey,
-    wo::Vec3f, wi::Vec3f, ns::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, wi::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths
 )
-    return with_index(evaluate_bsdf_spectral, materials, idx, table, materials, wo, wi, ns, tfc, lambda)
+    return with_index(evaluate_bsdf_spectral, materials, idx, table, materials, wo, wi, ns, dpdus, tfc, lambda)
 end
 
 """

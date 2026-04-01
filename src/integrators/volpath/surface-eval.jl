@@ -298,7 +298,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         # Evaluate BSDF for light direction
         bsdf_f, bsdf_pdf = evaluate_spectral_material(
             rgb2spec_table, materials, work.material_idx,
-            work.wo, light_sample.wi, work.ns, tfc, work.lambda
+            work.wo, light_sample.wi, work.ns, work.dpdus, tfc, work.lambda
         )
 
         if !is_black(bsdf_f)
@@ -431,7 +431,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     # Sample BSDF
     sample = sample_spectral_material(
         rgb2spec_table, materials, work.material_idx,
-        work.wo, work.ns, tfc, work.lambda, u, rng, regularize
+        work.wo, work.ns, work.dpdus, tfc, work.lambda, u, rng, regularize
     )
 
     # Check if valid sample
@@ -456,7 +456,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         r_l_pdf = if sample.pdf_is_proportional
             _, p = evaluate_spectral_material(
                 rgb2spec_table, materials, work.material_idx,
-                work.wo, sample.wi, work.ns, tfc, work.lambda)
+                work.wo, sample.wi, work.ns, work.dpdus, tfc, work.lambda)
             max(p, 1f-10)
         else
             sample.pdf

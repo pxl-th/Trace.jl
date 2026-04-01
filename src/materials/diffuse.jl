@@ -51,7 +51,7 @@ Uses pbrt-v4 convention: work in local shading space where n = (0,0,1).
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::Diffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -74,7 +74,7 @@ Uses pbrt-v4 convention: work in local shading space where n = (0,0,1).
     kd_spectral = uplift_rgb(table, kd_rgb, lambda)
 
     # Build local coordinate system from shading normal
-    tangent, bitangent = coordinate_system(n)
+    tangent, bitangent = shading_frame(n, dpdus)
 
     # Cosine-weighted hemisphere sampling (in local space, normal = +z)
     local_wi = cosine_sample_hemisphere(sample_u)
@@ -116,7 +116,7 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Diffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     # Check if wi is in the correct hemisphere
     cos_theta_i = dot(wi, n)
