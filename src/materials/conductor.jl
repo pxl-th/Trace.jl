@@ -194,7 +194,7 @@ Sample perfect specular reflection with spectral evaluation.
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::Mirror, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -224,7 +224,7 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Mirror, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     # Perfect specular has zero PDF for non-delta directions
     return (SpectralRadiance(), 0f0)
@@ -247,12 +247,12 @@ from near-specular paths (matches pbrt-v4 BSDF::Regularize).
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::Conductor, table::RGBToSpectrumTable, textures,
-    wo_world::Vec3f, n::Vec3f, tfc::TextureFilterContext,
+    wo_world::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
     # Build local coordinate frame (matches pbrt-v4's BSDF shading frame)
-    tangent, bitangent = coordinate_system(n)
+    tangent, bitangent = shading_frame(n, dpdus)
 
     # Transform wo to local coordinates (matches pbrt-v4's RenderToLocal)
     wo = world_to_local(wo_world, n, tangent, bitangent)
@@ -354,10 +354,10 @@ Matches pbrt-v4's ConductorBxDF::f and ConductorBxDF::PDF exactly.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Conductor, table::RGBToSpectrumTable, textures,
-    wo_world::Vec3f, wi_world::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo_world::Vec3f, wi_world::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     # Build local coordinate frame
-    tangent, bitangent = coordinate_system(n)
+    tangent, bitangent = shading_frame(n, dpdus)
 
     # Transform to local coordinates
     wo = world_to_local(wo_world, n, tangent, bitangent)

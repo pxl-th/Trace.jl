@@ -150,7 +150,7 @@ When `regularize=true`, the coating's microfacet alpha is increased to reduce fi
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng_in::Float32,
     regularize::Bool = false
 )
@@ -188,7 +188,7 @@ When `regularize=true`, the coating's microfacet alpha is increased to reduce fi
     max_depth = Int(mat.max_depth)
 
     # Build coordinate system from shading normal
-    tangent, bitangent = coordinate_system(n)
+    tangent, bitangent = shading_frame(n, dpdus)
 
     # Transform wo to local space
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), wo_dot_n)
@@ -351,7 +351,7 @@ Exact port of pbrt-v4 bxdfs.h lines 477-652.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     refl_rgb = eval_tex(textures, mat.reflectance, tfc)
     eta = mat.eta
@@ -369,7 +369,7 @@ Exact port of pbrt-v4 bxdfs.h lines 477-652.
     n_samples = Int(mat.n_samples)
     max_depth = Int(mat.max_depth)
 
-    tangent, bitangent = coordinate_system(n)
+    tangent, bitangent = shading_frame(n, dpdus)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n))
     wi_local = Vec3f(dot(wi, tangent), dot(wi, bitangent), dot(wi, n))
 

@@ -316,6 +316,23 @@ Build orthonormal basis from a normal vector.
 end
 
 """
+    shading_frame(ns::Vec3f, dpdus::Vec3f) -> (tangent, bitangent)
+
+Build shading frame matching pbrt-v4's Frame::FromXZ(Normalize(dpdus), ns).
+X = Normalize(dpdus), Y = Cross(ns, X), Z = ns.
+Falls back to coordinate_system(ns) if dpdus is degenerate.
+"""
+@propagate_inbounds function shading_frame(ns::Vec3f, dpdus::Vec3f)
+    len_sq = dot(dpdus, dpdus)
+    if len_sq < 1f-10
+        return coordinate_system(ns)
+    end
+    tangent = dpdus / sqrt(len_sq)
+    bitangent = cross(ns, tangent)
+    return (tangent, bitangent)
+end
+
+"""
     local_to_world(local_dir, n, tangent, bitangent) -> Vec3f
 
 Transform direction from local (shading) space to world space.
@@ -1327,7 +1344,7 @@ end
 # Fallback for unknown materials
 @propagate_inbounds function sample_bsdf_spectral(
     mat::Material, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
@@ -1341,7 +1358,7 @@ end
     kd_spectral = SpectralRadiance(0.5f0)
 
     # Build coordinate system from shading normal
-    tangent, bitangent = coordinate_system(n)
+    tangent, bitangent = shading_frame(n, dpdus)
 
     # Cosine-weighted hemisphere sampling
     local_wi = cosine_sample_hemisphere(sample_u)
@@ -1367,7 +1384,7 @@ end
 # Fallback
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Material, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
     cos_theta_i = dot(wi, n)
     cos_theta_o = dot(wo, n)
@@ -1510,11 +1527,11 @@ end
 """
 @propagate_inbounds function sample_bsdf_spectral(
     mi::MediumInterface, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, tfc::TextureFilterContext,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
     regularize::Bool = false
 )
-    return sample_bsdf_spectral(table, mi.material, textures, wo, n, tfc, lambda, sample_u, rng, regularize)
+    return sample_bsdf_spectral(mi.material, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng, regularize)
 end
 
 """
@@ -1522,9 +1539,9 @@ end
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mi::MediumInterface, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
-    return evaluate_bsdf_spectral(mi.material, table, textures, wo, wi, n, tfc, lambda)
+    return evaluate_bsdf_spectral(mi.material, table, textures, wo, wi, n, dpdus, tfc, lambda)
 end
 
 """
