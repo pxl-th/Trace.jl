@@ -310,8 +310,10 @@ function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
     elseif type == "dielectric"
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
         rough = Float32(pbrt_get_float(entity, "roughness", 0.0))
+        urough = Float32(pbrt_get_float(entity, "uroughness", rough))
+        vrough = Float32(pbrt_get_float(entity, "vroughness", rough))
         remap = pbrt_get_bool(entity, "remaproughness", true)
-        return Dielectric(index=eta, roughness=rough, remap_roughness=remap)
+        return Dielectric(index=eta, roughness=(urough, vrough), remap_roughness=remap)
 
     elseif type == "thindielectric"
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
