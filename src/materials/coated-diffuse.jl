@@ -684,8 +684,9 @@ This is a simplified version of pbrt-v4's LayeredBxDF::PDF.
         end
     end
 
-    # Return mixture of PDF estimate and constant PDF (as per pbrt-v4)
-    return lerp(0.9f0, 1f0 / (4f0 * Float32(π)), pdf_sum / Float32(n_samples))
+    # pbrt-v4: Lerp(0.9, 1/(4π), pdfSum/nSamples) = 0.1/(4π) + 0.9 * pdfSum/nSamples
+    # Hikari lerp(v1, v2, t) = (1-t)*v1 + t*v2, so we need lerp(1/(4π), pdf_sum/nSamples, 0.9)
+    return lerp(1f0 / (4f0 * Float32(π)), pdf_sum / Float32(n_samples), 0.9f0)
 end
 
 # ============================================================================

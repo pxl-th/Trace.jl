@@ -680,5 +680,6 @@ end
         end
     end
 
-    return lerp(0.9f0, 1f0 / (4f0 * Float32(π)), pdf_sum / Float32(n_samples))
+    # pbrt-v4: Lerp(0.9, 1/(4π), pdfSum/nSamples) = 0.1/(4π) + 0.9 * pdfSum/nSamples
+    return lerp(1f0 / (4f0 * Float32(π)), pdf_sum / Float32(n_samples), 0.9f0)
 end
