@@ -27,21 +27,54 @@
 Result of sampling a BSDF with spectral wavelengths.
 Used by PhysicalWavefront for spectral path tracing.
 """
+# BxDFFlags — matches pbrt-v4 base/bxdf.h lines 48-62
+const BXDF_REFLECTION        = UInt8(1 << 0)
+const BXDF_TRANSMISSION      = UInt8(1 << 1)
+const BXDF_DIFFUSE           = UInt8(1 << 2)
+const BXDF_GLOSSY            = UInt8(1 << 3)
+const BXDF_SPECULAR          = UInt8(1 << 4)
+const BXDF_DIFFUSE_REFLECTION    = BXDF_DIFFUSE | BXDF_REFLECTION
+const BXDF_DIFFUSE_TRANSMISSION  = BXDF_DIFFUSE | BXDF_TRANSMISSION
+const BXDF_GLOSSY_REFLECTION     = BXDF_GLOSSY | BXDF_REFLECTION
+const BXDF_GLOSSY_TRANSMISSION   = BXDF_GLOSSY | BXDF_TRANSMISSION
+const BXDF_SPECULAR_REFLECTION   = BXDF_SPECULAR | BXDF_REFLECTION
+const BXDF_SPECULAR_TRANSMISSION = BXDF_SPECULAR | BXDF_TRANSMISSION
+const BXDF_ALL = BXDF_DIFFUSE | BXDF_GLOSSY | BXDF_SPECULAR | BXDF_REFLECTION | BXDF_TRANSMISSION
+
+is_reflective(flags::UInt8)   = (flags & BXDF_REFLECTION) != 0
+is_transmissive(flags::UInt8) = (flags & BXDF_TRANSMISSION) != 0
+is_diffuse(flags::UInt8)      = (flags & BXDF_DIFFUSE) != 0
+is_glossy(flags::UInt8)       = (flags & BXDF_GLOSSY) != 0
+is_specular(flags::UInt8)     = (flags & BXDF_SPECULAR) != 0
+is_non_specular(flags::UInt8) = (flags & (BXDF_DIFFUSE | BXDF_GLOSSY)) != 0
+
+"""
+    SpectralBSDFSample — matches pbrt-v4's BSDFSample (base/bxdf.h:121-152)
+
+Fields match pbrt field order: f, wi, pdf, flags, eta, pdfIsProportional.
+Additional: secondary_terminated (Hikari-specific for dispersive wavelength termination).
+"""
 struct SpectralBSDFSample
-    wi::Vec3f                    # Sampled incident direction
     f::SpectralRadiance          # Spectral BSDF value
+    wi::Vec3f                    # Sampled incident direction
     pdf::Float32                 # Probability density
-    is_specular::Bool            # True if delta distribution (no MIS needed)
-    eta_scale::Float32           # Scale factor for refraction (1.0 for reflection)
-    secondary_terminated::Bool   # True if secondary wavelengths should be terminated (dispersive IOR)
+    flags::UInt8                 # BxDFFlags (reflection/transmission + specular/glossy/diffuse)
+    eta::Float32                 # Index of refraction ratio (1.0 for reflection)
+    pdf_is_proportional::Bool    # True if pdf is only proportional (LayeredBxDF)
+    secondary_terminated::Bool   # Hikari-specific: terminate secondary wavelengths (dispersive IOR)
 end
 
-# 5-arg constructor with default secondary_terminated=false
-@propagate_inbounds SpectralBSDFSample(wi, f, pdf, is_specular, eta_scale) =
-    SpectralBSDFSample(wi, f, pdf, is_specular, eta_scale, false)
+# Convenience constructors
+@propagate_inbounds SpectralBSDFSample(f, wi, pdf, flags::UInt8, eta) =
+    SpectralBSDFSample(f, wi, pdf, flags, eta, false, false)
+
+@propagate_inbounds SpectralBSDFSample(f, wi, pdf, flags::UInt8) =
+    SpectralBSDFSample(f, wi, pdf, flags, 1f0, false, false)
 
 # Default invalid sample
-@propagate_inbounds SpectralBSDFSample() = SpectralBSDFSample(Vec3f(0, 0, 1), SpectralRadiance(), 0f0, false, 1f0, false)
+@propagate_inbounds SpectralBSDFSample() =
+    SpectralBSDFSample(SpectralRadiance(), Vec3f(0, 0, 1), 0f0, UInt8(0), 1f0, false, false)
+
 
 # ============================================================================
 # IOR Evaluation Helpers
@@ -905,12 +938,7 @@ end
 # LayeredBxDF Helper Types and Interface Sampling
 # ============================================================================
 
-"""
-    BxDFReflTransFlags - Flags for controlling reflection/transmission sampling
-"""
-const BXDF_REFLECTION = UInt8(1)
-const BXDF_TRANSMISSION = UInt8(2)
-const BXDF_ALL = UInt8(3)
+# BxDFReflTransFlags constants are defined at the top of this file (lines 31-42)
 
 """
     LayeredBSDFSample - Internal sample result for LayeredBxDF interfaces
@@ -990,7 +1018,8 @@ This matches pbrt-v4's DielectricBxDF::Sample_f exactly.
 @propagate_inbounds function sample_dielectric_interface(
     wo::Vec3f, uc::Float32, u::Point2f,
     alpha_x::Float32, alpha_y::Float32, eta::Float32,
-    refl_trans_flags::UInt8
+    refl_trans_flags::UInt8,
+    radiance_mode::Bool = true  # pbrt-v4 TransportMode: true=Radiance, false=Importance
 )
     is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
 
@@ -1023,6 +1052,10 @@ This matches pbrt-v4's DielectricBxDF::Sample_f exactly.
             end
 
             f_val = T / abs(wi[3])
+            # pbrt-v4: if (mode == TransportMode::Radiance) ft /= Sqr(etap);
+            if radiance_mode
+                f_val /= etap * etap
+            end
             pdf = pt / (pr + pt)
             return LayeredBSDFSample(SpectralRadiance(f_val), wi, pdf, false, true, etap, true)
         end
@@ -1073,6 +1106,10 @@ This matches pbrt-v4's DielectricBxDF::Sample_f exactly.
             D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
             G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
             f_val = T * D * G * abs(dot(wi, wm) * dot(wo, wm) / (wi[3] * wo[3] * denom))
+            # pbrt-v4: if (mode == TransportMode::Radiance) f /= Sqr(etap);
+            if radiance_mode
+                f_val /= etap * etap
+            end
 
             return LayeredBSDFSample(SpectralRadiance(f_val), wi, pdf, false, false, etap, true)
         end
@@ -1086,7 +1123,8 @@ Evaluate the dielectric interface BSDF for given directions.
 Returns (f_value, pdf) for the given wo/wi pair.
 """
 @propagate_inbounds function eval_dielectric_interface(
-    wo::Vec3f, wi::Vec3f, alpha_x::Float32, alpha_y::Float32, eta::Float32
+    wo::Vec3f, wi::Vec3f, alpha_x::Float32, alpha_y::Float32, eta::Float32,
+    radiance_mode::Bool = true
 )
     is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
 
@@ -1139,6 +1177,10 @@ Returns (f_value, pdf) for the given wo/wi pair.
         G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
 
         f_val = T * D * G * abs(cos_θi_h * cos_θo_h / (wo[3] * wi[3] * denom))
+        # pbrt-v4: if (mode == TransportMode::Radiance) f /= Sqr(etap);
+        if radiance_mode
+            f_val /= etap * etap
+        end
 
         dwm_dwi = abs(cos_θi_h) / denom
         pdf = trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) * dwm_dwi
@@ -1319,7 +1361,7 @@ end
     f = kd_spectral * (1f0 / Float32(π))
     pdf = cos_theta / Float32(π)
 
-    return SpectralBSDFSample(wi, f, pdf, false, 1f0)
+    return SpectralBSDFSample(f, wi, pdf, BXDF_DIFFUSE_REFLECTION, 1f0)
 end
 
 # Fallback
@@ -1343,6 +1385,117 @@ end
     pdf = cos_theta / Float32(π)
 
     return (f, pdf)
+end
+
+# ============================================================================
+# Conductor Interface (for LayeredBxDF bottom — pbrt-v4 ConductorBxDF)
+# ============================================================================
+
+"""
+Sample conductor interface (reflection only). Matches pbrt-v4 ConductorBxDF::Sample_f.
+Returns LayeredBSDFSample. Used as bottom interface in LayeredBxDF for CoatedConductor.
+"""
+@propagate_inbounds function sample_conductor_interface(
+    wo::Vec3f, u::Point2f,
+    alpha_x::Float32, alpha_y::Float32,
+    eta::SpectralRadiance, k::SpectralRadiance,
+    refl_trans_flags::UInt8
+)
+    # Conductor only reflects
+    if (refl_trans_flags & BXDF_REFLECTION) == 0
+        return LayeredBSDFSample()
+    end
+
+    is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+
+    if is_smooth
+        # Specular reflection: wi = (-wo.x, -wo.y, wo.z)
+        wi = Vec3f(-wo[1], -wo[2], wo[3])
+        F = fr_complex_spectral(abs(wi[3]), eta, k)
+        f_val = F / abs(wi[3])
+        return LayeredBSDFSample(f_val, wi, 1f0, true, true, 1f0, true)
+    else
+        # Rough microfacet reflection
+        wm = trowbridge_reitz_sample_wm(wo, u, alpha_x, alpha_y)
+        wi = -wo + 2f0 * dot(wo, wm) * wm
+        if !same_hemisphere(wo, wi) || wi[3] == 0f0
+            return LayeredBSDFSample()
+        end
+
+        cos_θo = abs(wo[3])
+        cos_θi = abs(wi[3])
+        if cos_θo == 0f0 || cos_θi == 0f0
+            return LayeredBSDFSample()
+        end
+
+        F = fr_complex_spectral(abs(dot(wo, wm)), eta, k)
+        D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+        G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
+        f_val = D * F * G / (4f0 * cos_θi * cos_θo)
+
+        pdf_m = trowbridge_reitz_pdf(wo, wm, alpha_x, alpha_y)
+        pdf = pdf_m / (4f0 * abs(dot(wo, wm)))
+
+        return LayeredBSDFSample(f_val, wi, pdf, true, false, 1f0, true)
+    end
+end
+
+"""
+Evaluate conductor interface BSDF. Matches pbrt-v4 ConductorBxDF::f + PDF.
+Returns (f::SpectralRadiance, pdf::Float32).
+"""
+@propagate_inbounds function eval_conductor_interface(
+    wo::Vec3f, wi::Vec3f,
+    alpha_x::Float32, alpha_y::Float32,
+    eta::SpectralRadiance, k::SpectralRadiance
+)
+    is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+
+    if is_smooth
+        return (SpectralRadiance(), 0f0)  # Delta function — zero for non-delta eval
+    end
+
+    if !same_hemisphere(wo, wi)
+        return (SpectralRadiance(), 0f0)
+    end
+
+    cos_θo = abs(wo[3])
+    cos_θi = abs(wi[3])
+    if cos_θo == 0f0 || cos_θi == 0f0
+        return (SpectralRadiance(), 0f0)
+    end
+
+    wh = normalize(wo + wi)
+    if wh[3] < 0f0
+        wh = -wh
+    end
+
+    F = fr_complex_spectral(abs(dot(wo, wh)), eta, k)
+    D = trowbridge_reitz_d(wh, alpha_x, alpha_y)
+    G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
+    f_val = D * F * G / (4f0 * cos_θo * cos_θi)
+
+    pdf = trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) / (4f0 * abs(dot(wo, wh)))
+
+    return (f_val, pdf)
+end
+
+"""PDF for conductor interface. Matches pbrt-v4 ConductorBxDF::PDF."""
+@propagate_inbounds function pdf_conductor_interface(
+    wo::Vec3f, wi::Vec3f,
+    alpha_x::Float32, alpha_y::Float32
+)::Float32
+    if !same_hemisphere(wo, wi)
+        return 0f0
+    end
+    if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+        return 0f0
+    end
+    wh = normalize(wo + wi)
+    if wh[3] < 0f0
+        wh = -wh
+    end
+    return trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) / (4f0 * abs(dot(wo, wh)))
 end
 
 # ============================================================================

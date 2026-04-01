@@ -192,7 +192,7 @@ end
         mat = Hikari.build_pbrt_material(entity, Hikari.PBRTScene(
             nothing, nothing, Mat4f(I), nothing, nothing,
             Dict{String,Hikari.PBRTEntity}(), Dict{String,Hikari.PBRTEntity}(),
-            Dict{String,Hikari.PBRTEntity}(),
+            Dict{String,Hikari.PBRTEntity}(), Dict{String,Mat4f}(),
             Hikari.PBRTShapeRecord[], Hikari.PBRTLightRecord[], "."))
         @test mat isa Hikari.Diffuse
     end

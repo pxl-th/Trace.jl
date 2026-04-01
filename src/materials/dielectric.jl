@@ -174,6 +174,18 @@ Uses Fresnel to choose between reflection and transmission.
     kr_spectral = uplift_rgb(table, kr_rgb, lambda)
     kt_spectral = uplift_rgb(table, kt_rgb, lambda)
 
+    # Get roughness and compute alpha
+    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
+    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
+    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
+    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+
+    # Apply regularization if requested
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
+
     # Determine if entering or exiting
     cos_theta_o = dot(wo, n)
     entering = cos_theta_o > 0f0
@@ -184,30 +196,75 @@ Uses Fresnel to choose between reflection and transmission.
     # pbrt-v4 convention: eta = n_t / n_i
     eta = entering ? ior : (1f0 / ior)
 
-    # Compute Fresnel reflectance
-    F = fresnel_dielectric(cos_theta_o, eta)
+    is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y) || eta == 1f0
 
-    # Choose reflection or refraction based on Fresnel
-    if rng < F
-        # Reflection — secondary termination applies even for reflection when dispersive
-        return SpectralBSDFSample(reflect(wo, n_oriented), kr_spectral, 1f0, true, 1f0, is_dispersive)
-    else
-        # Refraction
-        sin2_theta_i = max(0f0, 1f0 - cos_theta_o * cos_theta_o)
-        sin2_theta_t = sin2_theta_i / (eta * eta)
+    if is_smooth
+        # === Specular case (smooth dielectric) ===
+        R = fresnel_dielectric(cos_theta_o, eta)
+        T = 1f0 - R
 
-        if sin2_theta_t >= 1f0
-            # Total internal reflection
+        if rng < R
             wi = reflect(wo, n_oriented)
-            return SpectralBSDFSample(wi, kr_spectral, 1f0, true, 1f0, is_dispersive)
+            f_val = kr_spectral * (R / cos_theta_o)
+            return SpectralBSDFSample(f_val, wi, R, BXDF_SPECULAR_REFLECTION, 1f0, false, is_dispersive)
+        else
+            sin2_theta_i = max(0f0, 1f0 - cos_theta_o * cos_theta_o)
+            sin2_theta_t = sin2_theta_i / (eta * eta)
+            if sin2_theta_t >= 1f0
+                wi = reflect(wo, n_oriented)
+                f_val = kr_spectral * (1f0 / cos_theta_o)
+                return SpectralBSDFSample(f_val, wi, 1f0, BXDF_SPECULAR_REFLECTION, 1f0, false, is_dispersive)
+            end
+            cos_theta_t = sqrt(1f0 - sin2_theta_t)
+            wi = normalize(-wo / eta + (cos_theta_o / eta - cos_theta_t) * n_oriented)
+            etap = eta
+            f_val = kt_spectral * (T / cos_theta_t / (etap * etap))
+            return SpectralBSDFSample(f_val, wi, T, BXDF_SPECULAR_TRANSMISSION, etap, false, is_dispersive)
         end
+    else
+        # === Rough case (microfacet dielectric) ===
+        # Matches pbrt-v4 DielectricBxDF::Sample_f (bxdfs.cpp:117-169)
+        # Work in local shading space where n = (0,0,1)
+        tangent, bitangent = coordinate_system(n)
+        wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n_oriented))
 
-        cos_theta_t = sqrt(1f0 - sin2_theta_t)
-        wi = normalize(-wo / eta + (cos_theta_o / eta - cos_theta_t) * n_oriented)
+        wm = trowbridge_reitz_sample_wm(wo_local, sample_u, alpha_x, alpha_y)
+        R = fresnel_dielectric(dot(wo_local, wm), eta)
+        T = 1f0 - R
 
-        # Include 1/eta² correction for radiance transport (matches pbrt-v4)
-        eta_scale = 1f0 / (eta * eta)
-        return SpectralBSDFSample(wi, kt_spectral, 1f0, true, eta_scale, is_dispersive)
+        if rng < R
+            # Rough reflection — pbrt-v4 bxdfs.cpp:132-143
+            wi_local = reflect(wo_local, wm)
+            if !same_hemisphere(wo_local, wi_local)
+                return SpectralBSDFSample()
+            end
+            # pdf includes R/(R+T) = R sampling probability (pbrt line 138)
+            pdf = trowbridge_reitz_pdf(wo_local, wm, alpha_x, alpha_y) / (4f0 * abs(dot(wo_local, wm))) * R
+            D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+            G = trowbridge_reitz_g(wo_local, wi_local, alpha_x, alpha_y)
+            f_val = kr_spectral * (D * G * R / (4f0 * wi_local[3] * wo_local[3]))
+            wi = tangent * wi_local[1] + bitangent * wi_local[2] + n_oriented * wi_local[3]
+            wi = normalize(wi)
+            return SpectralBSDFSample(f_val, wi, pdf, BXDF_GLOSSY_REFLECTION, 1f0, false, is_dispersive)
+        else
+            # Rough transmission — pbrt-v4 bxdfs.cpp:145-168
+            valid, wi_local, etap = refract_microfacet(wo_local, wm, eta)
+            if !valid || same_hemisphere(wo_local, wi_local) || wi_local[3] == 0f0
+                return SpectralBSDFSample()
+            end
+            denom = (dot(wi_local, wm) + dot(wo_local, wm) / etap)^2
+            dwm_dwi = abs(dot(wi_local, wm)) / denom
+            # pdf includes T/(R+T) = T sampling probability (pbrt line 156)
+            pdf = trowbridge_reitz_pdf(wo_local, wm, alpha_x, alpha_y) * dwm_dwi * T
+            D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+            G = trowbridge_reitz_g(wo_local, wi_local, alpha_x, alpha_y)
+            f_val = kt_spectral * (T * D * G * abs(dot(wi_local, wm) * dot(wo_local, wm) / (wi_local[3] * wo_local[3] * denom)))
+            # Radiance mode: ft /= Sqr(etap) (pbrt line 164-165)
+            f_val = f_val / (etap * etap)
+            wi = tangent * wi_local[1] + bitangent * wi_local[2] + n_oriented * wi_local[3]
+            wi = normalize(wi)
+            return SpectralBSDFSample(f_val, wi, pdf, BXDF_GLOSSY_TRANSMISSION, etap, false, is_dispersive)
+        end
     end
 end
 
@@ -219,8 +276,71 @@ end
     mat::Dielectric, table::RGBToSpectrumTable, textures,
     wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
-    # Specular has zero PDF for non-delta directions
-    return (SpectralRadiance(), 0f0)
+    ior, _ = eval_dielectric_ior(textures, mat.index, tfc, lambda)
+    ior == 0f0 && (ior = 1f0)
+
+    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
+    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
+    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
+    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+
+    if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y) || ior == 1f0
+        # Specular: zero for non-delta directions
+        return (SpectralRadiance(), 0f0)
+    end
+
+    # Rough dielectric evaluation — matches pbrt-v4 DielectricBxDF::f + PDF (bxdfs.cpp:172-258)
+    kr_rgb = eval_tex(textures, mat.Kr, tfc)
+    kt_rgb = eval_tex(textures, mat.Kt, tfc)
+    kr_spectral = uplift_rgb(table, kr_rgb, lambda)
+    kt_spectral = uplift_rgb(table, kt_rgb, lambda)
+
+    cos_theta_o = dot(wo, n)
+    entering = cos_theta_o > 0f0
+    n_oriented = entering ? n : -n
+
+    tangent, bitangent = coordinate_system(n_oriented)
+    wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n_oriented))
+    wi_local = Vec3f(dot(wi, tangent), dot(wi, bitangent), dot(wi, n_oriented))
+
+    eta = entering ? ior : (1f0 / ior)
+    is_reflect = wo_local[3] * wi_local[3] > 0f0
+    etap = is_reflect ? 1f0 : (wo_local[3] > 0f0 ? eta : 1f0 / eta)
+
+    # Compute half vector
+    wm = normalize(wi_local * etap + wo_local)
+    if wo_local[3] == 0f0 || wi_local[3] == 0f0 || dot(wm, wm) < 1f-10
+        return (SpectralRadiance(), 0f0)
+    end
+    if wm[3] < 0f0; wm = -wm; end
+
+    # Discard backfacing microfacets
+    if dot(wm, wi_local) * wi_local[3] < 0f0 || dot(wm, wo_local) * wo_local[3] < 0f0
+        return (SpectralRadiance(), 0f0)
+    end
+
+    F = fresnel_dielectric(dot(wo_local, wm), eta)
+
+    if is_reflect
+        # Reflection
+        D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+        G = trowbridge_reitz_g(wo_local, wi_local, alpha_x, alpha_y)
+        f_val = kr_spectral * (D * G * F / abs(4f0 * wo_local[3] * wi_local[3]))
+        pdf = trowbridge_reitz_pdf(wo_local, wm, alpha_x, alpha_y) / (4f0 * abs(dot(wo_local, wm))) * F
+        return (f_val, pdf)
+    else
+        # Transmission
+        T = 1f0 - F
+        denom = (dot(wi_local, wm) + dot(wo_local, wm) / etap)^2
+        D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+        G = trowbridge_reitz_g(wo_local, wi_local, alpha_x, alpha_y)
+        f_val = kt_spectral * (T * D * G * abs(dot(wi_local, wm) * dot(wo_local, wm) / (wo_local[3] * wi_local[3] * denom)))
+        # Radiance mode: ft /= Sqr(etap)
+        f_val = f_val / (etap * etap)
+        dwm_dwi = abs(dot(wi_local, wm)) / denom
+        pdf = trowbridge_reitz_pdf(wo_local, wm, alpha_x, alpha_y) * dwm_dwi * T
+        return (f_val, pdf)
+    end
 end
 
 # ============================================================================
@@ -295,7 +415,7 @@ Key physics (pbrt-v4 lines 225-230):
 
         # f = R / |cos_θ|
         f_val = R / abs(wi_local[3])
-        return SpectralBSDFSample(wi, SpectralRadiance(f_val), prob_reflect, true, 1f0)
+        return SpectralBSDFSample(SpectralRadiance(f_val), wi, prob_reflect, BXDF_SPECULAR_REFLECTION, 1f0)
     else
         # Sample perfect specular transmission
         # wi = -wo (straight through, no refraction)
@@ -303,7 +423,7 @@ Key physics (pbrt-v4 lines 225-230):
 
         # f = T / |cos_θ|
         f_val = T / cos_θo
-        return SpectralBSDFSample(wi, SpectralRadiance(f_val), 1f0 - prob_reflect, true, 1f0)
+        return SpectralBSDFSample(SpectralRadiance(f_val), wi, 1f0 - prob_reflect, BXDF_SPECULAR_TRANSMISSION, 1f0)
     end
 end
 

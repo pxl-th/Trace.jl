@@ -107,7 +107,7 @@ Uses pbrt-v4 convention: work in local shading space where n = (0,0,1).
 
     pdf = cos_theta / Float32(π)
 
-    return SpectralBSDFSample(wi, f, pdf, false, 1f0)
+    return SpectralBSDFSample(f, wi, pdf, BXDF_DIFFUSE_REFLECTION, 1f0)
 end
 
 # ============================================================================

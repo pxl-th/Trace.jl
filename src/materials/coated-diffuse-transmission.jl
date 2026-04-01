@@ -244,7 +244,8 @@ end
         wi_local = flip_wi ? -bs.wi : bs.wi
         wi = tangent * wi_local[1] + bitangent * wi_local[2] + n * wi_local[3]
         wi = normalize(wi)
-        return SpectralBSDFSample(wi, bs.f, bs.pdf, bs.is_specular, 1f0)
+        flags = bs.is_specular ? BXDF_SPECULAR_REFLECTION : BXDF_GLOSSY_REFLECTION
+        return SpectralBSDFSample(bs.f, wi, bs.pdf, flags, 1f0, true, false)
     end
 
     # Begin random walk
@@ -326,7 +327,13 @@ end
             wi_local = flip_wi ? -w : w
             wi = tangent * wi_local[1] + bitangent * wi_local[2] + n * wi_local[3]
             wi = normalize(wi)
-            return SpectralBSDFSample(wi, f, pdf, specular_path, bs_interface.eta)
+            is_refl = same_hemisphere(wo_local, flip_wi ? -w : w)
+            flags = if specular_path
+                is_refl ? BXDF_SPECULAR_REFLECTION : BXDF_SPECULAR_TRANSMISSION
+            else
+                is_refl ? BXDF_GLOSSY_REFLECTION : BXDF_GLOSSY_TRANSMISSION
+            end
+            return SpectralBSDFSample(f, wi, pdf, flags, bs_interface.eta, true, false)
         end
 
         # Continue walk

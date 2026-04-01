@@ -137,8 +137,8 @@ function falloff(s::SpotLight, w::Vec3f)::Float32
     cosθ = wl[3]
     cosθ < s.cos_total_width && return 0f0
     cosθ ≥ s.cos_falloff_start && return 1f0
-    # Compute falloff inside spotlight cone.
+    # SmoothStep — matches pbrt-v4 util/math.h:268 SmoothStep(x, a, b) = t²(3 - 2t)
     δ = (cosθ - s.cos_total_width) / (s.cos_falloff_start - s.cos_total_width)
-    δ^4
+    δ * δ * (3f0 - 2f0 * δ)
 end
 

@@ -48,14 +48,14 @@ end
 @propagate_inbounds function sample_light_spectral(
     table::RGBToSpectrumTable, lights, light::SpotLight, p::Point3f, lambda::Wavelengths, ::Point2f
 )::LightSampleSpectral
-    to_light = light.position - p
+    to_light = Vec3f(light.position - p)
     dist_sq = dot(to_light, to_light)
     dist = sqrt(dist_sq)
     if dist < 1f-6
         return LightSampleSpectral()
     end
     wi = to_light / dist
-    wi_local = normalize(light.world_to_light(-wi))
+    wi_local = normalize(light.world_to_light(Vec3f(-wi)))
     cos_theta = wi_local[3]
     if cos_theta < light.cos_total_width
         return LightSampleSpectral()
@@ -65,7 +65,7 @@ end
     else
         delta = (cos_theta - light.cos_total_width) /
                 (light.cos_falloff_start - light.cos_total_width)
-        delta * delta * delta * delta
+        delta * delta * (3f0 - 2f0 * delta)  # SmoothStep (pbrt-v4 math.h:273)
     end
     Li = light.scale * Sample(table, light.i, lambda) * spot_falloff / dist_sq
     return LightSampleSpectral(Li, wi, 1f0, light.position, true)
@@ -98,9 +98,10 @@ end
     if pdf <= 0f0
         return LightSampleSpectral()
     end
-    Li_rgb = lookup_uv(light.env_map, uv, lights) * light.scale
+    Li_rgb = lookup_uv(light.env_map, uv, lights)
     p_light = Point3f(p + 1f6 * wi)
-    Li = uplift_rgb_illuminant(table, Li_rgb, lambda)
+    # Scale AFTER spectral uplift — sigmoid is nonlinear, so scale must be outside
+    Li = light.scale.c[1] * uplift_rgb_illuminant(table, Li_rgb, lambda)
     return LightSampleSpectral(Li, wi, pdf, p_light, false)
 end
 
@@ -219,8 +220,8 @@ end
 @propagate_inbounds function evaluate_environment_spectral(
     light::EnvironmentLight, lights, table::RGBToSpectrumTable, ray_d::Vec3f, lambda::Wavelengths
 )::SpectralRadiance
-    Le_rgb = light.env_map(ray_d, lights) * light.scale
-    return uplift_rgb_illuminant(table, Le_rgb, lambda)
+    Le_rgb = light.env_map(ray_d, lights)
+    return light.scale.c[1] * uplift_rgb_illuminant(table, Le_rgb, lambda)
 end
 
 @propagate_inbounds function evaluate_environment_spectral(

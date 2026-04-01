@@ -219,9 +219,9 @@ When `regularize=true`, the coating's microfacet alpha is increased to reduce fi
         wi = tangent * wi_local[1] + bitangent * wi_local[2] + n * wi_local[3]
         wi = normalize(wi)
 
-        # pdfIsProportional=true means the pdf is only proportional, not exact
-        # For specular, f already includes proper weighting
-        return SpectralBSDFSample(wi, bs.f, bs.pdf, bs.is_specular, 1f0)
+        # pdfIsProportional=true — LayeredBxDF returns proportional PDF
+        flags = bs.is_specular ? BXDF_SPECULAR_REFLECTION : BXDF_GLOSSY_REFLECTION
+        return SpectralBSDFSample(bs.f, wi, bs.pdf, flags, 1f0, true, false)
     end
 
     # === Begin random walk through layers ===
@@ -325,7 +325,14 @@ When `regularize=true`, the coating's microfacet alpha is increased to reduce fi
             wi = normalize(wi)
 
             # pdfIsProportional=true for LayeredBxDF
-            return SpectralBSDFSample(wi, f, pdf, specular_path, bs_interface.eta)
+            is_refl = same_hemisphere(wo_local, flip_wi ? -w : w)
+            flags = if specular_path
+                is_refl ? BXDF_SPECULAR_REFLECTION : BXDF_SPECULAR_TRANSMISSION
+            else
+                is_refl ? BXDF_GLOSSY_REFLECTION : BXDF_GLOSSY_TRANSMISSION
+            end
+            # pbrt-v4 hardcodes eta=1 for LayeredBxDF exit (bxdfs.h:768)
+            return SpectralBSDFSample(f, wi, pdf, flags, 1f0, true, false)
         end
 
         # Continuing random walk: multiply by AbsCosTheta for next segment
@@ -340,81 +347,67 @@ end
     evaluate_bsdf_spectral(table, mat::CoatedDiffuse, textures, wo, wi, n, uv, lambda) -> (f, pdf)
 
 Evaluate CoatedDiffuse BSDF using pbrt-v4's LayeredBxDF::f random walk algorithm.
-
-This is a 100% port of pbrt-v4's LayeredBxDF::f. The algorithm uses nSamples
-random walks to estimate the BSDF value using Monte Carlo integration with MIS.
+Exact port of pbrt-v4 bxdfs.h lines 477-652.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
     wo::Vec3f, wi::Vec3f, n::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
 )
-    # Get material properties
     refl_rgb = eval_tex(textures, mat.reflectance, tfc)
     eta = mat.eta
     thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
     albedo_rgb = eval_tex(textures, mat.albedo, tfc)
     g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
-
-    # Get roughness parameters
     u_roughness = eval_tex(textures, mat.u_roughness, tfc)
     v_roughness = eval_tex(textures, mat.v_roughness, tfc)
-
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
 
     refl_spectral = uplift_rgb(table, refl_rgb, lambda)
     albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
     has_medium = !is_black(albedo_rgb)
-
     n_samples = Int(mat.n_samples)
     max_depth = Int(mat.max_depth)
 
-    # Build local frame
     tangent, bitangent = coordinate_system(n)
-    cos_θo = dot(wo, n)
-    cos_θi = dot(wi, n)
+    wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n))
+    wi_local = Vec3f(dot(wi, tangent), dot(wi, bitangent), dot(wi, n))
 
-    wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), cos_θo)
-    wi_local = Vec3f(dot(wi, tangent), dot(wi, bitangent), cos_θi)
-
-    # Two-sided handling: flip if entering from below
+    # twoSided: flip if entering from below
     if wo_local[3] < 0f0
         wo_local = -wo_local
         wi_local = -wi_local
     end
-
-    # Check for grazing angles
     if abs(wo_local[3]) < 1f-6 || abs(wi_local[3]) < 1f-6
         return (SpectralRadiance(), 0f0)
     end
 
-    # Determine entrance interface (always top after flip)
     entered_top = true
-
-    # Determine exit interface based on wo/wi hemisphere relationship
     same_hemi = same_hemisphere(wo_local, wi_local)
-    # For CoatedDiffuse (twoSided=true), exit_z logic:
-    # SameHemisphere(wo,wi) ^ enteredTop -> if true, exit at bottom (z=0)
+    is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+
+    # exitInterface / nonExitInterface determination (pbrt lines 494-503)
+    # For CoatedDiffuse: top=dielectric, bottom=diffuse
+    # exit_at_bottom = SameHemisphere(wo,wi) XOR enteredTop
     exit_at_bottom = same_hemi ⊻ entered_top
     exit_z = exit_at_bottom ? 0f0 : thickness
+    # exitInterface is bottom (diffuse) when exit_at_bottom, top (dielectric) otherwise
+    # nonExitInterface is the other one
+    exit_is_specular = exit_at_bottom ? false : is_smooth   # diffuse is never specular
+    nonexit_is_specular = exit_at_bottom ? is_smooth : false
 
-    # Initialize result
+    # pbrt line 505-507: Account for reflection at entrance interface
     f_result = SpectralRadiance()
-
-    # Account for reflection at entrance interface (same hemisphere case)
     if same_hemi
         enter_f, _ = eval_dielectric_interface(wo_local, wi_local, alpha_x, alpha_y, eta)
         f_result = f_result + enter_f * Float32(n_samples)
     end
 
-    # Initialize RNG for evaluation (GPU-compatible functional style)
-    seed = UInt64(0)
-    rng = pcg32_init(pbrt_hash(seed, wo_local), pbrt_hash(wi_local))
-
-    is_smooth = trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+    # pbrt line 509-512: RNG
+    rng = pcg32_init(pbrt_hash(UInt64(0), wo_local), pbrt_hash(wi_local))
 
     for s in 1:n_samples
-        # Sample transmission through entrance interface (wo direction)
+        # pbrt line 517-522: Sample transmission through entrance (top) interface
         uc, rng = pcg32_uniform_f32(rng)
         u1, rng = pcg32_uniform_f32(rng)
         u2, rng = pcg32_uniform_f32(rng)
@@ -423,28 +416,28 @@ random walks to estimate the BSDF value using Monte Carlo integration with MIS.
             continue
         end
 
-        # Sample "virtual light" from exit interface (wi direction)
+        # pbrt line 524-529: Sample virtual light from exit interface
         uc, rng = pcg32_uniform_f32(rng)
         u1, rng = pcg32_uniform_f32(rng)
         u2, rng = pcg32_uniform_f32(rng)
-        if exit_at_bottom
-            # Exit through diffuse base
-            wis = sample_diffuse_interface(wi_local, Point2f(u1, u2), refl_spectral, BXDF_TRANSMISSION)
+        # pbrt-v4: wis = exitInterface.Sample_f(wi, ..., !mode, Transmission)
+        # !mode = Importance (no 1/etap² correction)
+        wis = if exit_at_bottom
+            sample_diffuse_interface(wi_local, Point2f(u1, u2), refl_spectral, BXDF_TRANSMISSION)
         else
-            # Exit through dielectric top
-            wis = sample_dielectric_interface(wi_local, uc, Point2f(u1, u2), alpha_x, alpha_y, eta, BXDF_TRANSMISSION)
+            sample_dielectric_interface(wi_local, uc, Point2f(u1, u2), alpha_x, alpha_y, eta, BXDF_TRANSMISSION, false)
         end
         if !wis.valid || wis.pdf == 0f0 || wis.wi[3] == 0f0
             continue
         end
 
-        # Initialize random walk state
+        # pbrt line 531-535: Initialize random walk state
         beta = wos.f * abs(wos.wi[3]) / wos.pdf
         z = entered_top ? thickness : 0f0
         w = wos.wi
 
         for depth in 0:(max_depth-1)
-            # Russian Roulette termination
+            # pbrt line 542-550: Russian Roulette
             if depth > 3 && max_component(beta) < 0.25f0
                 q = max(0f0, 1f0 - max_component(beta))
                 rr_val, rng = pcg32_uniform_f32(rng)
@@ -454,88 +447,73 @@ random walks to estimate the BSDF value using Monte Carlo integration with MIS.
                 beta = beta / (1f0 - q)
             end
 
-            if has_medium
-                # Sample medium scattering
+            # pbrt line 552-600: Account for media between layers
+            if !has_medium
+                # pbrt line 553-556: No medium — advance to next boundary
+                z = (z == thickness) ? 0f0 : thickness
+                beta = beta * layer_transmittance(thickness, w)
+            else
+                # pbrt line 558-599: Sample medium scattering
                 sigma_t = 1f0
                 exp_u, rng = pcg32_uniform_f32(rng)
                 dz = sample_exponential(exp_u, sigma_t / abs(w[3]))
                 zp = w[3] > 0f0 ? (z + dz) : (z - dz)
-
                 if zp == z
                     continue
                 end
-
                 if 0f0 < zp && zp < thickness
-                    # Scattering within medium - NEE contribution through exit
-                    if exit_at_bottom
-                        # Exit interface is diffuse - always non-specular
+                    # pbrt line 567-573: NEE contribution through exit using wis
+                    wt = 1f0
+                    if !exit_is_specular
                         wt = power_heuristic(1, wis.pdf, 1, hg_phase_pdf(g_val, dot(-w, -wis.wi)))
-                        f_exit, _ = eval_diffuse_interface(-w, -wis.wi, refl_spectral)
-                    else
-                        if !is_smooth
-                            wt = power_heuristic(1, wis.pdf, 1, hg_phase_pdf(g_val, dot(-w, -wis.wi)))
-                        else
-                            wt = 1f0
-                        end
-                        f_exit, _ = eval_dielectric_interface(-w, -wis.wi, alpha_x, alpha_y, eta)
                     end
-
                     phase_val = hg_phase_pdf(g_val, dot(-w, -wis.wi))
                     f_result = f_result + beta * albedo_spectral * phase_val * wt *
                                layer_transmittance(zp - exit_z, wis.wi) * wis.f / wis.pdf
 
-                    # Sample phase function for next segment
+                    # pbrt line 575-582: Sample phase function
                     phase_u1, rng = pcg32_uniform_f32(rng)
                     phase_u2, rng = pcg32_uniform_f32(rng)
                     wi_phase, phase_p = sample_hg_phase_spectral(g_val, -w, Point2f(phase_u1, phase_u2))
                     if phase_p == 0f0 || wi_phase[3] == 0f0
-                        break
+                        continue
                     end
-
                     beta = beta * albedo_spectral * phase_p / phase_p
                     w = wi_phase
                     z = zp
 
-                    # NEE through exit interface after phase scattering
-                    if ((z < exit_z && w[3] > 0f0) || (z > exit_z && w[3] < 0f0))
-                        if exit_at_bottom
-                            f_exit2, exit_pdf = eval_diffuse_interface(-w, wi_local, refl_spectral)
+                    # pbrt line 584-595: NEE through exit after phase scattering
+                    if ((z < exit_z && w[3] > 0f0) || (z > exit_z && w[3] < 0f0)) && !exit_is_specular
+                        f_exit, _ = if exit_at_bottom
+                            eval_diffuse_interface(-w, wi_local, refl_spectral)
                         else
-                            if !is_smooth
-                                f_exit2, _ = eval_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta)
-                                exit_pdf = pdf_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta, BXDF_TRANSMISSION)
-                            else
-                                continue  # Specular exit - no NEE
-                            end
+                            eval_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta)
                         end
-                        if max_component(f_exit2) > 0f0
+                        if max_component(f_exit) > 0f0
+                            exit_pdf = if exit_at_bottom
+                                pdf_diffuse_interface(-w, wi_local)
+                            else
+                                pdf_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta, BXDF_TRANSMISSION)
+                            end
                             wt2 = power_heuristic(1, phase_p, 1, exit_pdf)
-                            f_result = f_result + beta * layer_transmittance(zp - exit_z, wi_phase) * f_exit2 * wt2
+                            f_result = f_result + beta * layer_transmittance(zp - exit_z, wi_phase) * f_exit * wt2
                         end
                     end
-
                     continue
                 end
-
                 z = clamp(zp, 0f0, thickness)
-            else
-                # No medium: advance to other interface
-                z = (z == thickness) ? 0f0 : thickness
-                beta = beta * layer_transmittance(thickness, w)
             end
 
-            # Scattering at interface
-            at_exit = z == exit_z
-
-            if at_exit
-                # At exit interface - sample reflection to continue walk
+            # pbrt line 602-648: Account for scattering at appropriate interface
+            if z == exit_z
+                # pbrt line 603-611: At exit interface — sample reflection to continue walk
                 uc, rng = pcg32_uniform_f32(rng)
                 u1, rng = pcg32_uniform_f32(rng)
                 u2, rng = pcg32_uniform_f32(rng)
-                if exit_at_bottom
-                    bs = sample_diffuse_interface(-w, Point2f(u1, u2), refl_spectral, BXDF_REFLECTION)
+                bs = if exit_at_bottom
+                    sample_diffuse_interface(-w, Point2f(u1, u2), refl_spectral, BXDF_REFLECTION)
                 else
-                    bs = sample_dielectric_interface(-w, uc, Point2f(u1, u2), alpha_x, alpha_y, eta, BXDF_REFLECTION)
+                    sample_dielectric_interface(-w, uc, Point2f(u1, u2), alpha_x, alpha_y, eta, BXDF_REFLECTION)
                 end
                 if !bs.valid || bs.pdf == 0f0 || bs.wi[3] == 0f0
                     break
@@ -543,27 +521,22 @@ random walks to estimate the BSDF value using Monte Carlo integration with MIS.
                 beta = beta * bs.f * abs(bs.wi[3]) / bs.pdf
                 w = bs.wi
             else
-                # At non-exit interface - add NEE contribution
-                non_exit_is_specular = (z == thickness) ? is_smooth : false  # top is dielectric, bottom is diffuse
+                # pbrt line 613-648: At non-exit interface — NEE + sample new direction
 
-                if !non_exit_is_specular
-                    # Add NEE to exit direction
-                    if z == thickness
-                        # At top (dielectric)
-                        f_nee, _ = eval_dielectric_interface(-w, -wis.wi, alpha_x, alpha_y, eta)
+                # pbrt line 615-623: NEE along presampled wis direction
+                if !nonexit_is_specular
+                    f_nee, _ = if z == thickness
+                        eval_dielectric_interface(-w, -wis.wi, alpha_x, alpha_y, eta)
                     else
-                        # At bottom (diffuse)
-                        f_nee, _ = eval_diffuse_interface(-w, -wis.wi, refl_spectral)
+                        eval_diffuse_interface(-w, -wis.wi, refl_spectral)
                     end
-
                     if max_component(f_nee) > 0f0
                         wt = 1f0
-                        if !exit_at_bottom || !is_smooth
-                            # MIS weight
-                            if z == thickness
-                                nee_pdf = pdf_dielectric_interface(-w, -wis.wi, alpha_x, alpha_y, eta)
+                        if !exit_is_specular
+                            nee_pdf = if z == thickness
+                                pdf_dielectric_interface(-w, -wis.wi, alpha_x, alpha_y, eta)
                             else
-                                nee_pdf = pdf_diffuse_interface(-w, -wis.wi)
+                                pdf_diffuse_interface(-w, -wis.wi)
                             end
                             wt = power_heuristic(1, wis.pdf, 1, nee_pdf)
                         end
@@ -572,53 +545,49 @@ random walks to estimate the BSDF value using Monte Carlo integration with MIS.
                     end
                 end
 
-                # Sample new direction
+                # pbrt line 625-633: Sample new direction at nonExitInterface
                 uc, rng = pcg32_uniform_f32(rng)
                 u1, rng = pcg32_uniform_f32(rng)
                 u2, rng = pcg32_uniform_f32(rng)
-                if z == thickness
-                    bs = sample_dielectric_interface(-w, uc, Point2f(u1, u2), alpha_x, alpha_y, eta, BXDF_REFLECTION)
+                bs = if z == thickness
+                    sample_dielectric_interface(-w, uc, Point2f(u1, u2), alpha_x, alpha_y, eta, BXDF_REFLECTION)
                 else
-                    bs = sample_diffuse_interface(-w, Point2f(u1, u2), refl_spectral, BXDF_REFLECTION)
+                    sample_diffuse_interface(-w, Point2f(u1, u2), refl_spectral, BXDF_REFLECTION)
                 end
                 if !bs.valid || bs.pdf == 0f0 || bs.wi[3] == 0f0
                     break
                 end
-
                 beta = beta * bs.f * abs(bs.wi[3]) / bs.pdf
                 w = bs.wi
 
-                # NEE through exit after scattering
-                if !is_smooth || exit_at_bottom
-                    if exit_at_bottom
-                        f_exit3, _ = eval_diffuse_interface(-w, wi_local, refl_spectral)
+                # pbrt line 635-647: NEE through exit after scattering
+                if !exit_is_specular
+                    f_exit, _ = if exit_at_bottom
+                        eval_diffuse_interface(-w, wi_local, refl_spectral)
                     else
-                        f_exit3, _ = eval_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta)
+                        eval_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta)
                     end
-
-                    if max_component(f_exit3) > 0f0
+                    if max_component(f_exit) > 0f0
                         wt3 = 1f0
-                        if !non_exit_is_specular
-                            if exit_at_bottom
-                                exit_pdf3 = pdf_diffuse_interface(-w, wi_local)
+                        if !nonexit_is_specular
+                            exit_pdf3 = if exit_at_bottom
+                                pdf_diffuse_interface(-w, wi_local)
                             else
-                                exit_pdf3 = pdf_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta, BXDF_TRANSMISSION)
+                                pdf_dielectric_interface(-w, wi_local, alpha_x, alpha_y, eta, BXDF_TRANSMISSION)
                             end
                             wt3 = power_heuristic(1, bs.pdf, 1, exit_pdf3)
                         end
-                        f_result = f_result + beta * layer_transmittance(thickness, bs.wi) * f_exit3 * wt3
+                        f_result = f_result + beta * layer_transmittance(thickness, bs.wi) * f_exit * wt3
                     end
                 end
             end
         end
     end
 
+    # pbrt line 652
     f_result = f_result / Float32(n_samples)
 
-    # Compute PDF using a simplified estimate
-    # The full LayeredBxDF::PDF is complex; we use a reasonable approximation
     pdf = pdf_layered_bsdf(wo_local, wi_local, alpha_x, alpha_y, eta, n_samples, max_depth, refl_spectral, has_medium, g_val, thickness)
-
     return (f_result, pdf)
 end
 

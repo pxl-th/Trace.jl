@@ -32,7 +32,6 @@ mutable struct VolPath <: Integrator
     samples_per_pixel::Int32
     russian_roulette_depth::Int32
     regularize::Bool  # Apply BSDF regularization after first non-specular bounce
-    material_coherence::Symbol  # Material evaluation mode: :none, :sorted, :per_type
     max_component_value::Float32  # Firefly suppression: clamp RGB components (pbrt-v4 style)
     filter_params::GPUFilterParams  # Filter for pixel reconstruction (pbrt-v4 style)
     filter_sampler_data::Union{Nothing, GPUFilterSamplerData}  # Tabulated data for importance sampling
@@ -56,7 +55,7 @@ end
 
 """
     VolPath(; max_depth=8, samples=64, russian_roulette_depth=3, regularize=true,
-            material_coherence=:none, max_component_value=10, filter=GaussianFilter(),
+            max_component_value=10, filter=GaussianFilter(),
             accumulation_eltype=Float32, hw_accel=nothing)
 
 Create a VolPath integrator for volumetric path tracing.
@@ -68,10 +67,6 @@ Create a VolPath integrator for volumetric path tracing.
 - `regularize`: Apply BSDF regularization to reduce fireflies (default: true).
   When enabled, near-specular BSDFs are roughened after the first non-specular
   bounce, following pbrt-v4's approach.
-- `material_coherence`: Material evaluation strategy for GPU coherence (default: :none):
-  - `:none`: Standard evaluation (baseline)
-  - `:sorted`: Sort work items by material type before evaluation
-  - `:per_type`: Launch separate kernels per material type (pbrt-v4 style)
 - `max_component_value`: Maximum RGB component value before clamping (default: 10).
   When set to a finite value, RGB values are scaled down if any component exceeds this.
   This is pbrt-v4's firefly suppression mechanism. Try values like 10.0 or 100.0.
@@ -93,13 +88,11 @@ function VolPath(;
     samples::Int = 64,
     russian_roulette_depth::Int = 3,
     regularize::Bool = true,
-    material_coherence::Symbol = :none,
     max_component_value::Real = 10f0,
     filter::AbstractFilter = GaussianFilter(),  # pbrt-v4 default: Gaussian(1.5, 0.5)
     accumulation_eltype::DataType = Float32,
     hw_accel::Bool = false
 )
-    @assert material_coherence in (:none, :sorted, :per_type) "material_coherence must be :none, :sorted, :per_type"
     @assert accumulation_eltype in (Float32, Float64) "accumulation_eltype must be Float32 or Float64"
     # Build filter sampler data for importance sampling (nothing for Box/Triangle)
     sampler_data = GPUFilterSamplerData(filter)
@@ -108,7 +101,6 @@ function VolPath(;
         Int32(samples),
         Int32(russian_roulette_depth),
         regularize,
-        material_coherence,
         Float32(max_component_value),
         GPUFilterParams(filter),
         sampler_data,
@@ -228,9 +220,10 @@ Following pbrt-v4's GetCameraSample: samples the filter, computes offset and wei
 
         # Film position with filter offset (flip Y for camera convention)
         # pbrt-v4: cs.pFilm = pPixel + fs.p + Vector2f(0.5f, 0.5f)
+        # x,y are 1-based; convert to 0-based pixel center: (x-1)+0.5 = x-0.5
         p_film = Point2f(
-            Float32(x) + 0.5f0 + fs.p[1],
-            Float32(height) - Float32(y) + 1f0 + 0.5f0 + fs.p[2]
+            Float32(x) - 0.5f0 + fs.p[1],
+            Float32(height) - Float32(y) + 0.5f0 + fs.p[2]
         )
 
         camera_sample = CameraSample(p_film, Point2f(pixel_sample.lens_u, pixel_sample.lens_v), pixel_sample.time)
@@ -386,7 +379,9 @@ values and the sensor conversion happens at output time.
     @Const(filter_weight_per_pixel),
     @Const(cie_x), @Const(cie_y), @Const(cie_z),
     @Const(n_pixels::Int32),
-    @Const(max_component_value::Float32)
+    @Const(max_component_value::Float32),
+    @Const(output_matrix::Mat3f),
+    @Const(imaging_ratio::Float32),
 )
     pixel_idx = @index(Global)
 
@@ -403,9 +398,9 @@ values and the sensor conversion happens at output time.
 
         lambda = Wavelengths(lambda_tuple, pdf_tuple)
 
-        # Convert spectral to XYZ then to linear sRGB
-        xyz = spectral_to_xyz(cie_table, L, lambda)
-        rgb = max.(0f0, xyz_to_linear_srgb(xyz))
+        # Convert spectral to response (CIE XYZ or sensor RGB) then to output sRGB
+        response = spectral_to_xyz(cie_table, L, lambda)
+        rgb = max.(0f0, output_matrix * response) * imaging_ratio
 
         # Apply maxComponentValue clamping (pbrt-v4 firefly suppression)
         # This preserves color hue while preventing extremely bright values
@@ -588,16 +583,6 @@ function render!(
         ndrange=Int(n_pixels)
     )
 
-    # Ensure multi-material queue is allocated in state for :per_type mode
-    if vp.material_coherence == :per_type
-        N = length(materials)
-        if state.multi_material_queue === nothing ||
-           length(state.multi_material_queue.queues) != N
-            state.multi_material_queue = MultiMaterialQueue{N}(backend, state.material_queue.capacity)
-        end
-    end
-    multi_queue = state.multi_material_queue
-
     # Path tracing loop - following pbrt-v4 wavefront architecture
     # All inner kernels use indirect dispatch (0 rays = GPU no-op), so we
     # do NOT check queue sizes on CPU. Reading queue.size triggers a vk_flush!
@@ -631,32 +616,15 @@ function render!(
         end
 
         # Surface hits — all dispatches use indirect (empty queues = no-op)
-        if vp.material_coherence == :per_type && multi_queue !== nothing
-            reset_queues!(backend, multi_queue)
-            vp_process_surface_hits_coherent!(state, multi_queue, materials, lights)
+        vp_process_surface_hits!(state, materials, lights)
 
-            if length(lights) > 0
-                vp_sample_direct_lighting_coherent!(state, multi_queue, materials, lights, camera, Int32(vp.samples_per_pixel))
-            end
-
-            vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
-
-            vp_evaluate_materials_coherent!(state, multi_queue, materials, camera, Int32(vp.samples_per_pixel), vp.regularize)
-        else
-            vp_process_surface_hits!(state, materials, lights)
-
-            if length(lights) > 0
-                vp_sample_surface_direct_lighting!(state, materials, lights, camera, Int32(vp.samples_per_pixel))
-            end
-
-            vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
-
-            if vp.material_coherence == :sorted
-                vp_evaluate_materials_sorted!(state, materials, camera, Int32(vp.samples_per_pixel), vp.regularize)
-            else
-                vp_evaluate_materials!(state, materials, camera, Int32(vp.samples_per_pixel), vp.regularize)
-            end
+        if length(lights) > 0
+            vp_sample_surface_direct_lighting!(state, materials, lights, camera, Int32(vp.samples_per_pixel))
         end
+
+        vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
+
+        vp_evaluate_materials!(state, materials, camera, Int32(vp.samples_per_pixel), vp.regularize)
 
         swap_ray_queues!(state)
     end
@@ -670,7 +638,9 @@ function render!(
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
         state.cie_table.cie_x, state.cie_table.cie_y, state.cie_table.cie_z,
         Int32(n_pixels),
-        vp.max_component_value;
+        vp.max_component_value,
+        state.output_matrix,
+        state.imaging_ratio;
         ndrange=Int(n_pixels)
     )
 
@@ -712,8 +682,14 @@ function (vp::VolPath)(
     # Clear RGB and weight accumulators for fresh render
     clear!(vp)
     # Render all samples by calling render! repeatedly
+    # Flush GPU between samples to avoid driver timeout on long renders.
+    # Each sample generates ~100 dispatches; without flushing, N samples
+    # accumulate into a single massive GPU submission that can exceed
+    # the driver's preemption timeout (DEVICE_LOST).
+    backend = KA.get_backend(film.framebuffer)
     for _ in 1:vp.samples_per_pixel
         render!(vp, scene, film, camera)
+        KA.synchronize(backend)
     end
 
     postprocess!(film)

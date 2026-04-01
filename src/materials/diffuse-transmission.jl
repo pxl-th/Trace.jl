@@ -158,7 +158,7 @@ and transmission (opposite hemisphere). Sampling is proportional to max(R) and m
         f_spectral = r_spectral * (1f0 / Float32(π))
         pdf = prob_reflect * cos_theta / Float32(π)
 
-        return SpectralBSDFSample(wi, f_spectral, pdf, false, 1f0)
+        return SpectralBSDFSample(f_spectral, wi, pdf, BXDF_DIFFUSE_REFLECTION, 1f0)
     else
         # Sample diffuse transmission (opposite hemisphere from wo)
         local_wi = cosine_sample_hemisphere(sample_u)
@@ -180,7 +180,7 @@ and transmission (opposite hemisphere). Sampling is proportional to max(R) and m
         f_spectral = t_spectral * (1f0 / Float32(π))
         pdf = (1f0 - prob_reflect) * cos_theta / Float32(π)
 
-        return SpectralBSDFSample(wi, f_spectral, pdf, false, 1f0)
+        return SpectralBSDFSample(f_spectral, wi, pdf, BXDF_DIFFUSE_TRANSMISSION, 1f0)
     end
 end
 

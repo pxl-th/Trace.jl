@@ -71,6 +71,8 @@ struct PBRTScene
     named_media::Dict{String, PBRTEntity}
     named_textures::Dict{String, PBRTEntity}
 
+    media_transforms::Dict{String, Mat4f}
+
     shapes::Vector{PBRTShapeRecord}
     lights::Vector{PBRTLightRecord}
 
@@ -180,6 +182,7 @@ function parse_pbrt_string(text::AbstractString;
     named_materials = Dict{String, PBRTEntity}()
     named_media = Dict{String, PBRTEntity}()
     named_textures = Dict{String, PBRTEntity}()
+    media_transforms = Dict{String, Mat4f}()
 
     shapes = PBRTShapeRecord[]
     lights = PBRTLightRecord[]
@@ -327,10 +330,12 @@ function parse_pbrt_string(text::AbstractString;
             med_type = haskey(params, "type") ? only(params["type"].values) : "homogeneous"
             delete!(params, "type")
             named_media[name] = PBRTEntity("Medium", String(med_type), params)
+            media_transforms[name] = ctm
 
         elseif word == "MediumInterface"
-            attr.medium_outer = expect!(ts, TOK_STRING).value
+            # pbrt: MediumInterface "inside" "outside"
             attr.medium_inner = expect!(ts, TOK_STRING).value
+            attr.medium_outer = expect!(ts, TOK_STRING).value
 
         # ---- Textures ----
 
@@ -406,6 +411,7 @@ function parse_pbrt_string(text::AbstractString;
     return PBRTScene(
         film, camera, camera_transform, sampler, integrator,
         named_materials, named_media, named_textures,
+        media_transforms,
         shapes, lights, base_dir,
     )
 end
@@ -416,9 +422,10 @@ end
 
 function pbrt_lookat(eye::Point3f, target::Point3f, up::Vec3f)
     # pbrt's LookAt produces a world-to-camera matrix (like OpenGL gluLookAt)
+    # Cross product order must match pbrt-v4: right = cross(up, dir), newUp = cross(dir, right)
     dir = normalize(target - eye)
-    right = normalize(cross(dir, normalize(up)))
-    new_up = cross(right, dir)
+    right = normalize(cross(normalize(up), dir))
+    new_up = cross(dir, right)
 
     tx = -dot(right, Vec3f(eye))
     ty = -dot(new_up, Vec3f(eye))

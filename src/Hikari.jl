@@ -81,6 +81,8 @@ include("textures/environment_map.jl")
 # Spectral rendering support
 include("spectral/color.jl")
 include("spectral/uplift.jl")
+include("spectral/sensor.jl")
+include("spectral/sensor_data.jl")
 
 # Materials: shared math first, then each material, then dispatch
 include("materials/common.jl")
@@ -132,7 +134,6 @@ include("integrators/volpath/delta-tracking.jl")
 include("integrators/volpath/medium-scatter.jl")
 include("integrators/volpath/intersection.jl")
 include("integrators/volpath/surface-eval.jl")
-include("integrators/volpath/multi-material-eval.jl")
 include("integrators/volpath/volpath.jl")
 # Hardware RT integration (HWTLAS, HWAdaptedAccel, dispatch overrides)
 # Loaded via ext/HikariLavaExt.jl when Lava is available

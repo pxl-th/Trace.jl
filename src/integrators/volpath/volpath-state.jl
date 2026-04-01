@@ -71,8 +71,12 @@ mutable struct VolPathState{Backend}
     # RGB to spectrum table
     rgb2spec_table::RGBToSpectrumTable
 
-    # CIE XYZ color matching table
+    # Spectral response table (CIE XYZ or camera sensor curves)
     cie_table::CIEXYZTable
+
+    # Sensor output: response → output RGB matrix + exposure scaling
+    output_matrix::Mat3f
+    imaging_ratio::Float32
 
     # BVH Light Sampler data (spatially-aware importance sampling)
     bvh_nodes::AbstractVector{LightBVHNode}           # BVH node array (GPU)
@@ -90,10 +94,6 @@ mutable struct VolPathState{Backend}
 
     # Sobol RNG for low-discrepancy sampling (allocated once, reused across frames)
     sobol_rng::Any  # SobolRNG or nothing
-
-    # Multi-material queue for :per_type coherence mode
-    # Stored as Any to allow different N values (number of material types)
-    multi_material_queue::Any  # MultiMaterialQueue{N} or nothing
 end
 
 """
@@ -228,11 +228,11 @@ function VolPathState(
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
         pixel_samples,
         rgb2spec_table, cie_table,
+        SRGB_FROM_XYZ, 1f0,  # default: CIE XYZ → sRGB, no exposure scaling
         bvh_nodes, light_to_bit_trail, infinite_light_indices,
         num_bvh_lights, num_infinite_lights, Int32(n_lights),
         Int32(max_depth), Int32(rr_depth), Int32(width), Int32(height),
         sobol_rng,
-        nothing  # multi_material_queue
     )
 end
 

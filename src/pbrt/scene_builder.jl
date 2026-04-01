@@ -10,6 +10,8 @@ struct PBRTResult
     camera::PerspectiveCamera
     film::Film
     integrator_settings::NamedTuple
+    sensor::PixelSensor
+    sensor_name::String
 end
 
 """
@@ -38,32 +40,57 @@ function build_hikari_scene(pbrt::PBRTScene;
     # --- Film ---
     xres = 512
     yres = 512
+    sensor_name = "cie1931"
+    sensor_iso = 100f0
+    sensor_wb = 0f0
     if pbrt.film !== nothing
         xres = pbrt_get_int(pbrt.film, "xresolution", 512)
         yres = pbrt_get_int(pbrt.film, "yresolution", 512)
+        sensor_name = pbrt_get_string(pbrt.film, "sensor", "cie1931")
+        sensor_iso = Float32(pbrt_get_float(pbrt.film, "iso", 100.0))
+        sensor_wb = Float32(pbrt_get_float(pbrt.film, "whitebalance", 0.0))
     end
-    film = Film(Point2f(xres, yres))
+    exposure_time = 1f0
+    if pbrt.film !== nothing
+        exposure_time = Float32(pbrt_get_float(pbrt.film, "exposuretime", 1.0))
+    end
+    film = Adapt.adapt(backend, Film(Point2f(xres, yres)))
+    sensor = PixelSensor(sensor=sensor_name, iso=sensor_iso, whitebalance=sensor_wb,
+                         exposure_time=exposure_time)
 
     # --- Camera ---
     fov = 90f0
     if pbrt.camera !== nothing
         fov = Float32(pbrt_get_float(pbrt.camera, "fov", 90.0))
     end
-    # pbrt's camera_transform is world-to-camera; we need camera-to-world
-    cam_to_world = inv(pbrt.camera_transform)
-    eye = Point3f(cam_to_world[1, 4], cam_to_world[2, 4], cam_to_world[3, 4])
-    # pbrt looks along -Z in camera space → forward = -column3 of cam_to_world
-    forward = normalize(-Vec3f(cam_to_world[1, 3], cam_to_world[2, 3], cam_to_world[3, 3]))
-    target = Point3f(eye + forward)
-    up = normalize(Vec3f(cam_to_world[1, 2], cam_to_world[2, 2], cam_to_world[3, 2]))
-    camera = PerspectiveCamera(eye, target, film; up=up, fov=fov)
+    # pbrt's camera_transform is world-to-camera Mat4f from pbrt_lookat.
+    # Use it directly as a Transformation to avoid the roundtrip through
+    # eye/target/up extraction → Raycore.look_at (which has different cross product convention).
+    # PerspectiveCamera's main constructor expects what look_at returns:
+    # a Transformation where .m is world-to-camera (it internally inverts it).
+    wtc_mat = pbrt.camera_transform
+    ctw_mat = inv(wtc_mat)
+    wtc_tf = Transformation(wtc_mat, ctw_mat)
+    screen = Bounds2(Point2f(-1f0), Point2f(1f0))
+    camera = PerspectiveCamera(
+        wtc_tf, screen, 0f0, 1f0, 0f0, 1f6, Float32(fov), film
+    )
 
     # --- Integrator settings ---
+    # Match pbrt-v4 defaults exactly
     int_samples = 64
-    int_max_depth = 8
+    int_max_depth = 5           # pbrt-v4 default
+    int_regularize = false      # pbrt-v4 wavefront default (surfscatter.cpp:196)
+    int_rr_depth = 1            # pbrt-v4 hardcoded (surfscatter.cpp:215: depth >= 1)
+    int_max_component = Inf32   # pbrt-v4 default (film.cpp:576: Infinity)
     if pbrt.integrator !== nothing
         int_samples = pbrt_get_int(pbrt.integrator, "pixelsamples", 64)
-        int_max_depth = pbrt_get_int(pbrt.integrator, "maxdepth", 8)
+        int_max_depth = pbrt_get_int(pbrt.integrator, "maxdepth", 5)
+        int_regularize = pbrt_get_bool(pbrt.integrator, "regularize", false)
+    end
+    # Film maxcomponentvalue
+    if pbrt.film !== nothing
+        int_max_component = Float32(pbrt_get_float(pbrt.film, "maxcomponentvalue", Inf))
     end
     samples !== nothing && (int_samples = samples)
     max_depth !== nothing && (int_max_depth = max_depth)
@@ -72,6 +99,14 @@ function build_hikari_scene(pbrt::PBRTScene;
     mat_cache = Dict{String, Material}()
     for (name, entity) in pbrt.named_materials
         mat_cache[name] = build_pbrt_material(entity, pbrt)
+    end
+
+    # --- Build media cache ---
+    media_cache = Dict{String, Medium}()
+    for (name, entity) in pbrt.named_media
+        transform = get(pbrt.media_transforms, name, IDENTITY4)
+        med = build_pbrt_medium(entity, pbrt, transform)
+        med !== nothing && (media_cache[name] = med)
     end
 
     # --- Build scene ---
@@ -89,20 +124,26 @@ function build_hikari_scene(pbrt::PBRTScene;
         mesh === nothing && continue
         mat = resolve_pbrt_material(srec, mat_cache, pbrt; scene=scene)
 
+        # Resolve media for this shape
+        inside_medium = get(media_cache, srec.medium_inner, nothing)
+        outside_medium = get(media_cache, srec.medium_outer, nothing)
+
         # Area light → wrap material in MediumInterface with Emissive
         # pbrt normalizes: scale /= SpectrumToPhotometric(Lemit)
         if srec.area_light !== nothing
             Le = pbrt_get_rgb(srec.area_light, "L", (1.0, 1.0, 1.0))
             al_scale = Float32(pbrt_get_float(srec.area_light, "scale", 1.0))
-            # Match pbrt's photometric normalization: scale /= SpectrumToPhotometric(Lemit)
-            # Both pbrt and Hikari now use illuminant spectrum for area light emission,
-            # so normalizing against the same illuminant spectrum gives matching results.
             table = get_srgb_table()
             Le_spectrum = rgb_illuminant_spectrum(table,
                 RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
             al_scale /= spectrum_to_photometric(Le_spectrum)
             emissive = Emissive(Le=Le, scale=al_scale)
-            push!(scene, mesh, MediumInterface(emissive))
+            push!(scene, mesh, MediumInterface(emissive;
+                inside=inside_medium, outside=outside_medium))
+        elseif inside_medium !== nothing || outside_medium !== nothing
+            # Shape has participating media — wrap in MediumInterface
+            push!(scene, mesh, MediumInterface(mat;
+                inside=inside_medium, outside=outside_medium))
         else
             push!(scene, mesh, mat)
         end
@@ -111,7 +152,9 @@ function build_hikari_scene(pbrt::PBRTScene;
     sync!(scene)
 
     return PBRTResult(scene, camera, film,
-        (samples=int_samples, max_depth=int_max_depth))
+        (samples=int_samples, max_depth=int_max_depth, regularize=int_regularize,
+         russian_roulette_depth=int_rr_depth, max_component_value=int_max_component),
+        sensor, sensor_name)
 end
 
 # ============================================================================
@@ -169,6 +212,70 @@ function pbrt_get_ints(entity::PBRTEntity, name::String)
 end
 
 # ============================================================================
+# Medium building
+# ============================================================================
+
+function build_pbrt_medium(entity::PBRTEntity, pbrt::PBRTScene, transform::Mat4f=IDENTITY4)
+    type = lowercase(entity.type)
+
+    if type == "homogeneous"
+        sigma_a = pbrt_get_rgb(entity, "sigma_a", (1.0, 1.0, 1.0))
+        sigma_s = pbrt_get_rgb(entity, "sigma_s", (1.0, 1.0, 1.0))
+        g_val = Float32(pbrt_get_float(entity, "g", 0.0))
+        return HomogeneousMedium(
+            σ_a=RGBSpectrum(Float32(sigma_a[1]), Float32(sigma_a[2]), Float32(sigma_a[3])),
+            σ_s=RGBSpectrum(Float32(sigma_s[1]), Float32(sigma_s[2]), Float32(sigma_s[3])),
+            g=g_val)
+
+    elseif type == "nanovdb"
+        filename = pbrt_get_string(entity, "filename", "")
+        isempty(filename) && (@warn "pbrt: nanovdb medium without filename"; return nothing)
+        path = isabspath(filename) ? filename : joinpath(pbrt.base_dir, filename)
+        isfile(path) || (@warn "pbrt: NanoVDB file not found: $path"; return nothing)
+
+        # Parse sigma_a and sigma_s — may be "spectrum" type (wavelength/value pairs)
+        # or "rgb" type. For spectrum type, use a representative value.
+        sigma_a = pbrt_get_spectrum_as_rgb(entity, "sigma_a", (0.5, 0.5, 0.5))
+        sigma_s = pbrt_get_spectrum_as_rgb(entity, "sigma_s", (10.0, 10.0, 10.0))
+        g_val = Float32(pbrt_get_float(entity, "g", 0.0))
+
+        # Extract 3x3 rotation from the medium's transform (set by Rotate in AttributeBegin)
+        rot = Mat3f(transform[1,1], transform[2,1], transform[3,1],
+                    transform[1,2], transform[2,2], transform[3,2],
+                    transform[1,3], transform[2,3], transform[3,3])
+        return NanoVDBMedium(path;
+            σ_a=RGBSpectrum(Float32(sigma_a[1]), Float32(sigma_a[2]), Float32(sigma_a[3])),
+            σ_s=RGBSpectrum(Float32(sigma_s[1]), Float32(sigma_s[2]), Float32(sigma_s[3])),
+            g=g_val,
+            transform=rot)
+
+    else
+        @warn "pbrt: unsupported medium type '$type'"
+        return nothing
+    end
+end
+
+"""Extract a spectrum parameter as RGB. Handles both "rgb" and "spectrum" (wavelength/value pairs)."""
+function pbrt_get_spectrum_as_rgb(entity::PBRTEntity, name::String, default::NTuple{3,Float64})
+    haskey(entity.params, name) || return default
+    p = entity.params[name]
+    if p.type == :rgb && length(p.values) >= 3
+        return (Float64(p.values[1]), Float64(p.values[2]), Float64(p.values[3]))
+    elseif p.type == :spectrum && length(p.values) >= 2
+        # Wavelength/value pairs — take a representative value (average of all values)
+        vals = Float64[p.values[i] for i in 2:2:length(p.values)]
+        avg = sum(vals) / length(vals)
+        return (avg, avg, avg)
+    elseif length(p.values) >= 2 && all(v -> v isa Number, p.values)
+        # Might be interleaved wavelength/value pairs stored as floats
+        vals = Float64[p.values[i] for i in 2:2:length(p.values)]
+        avg = sum(vals) / length(vals)
+        return (avg, avg, avg)
+    end
+    return default
+end
+
+# ============================================================================
 # Material building
 # ============================================================================
 
@@ -223,22 +330,26 @@ function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
         crough = Float32(pbrt_get_float(entity, "conductor.roughness", 0.0))
         ieta = Float32(pbrt_get_float(entity, "interface.eta", 1.5))
         ceta_str = pbrt_get_string(entity, "conductor.eta", "")
-        # For named spectra, build a Conductor first, then extract its eta/k textures
-        base = if contains(ceta_str, "Au") || contains(ceta_str, "gold")
-            Gold(roughness=crough)
-        elseif contains(ceta_str, "Ag") || contains(ceta_str, "silver")
-            Silver(roughness=crough)
-        elseif contains(ceta_str, "Cu") && !contains(ceta_str, "CuZn")
-            Copper(roughness=crough)
-        elseif contains(ceta_str, "Al")
-            Aluminum(roughness=crough)
-        else
-            nothing
-        end
-        if base !== nothing
-            # Use reflectance mode — spectral eta/k don't wrap in Texture easily
+        # Named spectra → pass PiecewiseLinearSpectrum directly as conductor eta/k
+        # These get evaluated spectrally at render time via eval_ior_spectral
+        if contains(ceta_str, "Au") || contains(ceta_str, "gold")
             return CoatedConductor(
-                reflectance=base.reflectance,
+                conductor_eta=AU_ETA_SPECTRUM, conductor_k=AU_K_SPECTRUM,
+                conductor_roughness=crough,
+                interface_roughness=irough, interface_eta=ieta)
+        elseif contains(ceta_str, "Ag") || contains(ceta_str, "silver")
+            return CoatedConductor(
+                conductor_eta=AG_ETA_SPECTRUM, conductor_k=AG_K_SPECTRUM,
+                conductor_roughness=crough,
+                interface_roughness=irough, interface_eta=ieta)
+        elseif contains(ceta_str, "Cu") && !contains(ceta_str, "CuZn")
+            return CoatedConductor(
+                conductor_eta=CU_ETA_SPECTRUM, conductor_k=CU_K_SPECTRUM,
+                conductor_roughness=crough,
+                interface_roughness=irough, interface_eta=ieta)
+        elseif contains(ceta_str, "Al")
+            return CoatedConductor(
+                conductor_eta=AL_ETA_SPECTRUM, conductor_k=AL_K_SPECTRUM,
                 conductor_roughness=crough,
                 interface_roughness=irough, interface_eta=ieta)
         end
@@ -257,6 +368,10 @@ function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
     elseif type == "mirror"
         refl = pbrt_get_rgb(entity, "reflectance", (0.9, 0.9, 0.9))
         return Mirror(Kr=refl)
+
+    elseif type == "interface"
+        # Transparent boundary material for volumes — fully transmissive dielectric
+        return Dielectric(Kr=(0,0,0), Kt=(1,1,1), index=1f0)
 
     elseif type == "mix"
         # Mix needs special handling — returns nothing here,
@@ -529,7 +644,16 @@ function build_pbrt_light(lrec::PBRTLightRecord, pbrt::PBRTScene)
         if !isempty(filename)
             path = isabspath(filename) ? filename : joinpath(pbrt.base_dir, filename)
             if isfile(path)
-                return EnvironmentLight(path; scale=RGBSpectrum(sc))
+                # Extract 3x3 rotation from the light's 4x4 transform
+                t = lrec.transform
+                rotation = Mat3f(t[1,1], t[2,1], t[3,1],
+                                 t[1,2], t[2,2], t[3,2],
+                                 t[1,3], t[2,3], t[3,3])
+                # pbrt normalizes: scale /= SpectrumToPhotometric(colorSpace.illuminant)
+                sc /= D65_PHOTOMETRIC
+                # Convert non-sRGB images to sRGB (Hikari's spectral uplift uses sRGB tables)
+                env_path_converted = convert_envmap_to_srgb(path)
+                return EnvironmentLight(env_path_converted; scale=RGBSpectrum(sc), rotation=rotation)
             end
         end
         rgb = pbrt_get_rgb(entity, "L", (1.0, 1.0, 1.0))
@@ -540,6 +664,60 @@ function build_pbrt_light(lrec::PBRTLightRecord, pbrt::PBRTScene)
         @warn "pbrt: unsupported light type '$type'"
         return nothing
     end
+end
+
+# ACES AP0 → sRGB conversion matrix (includes XYZ intermediate)
+const SRGB_FROM_ACES_AP0 = Mat3f(
+     2.55798f0,  -0.27799f0,  -0.01717f0,
+    -1.11929f0,   1.36605f0,  -0.14857f0,
+    -0.39175f0,  -0.09349f0,   1.08128f0,
+)
+
+"""
+Detect if an EXR image is in ACES color space and convert to sRGB if needed.
+Returns the path to use (original if already sRGB, or a temp converted file).
+"""
+function convert_envmap_to_srgb(path::String)
+    # Try to detect ACES from file content. pbrt's imgtool reports "color space: ACES"
+    # for ACES images. We detect by checking if the EXR has chromaticities matching ACES AP0.
+    # For simplicity: check if pbrt's imgtool reports ACES, or use a heuristic based on
+    # the file path or a quick pixel range check.
+    #
+    # Pragmatic approach: try to read chromaticities from EXR metadata.
+    # If not available, check pixel values — ACES images often have values > 1 for HDR
+    # but that's not definitive. Instead, use a simple approach:
+    # run pbrt's imgtool if available, or just convert all HDR env maps defensively.
+
+    # Check via imgtool
+    pbrt_imgtool = "/sim/Programmieren/VulkanDev/pbrt-v4/build/imgtool"
+    is_aces = false
+    if isfile(pbrt_imgtool)
+        try
+            output = read(`$pbrt_imgtool info $path`, String)
+            is_aces = contains(output, "ACES")
+        catch
+        end
+    end
+
+    if !is_aces
+        return path  # sRGB or unknown — use as-is
+    end
+
+    # Convert ACES → sRGB
+    img = FileIO.load(path)
+    M = SRGB_FROM_ACES_AP0
+    converted = map(img) do p
+        r, g, b = Float32(p.r), Float32(p.g), Float32(p.b)
+        nr = M[1,1]*r + M[1,2]*g + M[1,3]*b
+        ng = M[2,1]*r + M[2,2]*g + M[2,3]*b
+        nb = M[3,1]*r + M[3,2]*g + M[3,3]*b
+        RGB{Float32}(max(0f0, nr), max(0f0, ng), max(0f0, nb))
+    end
+    # Save to temp file
+    converted_path = tempname() * ".exr"
+    FileIO.save(converted_path, converted)
+    @info "pbrt: converted ACES env map to sRGB" path converted_path
+    return converted_path
 end
 
 # ============================================================================
@@ -557,11 +735,67 @@ function render_pbrt(filename::AbstractString;
                      max_depth::Union{Nothing, Int}=nothing,
                      output::Union{Nothing, String}=nothing)
     r = load_pbrt(filename; backend=backend, samples=samples, max_depth=max_depth)
-    vp = VolPath(samples=r.integrator_settings.samples,
-                 max_depth=r.integrator_settings.max_depth)
+    s = r.integrator_settings
+    spp = s.samples
+    vp = VolPath(samples=spp, max_depth=s.max_depth, regularize=s.regularize,
+                 russian_roulette_depth=s.russian_roulette_depth,
+                 max_component_value=s.max_component_value)
+
+    # Pre-create the state with sensor configured BEFORE any rendering.
+    # This avoids the wasteful double-render that was needed when using
+    # render!'s lazy state creation followed by sensor configuration.
+    height, width = size(r.film.framebuffer)
+    sobol_spp = max(spp, 4096)
+    vp.state = VolPathState(KA.get_backend(r.film.framebuffer), width, height, r.scene.lights;
+                            max_depth=vp.max_depth,
+                            rr_depth=vp.russian_roulette_depth,
+                            scene_radius=world_radius(r.scene),
+                            samples_per_pixel=sobol_spp,
+                            sampler_seed=UInt32(0),
+                            accumulation_eltype=vp.accumulation_eltype)
+    configure_sensor!(vp.state, r.sensor, r.sensor_name)
+
+    # Render all samples with sensor-configured state
     img = vp(r.scene, r.film, r.camera)
+
     if output !== nothing
-        FileIO.save(output, img)
+        FileIO.save(output, Array(img))
     end
-    return img
+    return r.film.framebuffer
+end
+
+"""
+    apply_sensor!(framebuffer, sensor)
+
+Apply pixel sensor ISO/exposure and white balance correction to a rendered framebuffer.
+Hikari renders using CIE XYZ → sRGB. This function applies:
+1. imaging_ratio (ISO * exposure_time / 100) — brightness scaling
+2. White balance — chromatic adaptation from scene illuminant to D65
+
+Note: Real camera sensor spectral response curves (e.g., nikon_d850) change the
+spectral integration itself and cannot be applied as a post-process. They require
+modification to Hikari's spectral→XYZ conversion kernel. White balance and ISO
+are correctly handled here as they are linear transforms on the XYZ/RGB values.
+"""
+function apply_sensor!(fb::AbstractMatrix{RGB{Float32}}, sensor::PixelSensor)
+    # Compute correction: sRGB → XYZ → (sensor output_from_sensor) = sRGB → sensor_sRGB
+    # For cie1931 with WB: output_from_sensor = SRGB_FROM_XYZ * white_balance_matrix
+    # So correction = (SRGB_FROM_XYZ * WB) * XYZ_FROM_SRGB = SRGB * WB * inv(SRGB)
+    # For cie1931 without WB: output_from_sensor = SRGB_FROM_XYZ → correction = identity
+    correction = sensor.output_from_sensor * XYZ_FROM_SRGB
+    ratio = sensor.imaging_ratio
+
+    # Skip if it's the default pipeline (identity correction, ratio=1)
+    if correction ≈ Mat3f(LinearAlgebra.I) && ratio ≈ 1f0
+        return
+    end
+
+    M = correction * ratio
+
+    for idx in eachindex(fb)
+        p = fb[idx]
+        v = Vec3f(p.r, p.g, p.b)
+        v2 = M * v
+        fb[idx] = RGB{Float32}(max(0f0, v2[1]), max(0f0, v2[2]), max(0f0, v2[3]))
+    end
 end

@@ -215,7 +215,7 @@ Sample perfect specular reflection with spectral evaluation.
     wi = reflect(wo, n_oriented)
 
     # Delta distribution: f = Kr, pdf = 1 (conceptually infinite, but we handle it specially)
-    return SpectralBSDFSample(wi, kr_spectral, 1f0, true, 1f0)
+    return SpectralBSDFSample(kr_spectral, wi, 1f0, BXDF_SPECULAR_REFLECTION, 1f0)
 end
 
 # ============================================================================
@@ -298,7 +298,7 @@ from near-specular paths (matches pbrt-v4 BSDF::Regularize).
         # Transform wi back to world coordinates
         wi_world = local_to_world(wi, n, tangent, bitangent)
 
-        return SpectralBSDFSample(wi_world, f, 1f0, true, 1f0)
+        return SpectralBSDFSample(f, wi_world, 1f0, BXDF_SPECULAR_REFLECTION, 1f0)
     else
         # Sample rough conductor BRDF (matches pbrt-v4 line 307-327)
 
@@ -338,7 +338,7 @@ from near-specular paths (matches pbrt-v4 BSDF::Regularize).
         # Transform wi back to world coordinates
         wi_world = local_to_world(wi, n, tangent, bitangent)
 
-        return SpectralBSDFSample(wi_world, f, pdf, false, 1f0)
+        return SpectralBSDFSample(f, wi_world, pdf, BXDF_GLOSSY_REFLECTION, 1f0)
     end
 end
 

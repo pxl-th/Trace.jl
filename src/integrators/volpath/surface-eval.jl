@@ -436,23 +436,32 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
 
     # Check if valid sample
     if sample.pdf > 0f0 && !is_black(sample.f)
-        # Compute new throughput
+        # pbrt surfscatter.cpp:190-203
+        # beta always uses sample.pdf (proportional or exact)
+        # r_l uses re-evaluated PDF when pdfIsProportional
         cos_theta = abs(dot(sample.wi, work.ns))
-        new_beta = if sample.is_specular
-            work.beta * sample.f
+        new_beta = work.beta * sample.f * cos_theta / sample.pdf
+
+        # Update eta scale for refraction — pbrt-v4 surfscatter.cpp:206-208
+        # etaScale *= Sqr(bsdfSample->eta) only for transmission
+        new_eta_scale = if is_transmissive(sample.flags)
+            work.eta_scale * sample.eta * sample.eta
         else
-            work.beta * sample.f * cos_theta / sample.pdf
+            work.eta_scale
         end
 
-        # Update eta scale for refraction
-        new_eta_scale = work.eta_scale * sample.eta_scale
-
-        # Update MIS weights
-        new_r_l = if sample.is_specular
-            work.r_u  # No MIS for specular
+        # Update MIS weights — pbrt surfscatter.cpp:200-203
+        # pdfIsProportional: use re-evaluated PDF for MIS weight
+        # otherwise: use sample.pdf
+        r_l_pdf = if sample.pdf_is_proportional
+            _, p = evaluate_spectral_material(
+                rgb2spec_table, materials, work.material_idx,
+                work.wo, sample.wi, work.ns, tfc, work.lambda)
+            max(p, 1f-10)
         else
-            work.r_u / sample.pdf
+            sample.pdf
         end
+        new_r_l = work.r_u / r_l_pdf
 
         # Russian roulette
         should_continue, final_beta = russian_roulette_spectral(
@@ -508,8 +517,8 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
                 work.pi,   # prev_intr_p
                 work.ns,   # prev_intr_n
                 new_eta_scale,
-                sample.is_specular,
-                work.any_non_specular_bounces || !sample.is_specular,
+                is_specular(sample.flags),
+                work.any_non_specular_bounces || !is_specular(sample.flags),
                 new_medium
             )
 
