@@ -214,8 +214,9 @@ Sample perfect specular reflection with spectral evaluation.
     # Perfect reflection
     wi = reflect(wo, n_oriented)
 
-    # Delta distribution: f = Kr, pdf = 1 (conceptually infinite, but we handle it specially)
-    return SpectralBSDFSample(kr_spectral, wi, 1f0, BXDF_SPECULAR_REFLECTION, 1f0)
+    # Delta distribution: f = Kr / cos_theta, pdf = 1
+    cos_theta_i = abs(dot(wi, n_oriented))
+    return SpectralBSDFSample(kr_spectral / cos_theta_i, wi, 1f0, BXDF_SPECULAR_REFLECTION, 1f0)
 end
 
 # ============================================================================
@@ -224,7 +225,8 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Mirror, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     # Perfect specular has zero PDF for non-delta directions
     return (SpectralRadiance(), 0f0)
@@ -354,7 +356,8 @@ Matches pbrt-v4's ConductorBxDF::f and ConductorBxDF::PDF exactly.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Conductor, table::RGBToSpectrumTable, textures,
-    wo_world::Vec3f, wi_world::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo_world::Vec3f, wi_world::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     # Build local coordinate frame
     tangent, bitangent = shading_frame(n, dpdus)
@@ -374,6 +377,12 @@ Matches pbrt-v4's ConductorBxDF::f and ConductorBxDF::PDF exactly.
     # Compute alpha values
     alpha_x = mat.remap_roughness ? roughness_to_α(roughness) : roughness
     alpha_y = alpha_x
+
+    # Apply regularization to match sampling state
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
 
     # Clamp alpha if not smooth
     if !trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)

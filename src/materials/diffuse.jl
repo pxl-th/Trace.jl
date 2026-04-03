@@ -116,7 +116,8 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Diffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     # Check if wi is in the correct hemisphere
     cos_theta_i = dot(wi, n)

@@ -65,6 +65,7 @@ struct PBRTScene
     camera_transform::Mat4f
     sampler::Union{PBRTEntity, Nothing}
     integrator::Union{PBRTEntity, Nothing}
+    pixel_filter::Union{PBRTEntity, Nothing}
 
     # World contents
     named_materials::Dict{String, PBRTEntity}
@@ -140,10 +141,18 @@ function parse_params!(ts::TokenStream)
             # Single value (no brackets)
             if !eof(ts)
                 t3 = peek(ts)
-                if t3 !== nothing && (t3.type == TOK_NUMBER || t3.type == TOK_STRING)
+                if t3 !== nothing && t3.type in (TOK_NUMBER, TOK_STRING, TOK_WORD)
                     next!(ts)
                     if t3.type == TOK_NUMBER
                         push!(values, parse(Float64, t3.value))
+                    elseif t3.type == TOK_WORD
+                        if t3.value == "true"
+                            push!(values, true)
+                        elseif t3.value == "false"
+                            push!(values, false)
+                        else
+                            push!(values, t3.value)
+                        end
                     else
                         push!(values, t3.value)
                     end
@@ -178,6 +187,7 @@ function parse_pbrt_string(text::AbstractString;
     camera_transform = Mat4f(I)
     sampler = nothing
     integrator = nothing
+    pixel_filter = nothing
 
     named_materials = Dict{String, PBRTEntity}()
     named_media = Dict{String, PBRTEntity}()
@@ -392,11 +402,18 @@ function parse_pbrt_string(text::AbstractString;
             end
 
         # ---- Ignored / no-op ----
-        elseif word in ("WorldEnd", "Accelerator", "PixelFilter", "Option",
+        elseif word == "PixelFilter"
+            if !eof(ts) && peek(ts).type == TOK_STRING
+                type_tok = next!(ts)
+                params = parse_params!(ts)
+                pixel_filter = PBRTEntity("PixelFilter", type_tok.value, params)
+            end
+
+        elseif word in ("WorldEnd", "Accelerator", "Option",
                         "ColorSpace", "ObjectBegin", "ObjectEnd", "ObjectInstance",
                         "TransformBegin", "TransformEnd", "ActiveTransform")
             # Skip parameters if present
-            if word in ("Accelerator", "PixelFilter", "Option", "ColorSpace")
+            if word in ("Accelerator", "Option", "ColorSpace")
                 if !eof(ts) && peek(ts).type == TOK_STRING
                     next!(ts)  # consume type string
                     parse_params!(ts)  # consume params
@@ -409,7 +426,7 @@ function parse_pbrt_string(text::AbstractString;
     end
 
     return PBRTScene(
-        film, camera, camera_transform, sampler, integrator,
+        film, camera, camera_transform, sampler, integrator, pixel_filter,
         named_materials, named_media, named_textures,
         media_transforms,
         shapes, lights, base_dir,

@@ -54,7 +54,33 @@ function build_hikari_scene(pbrt::PBRTScene;
     if pbrt.film !== nothing
         exposure_time = Float32(pbrt_get_float(pbrt.film, "exposuretime", 1.0))
     end
-    film = Adapt.adapt(backend, Film(Point2f(xres, yres)))
+
+    # --- Pixel Filter ---
+    # pbrt-v4 default: gaussian with radius (1.5, 1.5), sigma 0.5
+    pixel_filter = GaussianFilter(Point2f(1.5f0), 0.5f0)  # match pbrt-v4 default
+    if pbrt.pixel_filter !== nothing
+        pf = pbrt.pixel_filter
+        ft = lowercase(pf.type)
+        xr = Float32(pbrt_get_float(pf, "xradius", ft == "box" ? 0.5 : ft == "gaussian" ? 1.5 : 2.0))
+        yr = Float32(pbrt_get_float(pf, "yradius", ft == "box" ? 0.5 : ft == "gaussian" ? 1.5 : 2.0))
+        r = Point2f(xr, yr)
+        if ft == "box"
+            pixel_filter = BoxFilter(r)
+        elseif ft == "gaussian"
+            sigma = Float32(pbrt_get_float(pf, "sigma", 0.5))
+            pixel_filter = GaussianFilter(r, sigma)
+        elseif ft == "mitchell"
+            B = Float32(pbrt_get_float(pf, "b", 1/3))
+            C = Float32(pbrt_get_float(pf, "c", 1/3))
+            pixel_filter = MitchellFilter(r, B, C)
+        elseif ft == "triangle"
+            pixel_filter = TriangleFilter(r)
+        elseif ft == "sinc"
+            tau = Float32(pbrt_get_float(pf, "tau", 3.0))
+            pixel_filter = LanczosSincFilter(r, tau)
+        end
+    end
+    film = Adapt.adapt(backend, Film(Point2f(xres, yres); filter=pixel_filter))
     sensor = PixelSensor(sensor=sensor_name, iso=sensor_iso, whitebalance=sensor_wb,
                          exposure_time=exposure_time)
 
@@ -95,10 +121,13 @@ function build_hikari_scene(pbrt::PBRTScene;
     samples !== nothing && (int_samples = samples)
     max_depth !== nothing && (int_max_depth = max_depth)
 
+    # --- Build textures ---
+    hikari_textures = build_pbrt_textures(pbrt)
+
     # --- Build materials cache ---
     mat_cache = Dict{String, Material}()
     for (name, entity) in pbrt.named_materials
-        mat_cache[name] = build_pbrt_material(entity, pbrt)
+        mat_cache[name] = build_pbrt_material(entity, pbrt, hikari_textures)
     end
 
     # --- Build media cache ---
@@ -122,7 +151,7 @@ function build_hikari_scene(pbrt::PBRTScene;
     for srec in pbrt.shapes
         mesh = build_pbrt_shape(srec, pbrt)
         mesh === nothing && continue
-        mat = resolve_pbrt_material(srec, mat_cache, pbrt; scene=scene)
+        mat = resolve_pbrt_material(srec, mat_cache, pbrt; scene=scene, textures=hikari_textures)
 
         # Resolve media for this shape
         inside_medium = get(media_cache, srec.medium_inner, nothing)
@@ -133,11 +162,12 @@ function build_hikari_scene(pbrt::PBRTScene;
         if srec.area_light !== nothing
             Le = pbrt_get_rgb(srec.area_light, "L", (1.0, 1.0, 1.0))
             al_scale = Float32(pbrt_get_float(srec.area_light, "scale", 1.0))
+            two_sided = pbrt_get_bool(srec.area_light, "twosided", false)
             table = get_srgb_table()
             Le_spectrum = rgb_illuminant_spectrum(table,
                 RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
             al_scale /= spectrum_to_photometric(Le_spectrum)
-            emissive = Emissive(Le=Le, scale=al_scale)
+            emissive = Emissive(Le=Le, scale=al_scale, two_sided=two_sided)
             push!(scene, mesh, MediumInterface(emissive;
                 inside=inside_medium, outside=outside_medium))
         elseif inside_medium !== nothing || outside_medium !== nothing
@@ -279,32 +309,137 @@ end
 # Material building
 # ============================================================================
 
-function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
+# ============================================================================
+# Texture building from pbrt named textures
+# ============================================================================
+
+const TEXTURE_RESOLUTION = 256  # Resolution for procedural textures (checkerboard etc.)
+
+function build_pbrt_textures(pbrt::PBRTScene)
+    textures = Dict{String, Any}()
+    for (name, tex_entity) in pbrt.named_textures
+        tex_type = lowercase(tex_entity.type)
+        tex_class = pbrt_get_string(tex_entity, "_class", "spectrum")
+
+        if tex_type == "checkerboard"
+            uscale = Float32(pbrt_get_float(tex_entity, "uscale", 1.0))
+            vscale = Float32(pbrt_get_float(tex_entity, "vscale", 1.0))
+            res = TEXTURE_RESOLUTION
+
+            # Hikari's sample_texture_data applies uv_adj = Vec2f(1-v, u),
+            # so we pre-apply the inverse: store at (row=1-u, col=v) to match pbrt's
+            # direct (u,v) evaluation.
+            if tex_class == "float"
+                v1 = Float32(pbrt_get_float(tex_entity, "tex1", 1.0))
+                v2 = Float32(pbrt_get_float(tex_entity, "tex2", 0.0))
+                data = Matrix{Float32}(undef, res, res)
+                for j in 1:res, i in 1:res
+                    # Inverse of Hikari's uv_adj: row→(1-u), col→v
+                    u = 1f0 - (i - 0.5f0) / res
+                    v = (j - 0.5f0) / res
+                    check = (floor(Int, u * uscale) + floor(Int, v * vscale)) % 2 == 0
+                    data[i, j] = check ? v1 : v2
+                end
+                textures[name] = Texture(data)
+            else
+                c1 = pbrt_get_rgb(tex_entity, "tex1", (1.0, 1.0, 1.0))
+                c2 = pbrt_get_rgb(tex_entity, "tex2", (0.0, 0.0, 0.0))
+                rgb1 = RGBSpectrum(Float32(c1[1]), Float32(c1[2]), Float32(c1[3]))
+                rgb2 = RGBSpectrum(Float32(c2[1]), Float32(c2[2]), Float32(c2[3]))
+                data = Matrix{RGBSpectrum}(undef, res, res)
+                for j in 1:res, i in 1:res
+                    u = 1f0 - (i - 0.5f0) / res
+                    v = (j - 0.5f0) / res
+                    check = (floor(Int, u * uscale) + floor(Int, v * vscale)) % 2 == 0
+                    data[i, j] = check ? rgb1 : rgb2
+                end
+                textures[name] = Texture(data)
+            end
+        elseif tex_type == "constant"
+            if tex_class == "float"
+                val = Float32(pbrt_get_float(tex_entity, "value", 1.0))
+                textures[name] = ConstTexture(val)
+            else
+                c = pbrt_get_rgb(tex_entity, "value", (1.0, 1.0, 1.0))
+                textures[name] = ConstTexture(RGBSpectrum(Float32(c[1]), Float32(c[2]), Float32(c[3])))
+            end
+        end
+    end
+    return textures
+end
+
+"""Get a material parameter as a texture or constant, resolving named texture references."""
+function pbrt_get_texture(entity::PBRTEntity, name::String, textures::Dict{String, Any}, default_rgb)
+    if haskey(entity.params, name)
+        p = entity.params[name]
+        if p.type == :texture && !isempty(p.values) && p.values[1] isa String
+            tex_name = p.values[1]
+            if haskey(textures, tex_name)
+                return textures[tex_name]
+            end
+        end
+    end
+    # Fall back to constant
+    rgb = pbrt_get_rgb(entity, name, default_rgb)
+    return rgb
+end
+
+function pbrt_get_float_texture(entity::PBRTEntity, name::String, textures::Dict{String, Any}, default_val)
+    if haskey(entity.params, name)
+        p = entity.params[name]
+        if p.type == :texture && !isempty(p.values) && p.values[1] isa String
+            tex_name = p.values[1]
+            if haskey(textures, tex_name)
+                return textures[tex_name]
+            end
+        end
+    end
+    return Float32(pbrt_get_float(entity, name, default_val))
+end
+
+function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene, textures::Dict{String, Any}=Dict{String,Any}())
     type = lowercase(entity.type)
 
     if type == "diffuse"
-        refl = pbrt_get_rgb(entity, "reflectance", (0.5, 0.5, 0.5))
+        refl = pbrt_get_texture(entity, "reflectance", textures, (0.5, 0.5, 0.5))
         return Diffuse(Kd=refl)
 
     elseif type == "conductor"
-        rough = Float32(pbrt_get_float(entity, "roughness", 0.0))
-        urough = Float32(pbrt_get_float(entity, "uroughness", rough))
-        vrough = Float32(pbrt_get_float(entity, "vroughness", rough))
+        rough = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
+        if rough isa Texture
+            urough = rough; vrough = rough
+        else
+            urough = Float32(pbrt_get_float(entity, "uroughness", Float64(rough)))
+            vrough = Float32(pbrt_get_float(entity, "vroughness", Float64(rough)))
+        end
+        combined_rough = rough isa Texture ? rough : max(urough, vrough)
         remap = pbrt_get_bool(entity, "remaproughness", true)
         # Check for named spectra (gold, silver, copper, etc.)
         eta_str = pbrt_get_string(entity, "eta", "")
+        k_str = pbrt_get_string(entity, "k", "")
+        has_eta = !isempty(eta_str) || haskey(entity.params, "eta")
+        has_k = !isempty(k_str) || haskey(entity.params, "k")
+        has_refl = haskey(entity.params, "reflectance")
         if contains(eta_str, "Au") || contains(eta_str, "gold")
-            return Gold(roughness=max(urough, vrough))
+            return Gold(roughness=combined_rough, remap_roughness=remap)
         elseif contains(eta_str, "Ag") || contains(eta_str, "silver")
-            return Silver(roughness=max(urough, vrough))
+            return Silver(roughness=combined_rough, remap_roughness=remap)
         elseif contains(eta_str, "Cu") && !contains(eta_str, "CuZn")
-            return Copper(roughness=max(urough, vrough))
+            return Copper(roughness=combined_rough, remap_roughness=remap)
         elseif contains(eta_str, "Al")
-            return Aluminum(roughness=max(urough, vrough))
+            return Aluminum(roughness=combined_rough, remap_roughness=remap)
         end
-        # Generic conductor with reflectance
-        refl = pbrt_get_rgb(entity, "reflectance", (1.0, 1.0, 1.0))
-        return Conductor(reflectance=refl, roughness=max(urough, vrough),
+        if has_refl
+            refl = pbrt_get_rgb(entity, "reflectance", (1.0, 1.0, 1.0))
+            return Conductor(reflectance=refl, roughness=combined_rough,
+                             remap_roughness=remap)
+        end
+        if !has_eta && !has_k
+            return Copper(roughness=combined_rough, remap_roughness=remap)
+        end
+        eta_rgb = pbrt_get_rgb(entity, "eta", (0.2, 0.2, 0.2))
+        k_rgb = pbrt_get_rgb(entity, "k", (3.9, 3.9, 3.9))
+        return Conductor(eta=eta_rgb, k=k_rgb, roughness=combined_rough,
                          remap_roughness=remap)
 
     elseif type == "dielectric"
@@ -320,7 +455,7 @@ function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
         return ThinDielectric(eta=eta)
 
     elseif type == "coateddiffuse"
-        refl = pbrt_get_rgb(entity, "reflectance", (0.5, 0.5, 0.5))
+        refl = pbrt_get_texture(entity, "reflectance", textures, (0.5, 0.5, 0.5))
         rough = Float32(pbrt_get_float(entity, "roughness", 0.0))
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
         remap = pbrt_get_bool(entity, "remaproughness", true)
@@ -332,6 +467,9 @@ function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
         crough = Float32(pbrt_get_float(entity, "conductor.roughness", 0.0))
         ieta = Float32(pbrt_get_float(entity, "interface.eta", 1.5))
         ceta_str = pbrt_get_string(entity, "conductor.eta", "")
+        has_ceta = !isempty(ceta_str) || haskey(entity.params, "conductor.eta")
+        has_ck = haskey(entity.params, "conductor.k")
+        has_refl = haskey(entity.params, "reflectance")
         # Named spectra → pass PiecewiseLinearSpectrum directly as conductor eta/k
         # These get evaluated spectrally at render time via eval_ior_spectral
         if contains(ceta_str, "Au") || contains(ceta_str, "gold")
@@ -355,8 +493,24 @@ function build_pbrt_material(entity::PBRTEntity, ::PBRTScene)
                 conductor_roughness=crough,
                 interface_roughness=irough, interface_eta=ieta)
         end
-        refl = pbrt_get_rgb(entity, "reflectance", (1.0, 1.0, 1.0))
-        return CoatedConductor(reflectance=refl,
+        if has_refl
+            refl = pbrt_get_rgb(entity, "reflectance", (1.0, 1.0, 1.0))
+            return CoatedConductor(reflectance=refl,
+                                   conductor_roughness=crough,
+                                   interface_roughness=irough,
+                                   interface_eta=ieta)
+        end
+        if !has_ceta && !has_ck
+            # pbrt-v4 default: Copper (metal-Cu-eta, metal-Cu-k)
+            return CoatedConductor(
+                conductor_eta=CU_ETA_SPECTRUM, conductor_k=CU_K_SPECTRUM,
+                conductor_roughness=crough,
+                interface_roughness=irough, interface_eta=ieta)
+        end
+        # Has explicit conductor.eta/k as RGB values
+        ceta_rgb = pbrt_get_rgb(entity, "conductor.eta", (0.2, 0.2, 0.2))
+        ck_rgb = pbrt_get_rgb(entity, "conductor.k", (3.9, 3.9, 3.9))
+        return CoatedConductor(conductor_eta=ceta_rgb, conductor_k=ck_rgb,
                                conductor_roughness=crough,
                                interface_roughness=irough,
                                interface_eta=ieta)
@@ -410,7 +564,8 @@ function build_pbrt_mix_material(entity::PBRTEntity, mat_cache::Dict{String, Mat
 end
 
 function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Material},
-                               pbrt::PBRTScene; scene::Union{Scene, Nothing}=nothing)
+                               pbrt::PBRTScene; scene::Union{Scene, Nothing}=nothing,
+                               textures::Dict{String,Any}=Dict{String,Any}())
     entity = if srec.material_name !== nothing
         name = srec.material_name
         if haskey(mat_cache, name)
@@ -432,7 +587,7 @@ function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Ma
         return build_pbrt_mix_material(entity, mat_cache, scene, pbrt)
     end
 
-    mat = build_pbrt_material(entity, pbrt)
+    mat = build_pbrt_material(entity, pbrt, textures)
     mat !== nothing && return mat
     return Diffuse(Kd=(0.5, 0.5, 0.5))
 end
@@ -497,23 +652,21 @@ function build_trianglemesh(entity::PBRTEntity, transform::Mat4f)
     faces = [TriangleFace{Int}(indices[3i-2]+1, indices[3i-1]+1, indices[3i]+1)
              for i in 1:n_tris]
 
-    # Optional normals
+    # Optional normals and UVs
     N = pbrt_get_floats(entity, "N")
-    if !isempty(N) && length(N) == 3 * n_verts
-        normals = [Normal3f(N[3i-2], N[3i-1], N[3i]) for i in 1:n_verts]
-        return GeometryBasics.Mesh(
-            GeometryBasics.meta(points; normals=normals), faces)
-    end
-
-    # Optional UVs
     uv = pbrt_get_floats(entity, "uv")
-    if !isempty(uv) && length(uv) == 2 * n_verts
-        uvs = [Point2f(uv[2i-1], uv[2i]) for i in 1:n_verts]
-        return GeometryBasics.Mesh(
-            GeometryBasics.meta(points; uv=uvs), faces)
+    has_normals = !isempty(N) && length(N) == 3 * n_verts
+    has_uvs = !isempty(uv) && length(uv) == 2 * n_verts
+
+    kwargs = Dict{Symbol, Any}()
+    if has_normals
+        kwargs[:normal] = [Normal3f(N[3i-2], N[3i-1], N[3i]) for i in 1:n_verts]
+    end
+    if has_uvs
+        kwargs[:uv] = [Point2f(uv[2i-1], uv[2i]) for i in 1:n_verts]
     end
 
-    return GeometryBasics.Mesh(points, faces)
+    return GeometryBasics.Mesh(points, faces; kwargs...)
 end
 
 function apply_pbrt_transform(mesh, transform::Mat4f)
@@ -744,8 +897,6 @@ function render_pbrt(filename::AbstractString;
                  max_component_value=s.max_component_value)
 
     # Pre-create the state with sensor configured BEFORE any rendering.
-    # This avoids the wasteful double-render that was needed when using
-    # render!'s lazy state creation followed by sensor configuration.
     height, width = size(r.film.framebuffer)
     sobol_spp = max(spp, 4096)
     vp.state = VolPathState(KA.get_backend(r.film.framebuffer), width, height, r.scene.lights;
@@ -757,7 +908,6 @@ function render_pbrt(filename::AbstractString;
                             accumulation_eltype=vp.accumulation_eltype)
     configure_sensor!(vp.state, r.sensor, r.sensor_name)
 
-    # Render all samples with sensor-configured state
     img = vp(r.scene, r.film, r.camera)
 
     if output !== nothing

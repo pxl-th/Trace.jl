@@ -398,16 +398,18 @@ values and the sensor conversion happens at output time.
 
         lambda = Wavelengths(lambda_tuple, pdf_tuple)
 
-        # Convert spectral to response (CIE XYZ or sensor RGB) then to output sRGB
+        # Convert spectral to response (CIE XYZ or sensor RGB)
         response = spectral_to_xyz(cie_table, L, lambda)
-        rgb = max.(0f0, output_matrix * response) * imaging_ratio
+        sensor_rgb = max.(0f0, response) * imaging_ratio
 
-        # Apply maxComponentValue clamping (pbrt-v4 firefly suppression)
-        # This preserves color hue while preventing extremely bright values
-        m = maximum(rgb)
+        # Apply maxComponentValue clamping in sensor space (pbrt-v4: before output matrix)
+        m = maximum(sensor_rgb)
         if m > max_component_value
-            rgb = rgb * (max_component_value / m)
+            sensor_rgb = sensor_rgb * (max_component_value / m)
         end
+
+        # Convert sensor RGB → output sRGB
+        rgb = output_matrix * sensor_rgb
 
         # Get filter weight for this sample (pbrt-v4 style weighted accumulation)
         weight = filter_weight_per_pixel[pixel_idx]
@@ -619,7 +621,7 @@ function render!(
         vp_process_surface_hits!(state, materials, lights)
 
         if length(lights) > 0
-            vp_sample_surface_direct_lighting!(state, materials, lights, camera, Int32(vp.samples_per_pixel))
+            vp_sample_surface_direct_lighting!(state, materials, lights, camera, Int32(vp.samples_per_pixel), vp.regularize)
         end
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)

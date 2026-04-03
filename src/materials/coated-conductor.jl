@@ -418,7 +418,8 @@ Exact port — same as CoatedDiffuse evaluate but with conductor bottom interfac
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedConductor, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     ieta = mat.interface_eta
     ieta == 0f0 && (ieta = 1f0)
@@ -430,6 +431,13 @@ Exact port — same as CoatedDiffuse evaluate but with conductor bottom interfac
     cv_roughness = eval_tex(textures, mat.conductor_v_roughness, tfc)
     c_alpha_x = mat.remap_roughness ? roughness_to_α(cu_roughness) : cu_roughness
     c_alpha_y = mat.remap_roughness ? roughness_to_α(cv_roughness) : cv_roughness
+
+    if regularize
+        i_alpha_x = regularize_alpha(i_alpha_x)
+        i_alpha_y = regularize_alpha(i_alpha_y)
+        c_alpha_x = regularize_alpha(c_alpha_x)
+        c_alpha_y = regularize_alpha(c_alpha_y)
+    end
 
     ce_spectral = eval_ior_spectral(table, textures, mat.conductor_eta, tfc, lambda)
     ck_spectral = eval_ior_spectral(table, textures, mat.conductor_k, tfc, lambda)

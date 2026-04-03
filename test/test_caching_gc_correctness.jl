@@ -246,9 +246,8 @@ end
             vp(scene, film, camera)
 
             # After render, should be cached
-            if vp.filter_sampler_data !== nothing
-                @test vp._filter_sampler_gpu !== nothing
-            end
+            # Filter sampler data should be cached from film after render
+            @test vp._filter_sampler_gpu !== nothing
 
             close(vp)
         end

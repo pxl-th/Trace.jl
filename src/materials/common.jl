@@ -1384,7 +1384,8 @@ end
 # Fallback
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Material, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     cos_theta_i = dot(wi, n)
     cos_theta_o = dot(wo, n)
@@ -1539,9 +1540,10 @@ end
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mi::MediumInterface, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
-    return evaluate_bsdf_spectral(mi.material, table, textures, wo, wi, n, dpdus, tfc, lambda)
+    return evaluate_bsdf_spectral(mi.material, table, textures, wo, wi, n, dpdus, tfc, lambda, regularize)
 end
 
 """

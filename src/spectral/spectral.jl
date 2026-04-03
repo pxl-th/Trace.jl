@@ -126,8 +126,8 @@ end
 const Wavelengths = SampledWavelengths{4}
 
 # Visible spectrum range
-const LAMBDA_MIN = 380.0f0  # nm
-const LAMBDA_MAX = 780.0f0  # nm
+const LAMBDA_MIN = 360.0f0  # nm (pbrt-v4: 360)
+const LAMBDA_MAX = 830.0f0  # nm (pbrt-v4: 830)
 const LAMBDA_RANGE = LAMBDA_MAX - LAMBDA_MIN
 
 """

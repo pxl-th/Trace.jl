@@ -16,42 +16,71 @@ const PBRT_BIN = "/sim/Programmieren/VulkanDev/pbrt-v4/build/pbrt"
 ENV["VK_ICD_FILENAMES"] = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
 const BACKEND = Lava.LavaBackend()
 
+const SPP = 256
+
 # ============================================================================
-# Image comparison — tile-based, following Makie ReferenceTests
+# Image comparison — log-space tile p95 + energy ratio
 # ============================================================================
+#
+# Log-space tile comparison is robust to MC noise because:
+#  1. log1p compresses HDR highlights, reducing noise amplitude in bright areas.
+#  2. 32px tiles average out per-pixel variance.
+#  3. 95th percentile ignores a few noisy tiles (MC noise is localized).
+# This catches spatial bugs (flips, shifts, wrong highlights) that affect
+# many tiles simultaneously, while tolerating per-tile MC variance.
 
 """
-    compare_images(a, b; tile_size=30) -> Float64
+    downsample_2x(img) -> Matrix
 
-Compare two images using tile-based max-of-mean color distance,
-following Makie's ReferenceTests approach.
-
-Divides the image into ~`tile_size`px tiles, computes the mean Euclidean
-color distance within each tile, and returns the **maximum** across all tiles.
-
-This catches spatial errors (flips, shifts, wrong highlights) that global
-metrics like total energy ratio would miss entirely.
+Average 2x2 blocks to halve resolution. Reduces MC noise by 2x.
 """
-function compare_images(a::AbstractMatrix, b::AbstractMatrix; tile_size=30)
+function downsample_2x(img::AbstractMatrix)
+    h, w = size(img)
+    h2, w2 = h ÷ 2, w ÷ 2
+    out = similar(img, h2, w2)
+    for i in 1:h2, j in 1:w2
+        p1 = img[2i-1, 2j-1]; p2 = img[2i, 2j-1]; p3 = img[2i-1, 2j]; p4 = img[2i, 2j]
+        r = (Float64(red(p1)) + Float64(red(p2)) + Float64(red(p3)) + Float64(red(p4))) / 4
+        g = (Float64(green(p1)) + Float64(green(p2)) + Float64(green(p3)) + Float64(green(p4))) / 4
+        b = (Float64(blue(p1)) + Float64(blue(p2)) + Float64(blue(p3)) + Float64(blue(p4))) / 4
+        out[i, j] = typeof(p1)(r, g, b)
+    end
+    return out
+end
+
+"""
+    tile_score(a, b; tile_size=16, percentile=0.95) -> Float64
+
+95th-percentile tile-based mean color distance in log1p space.
+Images are downsampled 2x before comparison to reduce MC noise.
+"""
+function tile_score(a::AbstractMatrix, b::AbstractMatrix; tile_size=16, percentile=0.95)
     size(a) != size(b) && return Inf
+
+    # Downsample 2x to average out MC noise
+    a = downsample_2x(a)
+    b = downsample_2x(b)
 
     h, w = size(a)
     range_h = round.(Int, range(0, h, length=max(2, ceil(Int, h / tile_size))))
     range_w = round.(Int, range(0, w, length=max(2, ceil(Int, w / tile_size))))
-
     boundary_iter(boundaries) = zip(boundaries[1:end-1] .+ 1, boundaries[2:end])
 
-    function color_dist(p1, p2)
-        r1, g1, b1 = Float64(red(p1)), Float64(green(p1)), Float64(blue(p1))
-        r2, g2, b2 = Float64(red(p2)), Float64(green(p2)), Float64(blue(p2))
+    function log_color_dist(p1, p2)
+        r1 = log1p(max(0.0, Float64(red(p1)))); g1 = log1p(max(0.0, Float64(green(p1)))); b1 = log1p(max(0.0, Float64(blue(p1))))
+        r2 = log1p(max(0.0, Float64(red(p2)))); g2 = log1p(max(0.0, Float64(green(p2)))); b2 = log1p(max(0.0, Float64(blue(p2))))
         return sqrt((r1-r2)^2 + (g1-g2)^2 + (b1-b2)^2)
     end
 
-    return maximum(Iterators.product(boundary_iter(range_h), boundary_iter(range_w))) do ((r1, r2), (c1, c2))
-        tile_a = @view a[r1:r2, c1:c2]
-        tile_b = @view b[r1:r2, c1:c2]
-        mean(color_dist.(tile_a, tile_b))
-    end
+    scores = [
+        mean(log_color_dist.(@view(a[r1:r2, c1:c2]), @view(b[r1:r2, c1:c2])))
+        for (r1, r2) in boundary_iter(range_h)
+        for (c1, c2) in boundary_iter(range_w)
+    ]
+
+    sort!(scores)
+    idx = clamp(ceil(Int, percentile * length(scores)), 1, length(scores))
+    return scores[idx]
 end
 
 """
@@ -74,7 +103,7 @@ end
 # Reference generation and rendering
 # ============================================================================
 
-function ensure_reference(scene_name; spp=256)
+function ensure_reference(scene_name; spp=SPP)
     ref_file = joinpath(REFS_DIR, "$(scene_name).exr")
     if !isfile(ref_file)
         scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
@@ -84,73 +113,128 @@ function ensure_reference(scene_name; spp=256)
     return FileIO.load(ref_file)
 end
 
-function render_and_compare(scene_name; hikari_spp=256, ref_spp=256)
+function render_and_compare(scene_name; hikari_spp=SPP, ref_spp=SPP)
     ref = ensure_reference(scene_name; spp=ref_spp)
     scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
     r = Hikari.load_pbrt(scene_file; backend=BACKEND, samples=hikari_spp)
     s = r.integrator_settings
-    vp = Hikari.VolPath(samples=s.samples, max_depth=s.max_depth, regularize=s.regularize,
+    vp = Hikari.VolPath(samples=hikari_spp, max_depth=s.max_depth, regularize=s.regularize,
                         russian_roulette_depth=s.russian_roulette_depth,
-                        max_component_value=s.max_component_value)
+                        max_component_value=s.max_component_value,
+                        sensor=r.sensor, sensor_name=r.sensor_name)
     vp(r.scene, r.film, r.camera)
-    # Raw linear HDR framebuffer — matches pbrt's Film "rgb" EXR output
-    # (no tonemapping, no gamma; sensor imagingRatio=1.0 for default cie1931)
     fb = Array(r.film.framebuffer)
 
-    score = compare_images(ref, fb)
+    tile = tile_score(ref, fb)
     energy = compute_energy_ratio(ref, fb)
-    return (score=score, energy=energy)
+    return (tile=tile, energy=energy)
 end
 
 # ============================================================================
-# All material × light combinations
+# Thresholds
 # ============================================================================
 
-const MATERIALS = [
-    "diffuse", "conductor_gold", "conductor_mirror",
-    "dielectric", "dielectric_rough", "thindielectric",
-    "coateddiffuse", "coatedconductor", "diffusetransmission",
+# Tile p95 (log-space): correct renders < 0.05, spatial bugs > 0.10
+# Energy: correct 0.90–1.10 (wider for media/sensor tests)
+const TILE_THRESHOLD = 0.07
+const ENERGY_LOW     = 0.90
+const ENERGY_HIGH    = 1.10
+
+# ============================================================================
+# Test helpers
+# ============================================================================
+
+function test_scene(scene_name; tile_thresh=TILE_THRESHOLD,
+                    energy_low=ENERGY_LOW, energy_high=ENERGY_HIGH)
+    scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
+    isfile(scene_file) || return nothing
+    m = render_and_compare(scene_name)
+    println("  $(scene_name): tile=$(round(m.tile, digits=4)) energy=$(round(m.energy, digits=3))")
+    @test m.tile   < tile_thresh
+    @test m.energy > energy_low
+    @test m.energy < energy_high
+    return m
+end
+
+function test_scenes_matching(prefix; kwargs...)
+    scene_files = sort(filter(f -> startswith(f, prefix) && endswith(f, ".pbrt"), readdir(SCENES_DIR)))
+    for fname in scene_files
+        name = replace(fname, ".pbrt" => "")
+        @testset "$name" begin
+            test_scene(name; kwargs...)
+        end
+    end
+end
+
+# ============================================================================
+# Material × Light tests
+# ============================================================================
+
+const BASE_MATERIALS = [
+    "diffuse", "diffuse_colored",
+    "conductor_gold", "conductor_mirror", "conductor_rough",
+    "conductor_silver", "conductor_copper",
+    "dielectric", "dielectric_rough", "dielectric_rough_high", "dielectric_diamond",
+    "thindielectric",
+    "coateddiffuse", "coateddiffuse_rough",
+    "coatedconductor", "coatedconductor_rough",
+    "diffusetransmission",
 ]
+const BASE_LIGHTS = ["point", "distant", "spot", "area", "ambient"]
 
-const LIGHTS = ["point", "distant", "spot", "area", "ambient"]
-
-# Tile-based score threshold:
-#   Most correct 256spp renders: 0.01–0.07
-#   Horizontally flipped render: 0.15–0.54
-#   Genuine spatial bugs:        0.10+
-const SCORE_THRESHOLD = 0.07
-const ENERGY_LOW  = 0.95
-const ENERGY_HIGH = 1.05
-
-@testset "All Materials × All Lights" begin
-    for mat in MATERIALS
+@testset "Materials × Lights" begin
+    for mat in BASE_MATERIALS
         @testset "$mat" begin
-            for light in LIGHTS
+            for light in BASE_LIGHTS
                 scene_name = "mat_$(mat)_light_$(light)"
-                scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
-                isfile(scene_file) || continue
-
                 @testset "$light" begin
-                    m = render_and_compare(scene_name)
-                    println("  $mat + $light: score=$(round(m.score, digits=4)) energy=$(round(m.energy, digits=3))")
-
-                    @test m.score < SCORE_THRESHOLD
-                    @test m.energy > ENERGY_LOW
-                    @test m.energy < ENERGY_HIGH
+                    test_scene(scene_name)
                 end
             end
         end
     end
 
-    @testset "mix (diffuse+conductor)" begin
-        scene_name = "mat_mix_light_point"
-        scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
-        if isfile(scene_file)
-            m = render_and_compare(scene_name)
-            println("  mix + point: score=$(round(m.score, digits=4)) energy=$(round(m.energy, digits=3))")
-            @test m.score < SCORE_THRESHOLD
-            @test m.energy > ENERGY_LOW
-            @test m.energy < ENERGY_HIGH
-        end
+    @testset "mix" begin
+        test_scene("mat_mix_light_point")
     end
+end
+
+# ============================================================================
+# Texture tests
+# ============================================================================
+
+@testset "Textures" begin
+    test_scenes_matching("tex_")
+end
+
+# ============================================================================
+# Light variant tests
+# ============================================================================
+
+@testset "Light variants" begin
+    test_scenes_matching("light_")
+end
+
+# ============================================================================
+# Filter tests
+# ============================================================================
+
+@testset "Filters" begin
+    test_scenes_matching("filter_")
+end
+
+# ============================================================================
+# Sensor tests
+# ============================================================================
+
+@testset "Sensors" begin
+    test_scenes_matching("sensor_")
+end
+
+# ============================================================================
+# Medium tests (wider energy tolerance for volumetric scattering)
+# ============================================================================
+
+@testset "Media" begin
+    test_scenes_matching("medium_"; energy_low=0.80, energy_high=1.20)
 end

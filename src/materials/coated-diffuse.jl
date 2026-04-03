@@ -351,7 +351,8 @@ Exact port of pbrt-v4 bxdfs.h lines 477-652.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     refl_rgb = eval_tex(textures, mat.reflectance, tfc)
     eta = mat.eta
@@ -362,6 +363,11 @@ Exact port of pbrt-v4 bxdfs.h lines 477-652.
     v_roughness = eval_tex(textures, mat.v_roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
 
     refl_spectral = uplift_rgb(table, refl_rgb, lambda)
     albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)

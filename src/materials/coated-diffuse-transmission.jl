@@ -347,7 +347,8 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::CoatedDiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     # Get material properties
     refl_rgb = eval_tex(textures, mat.reflectance, tfc)
@@ -361,6 +362,11 @@ end
     v_roughness = eval_tex(textures, mat.v_roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
 
     refl_rgb = RGBSpectrum(clamp(refl_rgb.c[1], 0f0, 1f0), clamp(refl_rgb.c[2], 0f0, 1f0), clamp(refl_rgb.c[3], 0f0, 1f0))
     trans_rgb = RGBSpectrum(clamp(trans_rgb.c[1], 0f0, 1f0), clamp(trans_rgb.c[2], 0f0, 1f0), clamp(trans_rgb.c[3], 0f0, 1f0))

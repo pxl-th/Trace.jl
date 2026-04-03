@@ -19,18 +19,23 @@ Returns SpectralBSDFSample from the appropriate material type.
 end
 
 """
-    evaluate_spectral_material(table, materials::StaticMultiTypeSet, idx, wo, wi, ns, tfc, lambda)
+    evaluate_spectral_material(table, materials::StaticMultiTypeSet, idx, wo, wi, ns, tfc, lambda, regularize=false)
 
 Type-stable dispatch for spectral BSDF evaluation.
 Returns (f::SpectralRadiance, pdf::Float32).
+
+The `regularize` parameter must match the regularization state used during sampling.
+In pbrt-v4, Regularize() modifies the BxDF in-place, so f()/PDF() automatically use
+regularized alphas. Here we pass the flag explicitly to achieve the same effect.
 """
 @propagate_inbounds function evaluate_spectral_material(
     table::RGBToSpectrumTable, materials::StaticMultiTypeSet,
     idx::SetKey,
     wo::Vec3f, wi::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths
+    lambda::Wavelengths,
+    regularize::Bool = false
 )
-    return with_index(evaluate_bsdf_spectral, materials, idx, table, materials, wo, wi, ns, dpdus, tfc, lambda)
+    return with_index(evaluate_bsdf_spectral, materials, idx, table, materials, wo, wi, ns, dpdus, tfc, lambda, regularize)
 end
 
 """

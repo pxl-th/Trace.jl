@@ -191,7 +191,8 @@ Evaluate diffuse transmission BSDF matching pbrt-v4's DiffuseTransmissionBxDF::f
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::DiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     cos_θi = dot(wi, n)
     cos_θo = dot(wo, n)

@@ -263,7 +263,8 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     pixel_samples_direct_u,
     # Camera for texture filtering (pbrt-v4 style)
     camera,
-    samples_per_pixel::Int32
+    samples_per_pixel::Int32,
+    do_regularize::Bool
 )
     # Skip if no lights
     num_lights < Int32(1) && return
@@ -295,10 +296,14 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         # Compute texture filter context with proper screen-space derivatives (pbrt-v4 style)
         tfc = compute_texture_filter_context(work, camera, samples_per_pixel)
 
+        # Apply regularization if enabled and we've had a non-specular bounce
+        # Must match the state used during BSDF sampling (pbrt-v4: Regularize() modifies BxDF in-place)
+        regularize = do_regularize && work.any_non_specular_bounces
+
         # Evaluate BSDF for light direction
         bsdf_f, bsdf_pdf = evaluate_spectral_material(
             rgb2spec_table, materials, work.material_idx,
-            work.wo, light_sample.wi, work.ns, work.dpdus, tfc, work.lambda
+            work.wo, light_sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize
         )
 
         if !is_black(bsdf_f)
@@ -355,7 +360,8 @@ end
     num_infinite_lights::Int32, num_bvh_lights::Int32,
     num_lights::Int32,
     pixel_samples_direct_uc, pixel_samples_direct_u,
-    camera, samples_per_pixel::Int32
+    camera, samples_per_pixel::Int32,
+    do_regularize::Bool
 )
     surface_direct_lighting_inner!(
         shadow_queue,
@@ -364,11 +370,12 @@ end
         num_infinite_lights, num_bvh_lights,
         num_lights,
         pixel_samples_direct_uc, pixel_samples_direct_u,
-        camera, samples_per_pixel
+        camera, samples_per_pixel,
+        do_regularize
     )
 end
 
-function vp_sample_surface_direct_lighting!(state::VolPathState, materials, lights, camera, samples_per_pixel::Int32)
+function vp_sample_surface_direct_lighting!(state::VolPathState, materials, lights, camera, samples_per_pixel::Int32, regularize::Bool = true)
     pixel_samples = state.pixel_samples
     foreach(vp_sample_surface_direct_lighting_kernel!,
         state.material_queue,
@@ -381,6 +388,7 @@ function vp_sample_surface_direct_lighting!(state::VolPathState, materials, ligh
         state.num_lights,
         pixel_samples.direct_uc, pixel_samples.direct_u,
         camera, samples_per_pixel,
+        regularize,
     )
     return nothing
 end
@@ -456,7 +464,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         r_l_pdf = if sample.pdf_is_proportional
             _, p = evaluate_spectral_material(
                 rgb2spec_table, materials, work.material_idx,
-                work.wo, sample.wi, work.ns, work.dpdus, tfc, work.lambda)
+                work.wo, sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize)
             max(p, 1f-10)
         else
             sample.pdf
@@ -490,7 +498,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
             else
                 -work.n
             end
-            ray_origin = Point3f(work.pi + offset_dir * 0.0001f0)
+            ray_origin = Point3f(work.pi + offset_dir * 1f-4)
 
             new_ray = Raycore.Ray(
                 o = ray_origin,

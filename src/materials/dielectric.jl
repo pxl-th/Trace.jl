@@ -254,7 +254,8 @@ end
 
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::Dielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     ior, _ = eval_dielectric_ior(textures, mat.index, tfc, lambda)
     ior == 0f0 && (ior = 1f0)
@@ -263,6 +264,12 @@ end
     v_roughness = eval_tex(textures, mat.v_roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+
+    # Apply regularization to match the state used during sampling
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
 
     if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y) || ior == 1f0
         # Specular: zero for non-delta directions
@@ -388,7 +395,8 @@ ThinDielectric is purely specular, so f() and PDF() both return 0.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
     mat::ThinDielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
+    regularize::Bool = false
 )
     # ThinDielectric is purely specular - f() returns 0 for all non-delta directions
     return (SpectralRadiance(), 0f0)
