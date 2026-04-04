@@ -40,8 +40,10 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v2
+      - name: Install comparison dependencies
+        run: julia --project=test/pbrt -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
       - name: Render and compare
-        run: julia --project=. test/pbrt/run_comparison.jl
+        run: julia --project=test/pbrt test/pbrt/run_comparison.jl
       - uses: actions/upload-artifact@v4
         with:
           name: pbrt-comparison
@@ -61,7 +63,7 @@ jobs:
         env:
           GKSwstype: "100"
           DATADEPS_ALWAYS_ACCEPT: true
-        run: julia --project=docs/ --color=yes -e 'include("docs/make.jl")'
+        run: julia --project=docs/ --color=yes docs/make.jl
       - uses: actions/upload-artifact@v4
         with:
           name: docs-build
@@ -99,6 +101,7 @@ jobs:
           julia --project=docs -e '
             using DocumenterVitepress
             DocumenterVitepress.deploydocs(;
+              root = "docs",
               repo = "github.com/JuliaGraphics/Hikari.jl",
               target = "build",
               branch = "gh-pages",

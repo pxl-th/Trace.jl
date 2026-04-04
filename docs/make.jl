@@ -70,10 +70,5 @@ makedocs(; sitename = "Hikari", authors = "Anton Smirnov, Simon Danisch and cont
     ],
 )
 
-DocumenterVitepress.deploydocs(;
-    repo = "github.com/JuliaGraphics/Hikari.jl",
-    target = "build",
-    branch = "gh-pages",
-    devbranch = "master",
-    push_preview = true,
-)
+# Deployment is handled separately by CI (which injects the pbrt comparison
+# gallery into the build before deploying). See .github/workflows/ci.yml.
