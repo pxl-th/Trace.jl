@@ -79,9 +79,10 @@ Create a VolPath integrator for volumetric path tracing.
   When true and using LavaBackend, RayMakie creates an HWTLAS for hardware BVH traversal
   instead of software BVH. Dispatch happens on the accel type, not this flag.
 
-Note: Sensor simulation (ISO, exposure_time, white_balance) is handled in postprocessing
-via `FilmSensor`, not in the integrator. This matches pbrt-v4's architecture where the
-film stores raw linear HDR values and sensor conversion happens at output time.
+Sensor simulation (ISO, exposure_time, white_balance) is applied during rendering
+via the PixelSensor on the integrator state, matching pbrt-v4. The framebuffer
+contains sensor-calibrated linear sRGB. Postprocessing is purely display mapping
+(exposure, tonemapping, gamma).
 """
 function VolPath(;
     max_depth::Int = 8,
@@ -366,9 +367,8 @@ Following pbrt-v4's film accumulation pattern:
 - Accumulate weighted RGB: rgbSum += weight * rgb
 - Accumulate weight: weightSum += weight
 
-Note: Sensor simulation (imaging_ratio, white balance) is applied in postprocessing,
-not here. This matches pbrt-v4's architecture where the film stores raw linear HDR
-values and the sensor conversion happens at output time.
+Sensor imaging_ratio is applied here during spectral-to-RGB conversion, matching
+pbrt-v4's PixelSensor::ToSensorRGB. White balance is handled via the output_matrix.
 """
 @kernel inbounds=true function vp_accumulate_to_rgb_kernel!(
     pixel_rgb,
@@ -632,8 +632,7 @@ function render!(
     end
 
     # Accumulate this sample's spectral radiance to RGB with filter weights (pbrt-v4 style)
-    # Note: Sensor simulation (imaging_ratio, white balance) is applied in postprocessing,
-    # not here. The integrator outputs raw linear HDR values.
+    # Sensor imaging_ratio and output_matrix are applied here, matching pbrt-v4's PixelSensor.
     kernel! = vp_accumulate_to_rgb_kernel!(backend)
     kernel!(
         pixel_rgb, pixel_weight_sum, state.pixel_L,

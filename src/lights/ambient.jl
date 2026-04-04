@@ -30,8 +30,8 @@ end
 # Accept any RGB type (e.g., RGBf from Makie/Colors)
 AmbientLight(rgb::RGB) = AmbientLight(RGB{Float32}(rgb.r, rgb.g, rgb.b))
 
-# Legacy: direct spectrum constructor without normalization
-AmbientLight(s::S) where {S<:Spectrum} = AmbientLight{S}(s, 1f0)
+# RGBSpectrum constructor: apply photometric normalization (matching pbrt-v4)
+AmbientLight(s::RGBSpectrum) = AmbientLight{RGBSpectrum}(s, 1f0 / D65_PHOTOMETRIC)
 
 """
 Compute radiance arriving at `ref.p` interaction point at `ref.time` time

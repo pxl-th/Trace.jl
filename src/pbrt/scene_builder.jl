@@ -167,7 +167,7 @@ function build_hikari_scene(pbrt::PBRTScene;
             Le_spectrum = rgb_illuminant_spectrum(table,
                 RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
             al_scale /= spectrum_to_photometric(Le_spectrum)
-            emissive = Emissive(Le=Le, scale=al_scale, two_sided=two_sided)
+            emissive = Emissive(to_texture(Le), al_scale, two_sided)
             push!(scene, mesh, MediumInterface(mat;
                 emission=emissive, inside=inside_medium, outside=outside_medium))
         elseif inside_medium !== nothing || outside_medium !== nothing

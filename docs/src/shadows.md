@@ -35,7 +35,7 @@ push!(scene, to_mesh(Rect3f(Vec3f(2-0.01, 0, -2),  Vec3f(0.01, 3, 4))),   green)
 
 # Ceiling area light
 push!(scene, to_mesh(Rect3f(Vec3f(-0.4f0, 2.98f0, -0.4f0), Vec3f(0.8f0, 0.01f0, 0.8f0))),
-      Hikari.Emissive(Le=(1.0, 1.0, 0.95), scale=6f0, two_sided=true))
+      Hikari.Emissive(Le=(3.0, 3.0, 2.85), scale=1f0, two_sided=true))
 
 Hikari.sync!(scene)
 

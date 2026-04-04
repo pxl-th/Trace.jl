@@ -41,11 +41,13 @@ StructArrays = "0.6.18"
 Zlib_jll = "1.3.1"
 
 [sources]
+Lava = {url = "https://github.com/SimonDanisch/Lava.jl", rev = "sd/ci"}
 Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "sd/multitype-vec"}
 
 [extras]
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "JET"]
+test = ["Test", "JET", "Lava"]

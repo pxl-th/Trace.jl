@@ -19,12 +19,8 @@ light (via the MediumInterface's BSDF material) AND emits light.
 
 # Usage
 ```julia
-# Surface that reflects AND glows:
-MediumInterface(Diffuse(Kd=diffuse_tex);
-    arealight=Emissive(Le=glow_color, scale=10))
-
-# Pure emitter (no reflection):
-MediumInterface(Emissive(Le=bright_tex, scale=50))
+# Area light panel (matching pbrt-v4's "rgb L" [3 3 3]):
+Emissive(Le=(3, 3, 3), scale=1.0, two_sided=true)
 ```
 """
 struct Emissive{LeTex} <: Material
@@ -40,16 +36,13 @@ end
 """
     Emissive(; Le=RGBSpectrum(1), scale=1.0, two_sided=false)
 
-Create emission data for use in `MediumInterface.arealight`.
+Create an emissive material for area lights. Photometric normalization is applied
+automatically (matching pbrt-v4). `Le` values correspond directly to pbrt's `"rgb L"`.
 
 # Examples
 ```julia
-# Diffuse surface with warm glow
-MediumInterface(Diffuse(Kd=wood_tex);
-    arealight=Emissive(Le=RGBSpectrum(15, 12, 8), scale=5.0, two_sided=true))
-
-# Pure area light
-MediumInterface(Emissive(Le=(1, 1, 1), scale=100.0))
+# Equivalent to pbrt-v4: AreaLightSource "diffuse" "rgb L" [3 3 3]
+Emissive(Le=(3, 3, 3), scale=1.0, two_sided=true)
 ```
 """
 function Emissive(;
@@ -57,7 +50,10 @@ function Emissive(;
     scale::Real=1f0,
     two_sided::Bool=false
 )
-    Emissive(to_texture(Le), Float32(scale), two_sided)
+    # Apply photometric normalization matching pbrt-v4's area light creation:
+    # scale /= SpectrumToPhotometric(Le_spectrum)
+    normalized_scale = Float32(scale) / D65_PHOTOMETRIC
+    Emissive(to_texture(Le), normalized_scale, two_sided)
 end
 
 # ============================================================================

@@ -28,8 +28,8 @@ gold  = Hikari.Gold(roughness=0.05f0)
 scene = Hikari.Scene()
 push!(scene, to_mesh(Sphere(Point3f(0, 0.5, 0), 0.5f0)), gold)
 push!(scene, to_mesh(Rect3f(Vec3f(-3, 0, -3), Vec3f(6, 0.01, 6))), white)
-push!(scene, Hikari.PointLight(Point3f(2f0, 3f0, -2f0), Hikari.RGBSpectrum(20f0)))
-push!(scene, Hikari.AmbientLight(Hikari.RGBSpectrum(0.04f0)))
+push!(scene, Hikari.PointLight(Point3f(2f0, 3f0, -2f0), Hikari.RGBSpectrum(40f0)))
+push!(scene, Hikari.AmbientLight(Hikari.RGBSpectrum(0.5f0)))
 Hikari.sync!(scene)  # builds the BVH acceleration structure
 
 # 3. Camera and film

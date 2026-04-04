@@ -42,13 +42,13 @@ An omnidirectional point source. Intensity falls off as 1/r².
 
 ```julia
 Hikari.PointLight(position, intensity)
-Hikari.PointLight(Point3f(0f0, 2.5f0, 0f0), Hikari.RGBSpectrum(15f0))
+Hikari.PointLight(Point3f(0f0, 2.5f0, 0f0), Hikari.RGBSpectrum(40f0))
 ```
 
 ```@example lights
 render_light([
-    Hikari.PointLight(Point3f(0f0, 2.4f0, 0f0), Hikari.RGBSpectrum(12f0)),
-    Hikari.PointLight(Point3f(-1f0, 1.5f0, -1.5f0), Hikari.RGBSpectrum(4f0)),
+    Hikari.PointLight(Point3f(0f0, 2.4f0, 0f0), Hikari.RGBSpectrum(40f0)),
+    Hikari.PointLight(Point3f(-1f0, 1.5f0, -1.5f0), Hikari.RGBSpectrum(15f0)),
 ])
 ```
 
@@ -64,7 +64,7 @@ Hikari.DirectionalLight(Hikari.RGBSpectrum(3f0), Vec3f(0.5f0, -1f0, 0.3f0))
 ```@example lights
 render_light([
     Hikari.DirectionalLight(Hikari.RGBSpectrum(3f0), normalize(Vec3f(1f0, -1f0, 0.5f0))),
-    Hikari.AmbientLight(Hikari.RGBSpectrum(0.05f0)),
+    Hikari.AmbientLight(Hikari.RGBSpectrum(0.5f0)),
 ])
 ```
 
@@ -75,14 +75,14 @@ A point source with a cone-shaped beam. `total_width` is the full cone angle; `f
 ```julia
 Hikari.SpotLight(position, target, intensity, total_width, falloff_start)
 Hikari.SpotLight(Point3f(0f0, 3f0, 0f0), Point3f(0f0, 0f0, 0f0),
-                 Hikari.RGBSpectrum(30f0), 35f0, 25f0)
+                 Hikari.RGBSpectrum(80f0), 35f0, 25f0)
 ```
 
 ```@example lights
 render_light([
     Hikari.SpotLight(Point3f(0f0, 3f0, -0.5f0), Point3f(0f0, 0f0, 0f0),
-                     Hikari.RGBSpectrum(35f0), 30f0, 20f0),
-    Hikari.AmbientLight(Hikari.RGBSpectrum(0.02f0)),
+                     Hikari.RGBSpectrum(80f0), 30f0, 20f0),
+    Hikari.AmbientLight(Hikari.RGBSpectrum(0.5f0)),
 ])
 ```
 
@@ -91,7 +91,7 @@ render_light([
 A uniform infinite light that adds a constant radiance from all directions. Useful as a cheap fill light or sky approximation.
 
 ```julia
-Hikari.AmbientLight(Hikari.RGBSpectrum(0.05f0))
+Hikari.AmbientLight(Hikari.RGBSpectrum(0.5f0))
 ```
 
 ### Area Lights
@@ -99,7 +99,7 @@ Hikari.AmbientLight(Hikari.RGBSpectrum(0.05f0))
 Area lights are created by marking a mesh as emissive using the `Hikari.Emissive` material wrapper. The BVH light sampler automatically handles multi-triangle emitters.
 
 ```julia
-emissive_panel = Hikari.Emissive(Le=(1.0, 1.0, 1.0), scale=5f0, two_sided=true)
+emissive_panel = Hikari.Emissive(Le=(3.0, 3.0, 3.0), scale=1f0, two_sided=true)
 push!(scene, panel_mesh, emissive_panel)
 ```
 
@@ -122,7 +122,7 @@ let
           Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.15f0, 0.6f0, 0.15f0)))
     # Ceiling area light panel
     panel = to_mesh(Rect3f(Vec3f(-0.5f0, 2.9f0, -0.5f0), Vec3f(1f0, 0.01f0, 1f0)))
-    push!(scene, panel, Hikari.Emissive(Le=(1.0, 1.0, 0.9), scale=8f0, two_sided=true))
+    push!(scene, panel, Hikari.Emissive(Le=(3.0, 3.0, 2.85), scale=1f0, two_sided=true))
     Hikari.sync!(scene)
     film   = Hikari.Film(Point2f(512, 512))
     camera = Hikari.PerspectiveCamera(

@@ -55,6 +55,16 @@ function SpotLight(
     SpotLight(light_to_world, i, total_width, falloff_start, scale)
 end
 
+# RGBSpectrum: apply photometric normalization (matching pbrt-v4)
+function SpotLight(
+    position::Point3f, target::Point3f, i::RGBSpectrum,
+    total_width::Float32, falloff_start::Float32,
+)
+    scale = 1f0 / D65_PHOTOMETRIC
+    light_to_world = spotlight_transform(position, target)
+    SpotLight(light_to_world, i, total_width, falloff_start, scale)
+end
+
 """
     SpotLight(rgb::RGB{Float32}, position, target, total_width, falloff_start; power=nothing)
 
