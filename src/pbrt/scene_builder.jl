@@ -70,8 +70,8 @@ function build_hikari_scene(pbrt::PBRTScene;
             sigma = Float32(pbrt_get_float(pf, "sigma", 0.5))
             pixel_filter = GaussianFilter(r, sigma)
         elseif ft == "mitchell"
-            B = Float32(pbrt_get_float(pf, "b", 1/3))
-            C = Float32(pbrt_get_float(pf, "c", 1/3))
+            B = Float32(pbrt_get_float(pf, haskey(pf.params, "B") ? "B" : "b", 1/3))
+            C = Float32(pbrt_get_float(pf, haskey(pf.params, "C") ? "C" : "c", 1/3))
             pixel_filter = MitchellFilter(r, B, C)
         elseif ft == "triangle"
             pixel_filter = TriangleFilter(r)
@@ -168,8 +168,8 @@ function build_hikari_scene(pbrt::PBRTScene;
                 RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
             al_scale /= spectrum_to_photometric(Le_spectrum)
             emissive = Emissive(Le=Le, scale=al_scale, two_sided=two_sided)
-            push!(scene, mesh, MediumInterface(emissive;
-                inside=inside_medium, outside=outside_medium))
+            push!(scene, mesh, MediumInterface(mat;
+                emission=emissive, inside=inside_medium, outside=outside_medium))
         elseif inside_medium !== nothing || outside_medium !== nothing
             # Shape has participating media — wrap in MediumInterface
             push!(scene, mesh, MediumInterface(mat;
@@ -249,8 +249,20 @@ function build_pbrt_medium(entity::PBRTEntity, pbrt::PBRTScene, transform::Mat4f
     type = lowercase(entity.type)
 
     if type == "homogeneous"
-        sigma_a = pbrt_get_rgb(entity, "sigma_a", (1.0, 1.0, 1.0))
-        sigma_s = pbrt_get_rgb(entity, "sigma_s", (1.0, 1.0, 1.0))
+        preset = pbrt_get_string(entity, "preset", "")
+        default_a = (1.0, 1.0, 1.0)
+        default_s = (1.0, 1.0, 1.0)
+        if !isempty(preset)
+            if haskey(MEDIUM_PRESETS, preset)
+                p = MEDIUM_PRESETS[preset]
+                default_a = (Float64(p.σ_a[1]), Float64(p.σ_a[2]), Float64(p.σ_a[3]))
+                default_s = (Float64(p.σ_s[1]), Float64(p.σ_s[2]), Float64(p.σ_s[3]))
+            else
+                @warn "pbrt: medium preset \"$preset\" not found"
+            end
+        end
+        sigma_a = pbrt_get_rgb(entity, "sigma_a", default_a)
+        sigma_s = pbrt_get_rgb(entity, "sigma_s", default_s)
         g_val = Float32(pbrt_get_float(entity, "g", 0.0))
         return HomogeneousMedium(
             σ_a=RGBSpectrum(Float32(sigma_a[1]), Float32(sigma_a[2]), Float32(sigma_a[3])),
@@ -334,10 +346,10 @@ function build_pbrt_textures(pbrt::PBRTScene)
                 v2 = Float32(pbrt_get_float(tex_entity, "tex2", 0.0))
                 data = Matrix{Float32}(undef, res, res)
                 for j in 1:res, i in 1:res
-                    # Inverse of Hikari's uv_adj: row→(1-u), col→v
-                    u = 1f0 - (i - 0.5f0) / res
-                    v = (j - 0.5f0) / res
-                    check = (floor(Int, u * uscale) + floor(Int, v * vscale)) % 2 == 0
+                    # uv_adj = (1-v_surf, u_surf): row i ↔ v_surf, col j ↔ u_surf
+                    u_surf = (j - 0.5f0) / res
+                    v_surf = 1f0 - (i - 0.5f0) / res
+                    check = (floor(Int, u_surf * uscale) + floor(Int, v_surf * vscale)) % 2 == 0
                     data[i, j] = check ? v1 : v2
                 end
                 textures[name] = Texture(data)
@@ -348,9 +360,10 @@ function build_pbrt_textures(pbrt::PBRTScene)
                 rgb2 = RGBSpectrum(Float32(c2[1]), Float32(c2[2]), Float32(c2[3]))
                 data = Matrix{RGBSpectrum}(undef, res, res)
                 for j in 1:res, i in 1:res
-                    u = 1f0 - (i - 0.5f0) / res
-                    v = (j - 0.5f0) / res
-                    check = (floor(Int, u * uscale) + floor(Int, v * vscale)) % 2 == 0
+                    # uv_adj = (1-v_surf, u_surf): row i ↔ v_surf, col j ↔ u_surf
+                    u_surf = (j - 0.5f0) / res
+                    v_surf = 1f0 - (i - 0.5f0) / res
+                    check = (floor(Int, u_surf * uscale) + floor(Int, v_surf * vscale)) % 2 == 0
                     data[i, j] = check ? rgb1 : rgb2
                 end
                 textures[name] = Texture(data)
@@ -444,9 +457,10 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene, textures::Dict
 
     elseif type == "dielectric"
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
-        rough = Float32(pbrt_get_float(entity, "roughness", 0.0))
-        urough = Float32(pbrt_get_float(entity, "uroughness", rough))
-        vrough = Float32(pbrt_get_float(entity, "vroughness", rough))
+        rough_base = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
+        rough_scalar = rough_base isa Texture ? 0f0 : Float32(rough_base)
+        urough = pbrt_get_float_texture(entity, "uroughness", textures, Float64(rough_scalar))
+        vrough = pbrt_get_float_texture(entity, "vroughness", textures, Float64(rough_scalar))
         remap = pbrt_get_bool(entity, "remaproughness", true)
         return Dielectric(index=eta, roughness=(urough, vrough), remap_roughness=remap)
 

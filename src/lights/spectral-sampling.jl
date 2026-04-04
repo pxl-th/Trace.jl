@@ -32,7 +32,7 @@ end
 # ============================================================================
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::PointLight, p::Point3f, lambda::Wavelengths, ::Point2f
+    light::PointLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, ::Point2f
 )::LightSampleSpectral
     to_light = light.position - p
     dist_sq = dot(to_light, to_light)
@@ -46,7 +46,7 @@ end
 end
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::SpotLight, p::Point3f, lambda::Wavelengths, ::Point2f
+    light::SpotLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, ::Point2f
 )::LightSampleSpectral
     to_light = Vec3f(light.position - p)
     dist_sq = dot(to_light, to_light)
@@ -72,7 +72,7 @@ end
 end
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::DirectionalLight, p::Point3f, lambda::Wavelengths, ::Point2f
+    light::DirectionalLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, ::Point2f
 )::LightSampleSpectral
     wi = -light.direction
     p_light = Point3f(p + 1f6 * wi)
@@ -81,7 +81,7 @@ end
 end
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::SunLight, p::Point3f, lambda::Wavelengths, ::Point2f
+    light::SunLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, ::Point2f
 )::LightSampleSpectral
     wi = -light.direction
     p_light = Point3f(p + 1f6 * wi)
@@ -90,7 +90,7 @@ end
 end
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::EnvironmentLight, p::Point3f, lambda::Wavelengths, u::Point2f
+    light::EnvironmentLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, u::Point2f
 )::LightSampleSpectral
     uv, map_pdf = sample_continuous(light.env_map.distribution, u, lights)
     wi = uv_to_direction(uv, light.env_map.rotation)
@@ -106,7 +106,7 @@ end
 end
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::AmbientLight, p::Point3f, lambda::Wavelengths, u::Point2f
+    light::AmbientLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, u::Point2f
 )::LightSampleSpectral
     z = 1f0 - 2f0 * u[1]
     r = sqrt(max(0f0, 1f0 - z * z))
@@ -119,7 +119,7 @@ end
 end
 
 @propagate_inbounds function sample_light_spectral(
-    table::RGBToSpectrumTable, lights, light::DiffuseAreaLight, p::Point3f, lambda::Wavelengths, u::Point2f
+    light::DiffuseAreaLight, table::RGBToSpectrumTable, lights, p::Point3f, lambda::Wavelengths, u::Point2f
 )::LightSampleSpectral
     b0, b1 = if u[1] < u[2]
         _b0 = u[1] / 2f0
@@ -159,7 +159,7 @@ end
 
 # Fallback for unknown light types
 @propagate_inbounds function sample_light_spectral(
-    ::RGBToSpectrumTable, lights, ::Light, ::Point3f, ::Wavelengths, ::Point2f
+    ::Light, ::RGBToSpectrumTable, lights, ::Point3f, ::Wavelengths, ::Point2f
 )::LightSampleSpectral
     return LightSampleSpectral()
 end
@@ -187,9 +187,6 @@ end
 # StaticMultiTypeSet Dispatch
 # ============================================================================
 
-@propagate_inbounds sample_light_spectral_element(light, lights, table, p, lambda, u) =
-    sample_light_spectral(table, lights, light, p, lambda, u)
-
 @propagate_inbounds function sample_light_spectral(
     table::RGBToSpectrumTable,
     lights::Raycore.StaticMultiTypeSet,
@@ -198,7 +195,7 @@ end
     lambda::Wavelengths,
     u::Point2f
 )
-    return with_index(sample_light_spectral_element, lights, idx, lights, table, p, lambda, u)
+    return with_index(sample_light_spectral, lights, idx, table, lights, p, lambda, u)
 end
 
 @propagate_inbounds function sample_light_spectral(
@@ -210,7 +207,7 @@ end
     u::Point2f
 )
     idx = flat_to_light_index(lights, flat_idx)
-    return with_index(sample_light_spectral_element, lights, idx, lights, table, p, lambda, u)
+    return with_index(sample_light_spectral, lights, idx, table, lights, p, lambda, u)
 end
 
 # ============================================================================

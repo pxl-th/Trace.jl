@@ -6,6 +6,7 @@ using LinearAlgebra
 using FileIO
 using Statistics
 using Colors
+using ImageFiltering
 import KernelAbstractions as KA
 
 const SCENES_DIR = joinpath(@__DIR__, "scenes")
@@ -35,17 +36,8 @@ const SPP = 256
 Average 2x2 blocks to halve resolution. Reduces MC noise by 2x.
 """
 function downsample_2x(img::AbstractMatrix)
-    h, w = size(img)
-    h2, w2 = h ÷ 2, w ÷ 2
-    out = similar(img, h2, w2)
-    for i in 1:h2, j in 1:w2
-        p1 = img[2i-1, 2j-1]; p2 = img[2i, 2j-1]; p3 = img[2i-1, 2j]; p4 = img[2i, 2j]
-        r = (Float64(red(p1)) + Float64(red(p2)) + Float64(red(p3)) + Float64(red(p4))) / 4
-        g = (Float64(green(p1)) + Float64(green(p2)) + Float64(green(p3)) + Float64(green(p4))) / 4
-        b = (Float64(blue(p1)) + Float64(blue(p2)) + Float64(blue(p3)) + Float64(blue(p4))) / 4
-        out[i, j] = typeof(p1)(r, g, b)
-    end
-    return out
+    blurred = imfilter(img, Kernel.gaussian((0.75, 0.75)))
+    return blurred[1:2:end, 1:2:end]
 end
 
 """

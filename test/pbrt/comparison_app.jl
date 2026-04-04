@@ -14,7 +14,7 @@
 # ============================================================================
 
 using Hikari, Lava, GeometryBasics, LinearAlgebra
-using FileIO, Statistics, Colors, DelimitedFiles, Bonito
+using FileIO, Statistics, Colors, DelimitedFiles, Bonito, ImageFiltering
 import KernelAbstractions as KA
 import Bonito: DOM
 
@@ -54,17 +54,8 @@ end
 # ============================================================================
 
 function downsample_2x(img)
-    h, w = size(img)
-    h2, w2 = h ÷ 2, w ÷ 2
-    out = similar(img, h2, w2)
-    for i in 1:h2, j in 1:w2
-        p1 = img[2i-1, 2j-1]; p2 = img[2i, 2j-1]; p3 = img[2i-1, 2j]; p4 = img[2i, 2j]
-        r = (Float64(red(p1)) + Float64(red(p2)) + Float64(red(p3)) + Float64(red(p4))) / 4
-        g = (Float64(green(p1)) + Float64(green(p2)) + Float64(green(p3)) + Float64(green(p4))) / 4
-        b = (Float64(blue(p1)) + Float64(blue(p2)) + Float64(blue(p3)) + Float64(blue(p4))) / 4
-        out[i, j] = typeof(p1)(r, g, b)
-    end
-    return out
+    blurred = imfilter(img, Kernel.gaussian((0.75, 0.75)))
+    return blurred[1:2:end, 1:2:end]
 end
 
 function tile_score(a::AbstractMatrix, b::AbstractMatrix; tile_size=16, percentile=0.95)
@@ -212,8 +203,8 @@ function make_comparison_app(names, scores, energies; spp=SPP)
             )
             push!(cards_vec, card)
         end
-        n_energy_ok = count(e -> 0.95 < e < 1.05, energies)
-        n_tile_ok = count(s -> s < 0.07, scores)
+        n_energy_ok = Base.count(e -> 0.95 < e < 1.05, energies)
+        n_tile_ok = Base.count(s -> s < 0.07, scores)
         DOM.div(
             DOM.h1("Hikari vs pbrt-v4 ($(spp) spp)", style="color:white; text-align:center; margin:8px;"),
             DOM.div("$(length(scores)) scenes | energy within 5%: $(n_energy_ok)/$(length(scores)) | tile<0.07: $(n_tile_ok)/$(length(scores)) -- click to toggle",
@@ -243,7 +234,7 @@ all_names = all_names[order]
 all_scores = all_scores[order]
 all_energies = all_energies[order]
 
-n_energy_ok = count(e -> 0.95 < e < 1.05, all_energies)
+n_energy_ok = Base.count(e -> 0.95 < e < 1.05, all_energies)
 println("Step 4: Launching Bonito app...")
 server = Bonito.Server(make_comparison_app(all_names, all_scores, all_energies; spp=SPP), "0.0.0.0", 9384)
 println("http://localhost:9384 -- energy within 5%: $(n_energy_ok)/$(length(all_scores)) at $(SPP) spp")

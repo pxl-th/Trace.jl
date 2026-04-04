@@ -187,7 +187,7 @@ end
                 lightChoicePDF = bvh_pmf(
                     bvh_nodes, light_to_bit_trail,
                     num_infinite_lights, num_bvh_lights,
-                    work.pi, Vec3f(work.n), Int32(work.arealight_flat_idx)
+                    work.prev_intr_p, work.prev_intr_n, Int32(work.arealight_flat_idx)
                 )
                 # PDF_Li: solid angle PDF for uniform triangle sampling
                 # pdf_area = 1/area, convert to solid angle: pdf = dist^2 / (cos_theta * area)
@@ -328,6 +328,14 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
                     t_max = result.t_max
                 )
 
+                # Determine medium for shadow ray based on direction at medium transitions
+                # (mirrors pbrt-v4 SurfaceInteraction::GetMedium(w))
+                shadow_medium = if is_medium_transition(work.interface)
+                    get_medium_index(work.interface, result.ray_direction, work.n)
+                else
+                    work.current_medium
+                end
+
                 shadow_item = VPShadowRayWorkItem(
                     shadow_ray,
                     result.t_max,
@@ -336,7 +344,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
                     result.r_u,
                     scaled_r_l,
                     work.pixel_index,
-                    work.current_medium  # Shadow ray starts in same medium
+                    shadow_medium
                 )
 
                 push!(shadow_queue, shadow_item)

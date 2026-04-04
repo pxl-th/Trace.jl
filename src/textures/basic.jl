@@ -15,13 +15,18 @@ end
 
 Base.zero(::Type{RGBSpectrum}) = RGBSpectrum(0.0f0, 0.0f0, 0.0f0, 1.0f0)
 
-# Sample texture data array with UV flip (standard texture coordinate convention)
+# Sample texture data array with UV flip (standard texture coordinate convention).
+# dim 1 (row): uv_adj[1] = 1-v (inverted). Use ceil so that v=k/N maps to the row whose
+#              rasterization center is just ABOVE the boundary (same checker cell as pbrt).
+# dim 2 (col): uv_adj[2] = u (non-inverted). Use floor+1 for the same reason.
+# Both formulas ensure pixel i covers [i-1, i) in the respective scaled coordinate.
 @propagate_inbounds function sample_texture_data(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
     uv_adj = Vec2f(1f0 - uv[2], uv[1])
     s = unsafe_trunc.(Int32, size(data))
-    idx = map(x -> unsafe_trunc(Int32, x), Int32(1) .+ ((s .- Int32(1)) .* uv_adj))
-    idx = clamp.(idx, Int32(1), s)
-    return data[idx...]
+    # dim 1 uses ceil (inverted direction), dim 2 uses floor+1 (non-inverted)
+    row = clamp(unsafe_trunc(Int32, ceil(s[1] * uv_adj[1])), Int32(1), s[1])
+    col = clamp(unsafe_trunc(Int32, floor(s[2] * uv_adj[2])) + Int32(1), Int32(1), s[2])
+    return data[row, col]
 end
 
 # 0-dim arrays are scalar constants - just return the value, no UV sampling

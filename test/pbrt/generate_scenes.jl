@@ -7,7 +7,7 @@
 #   - Texture variants (checkerboard reflectance)
 #   - Filter variants (box, gaussian, mitchell, lanczos, triangle)
 #   - Sensor variants (different ISO, white balance)
-#   - Media (homogeneous cloud in dielectric sphere)
+#   - Media (NanoVDB Perlin/Worley cloud + homogeneous tinted in dielectric sphere)
 #
 # Settings: 128x128, regularize=true, maxcomponentvalue=10
 # Camera: zoomed in on sphere (dist=1.2, fov=40)
@@ -127,11 +127,43 @@ AttributeEnd""",
 
 # Extended light variants for light parameter tests
 const LIGHT_VARIANTS = Dict(
-    "point_warm"     => """LightSource "point" "rgb I" [50 30 10] "point3 from" [2 -1.5 3]""",
-    "point_bright"   => """LightSource "point" "rgb I" [200 200 200] "point3 from" [2 -1.5 3]""",
-    "spot_narrow"    => """LightSource "spot" "rgb I" [120 120 120] "point3 from" [1.5 -1 2.5] "point3 to" [0 0 0.5] "float coneangle" 15 "float conedeltaangle" 2""",
-    "spot_wide"      => """LightSource "spot" "rgb I" [40 40 40] "point3 from" [1.5 -1 2.5] "point3 to" [0 0 0.5] "float coneangle" 60 "float conedeltaangle" 10""",
-    "distant_colored" => """LightSource "distant" "rgb L" [2.0 0.5 0.5] "point3 from" [2 -1 3] "point3 to" [0 0 0.5]""",
+    # Point light variants
+    "point_warm"       => """LightSource "point" "rgb I" [50 30 10] "point3 from" [2 -1.5 3]""",
+    "point_bright"     => """LightSource "point" "rgb I" [200 200 200] "point3 from" [2 -1.5 3]""",
+    "point_blue"       => """LightSource "point" "rgb I" [10 25 60] "point3 from" [2 -1.5 3]""",
+    "point_side"       => """LightSource "point" "rgb I" [40 40 40] "point3 from" [-2 -1.5 2]""",
+    "point_top"        => """LightSource "point" "rgb I" [40 40 40] "point3 from" [0 0 4]""",
+    "point_close"      => """LightSource "point" "rgb I" [10 10 10] "point3 from" [0.6 -0.4 1.0]""",
+    # Spot light variants
+    "spot_narrow"      => """LightSource "spot" "rgb I" [120 120 120] "point3 from" [1.5 -1 2.5] "point3 to" [0 0 0.5] "float coneangle" 15 "float conedeltaangle" 2""",
+    "spot_wide"        => """LightSource "spot" "rgb I" [40 40 40] "point3 from" [1.5 -1 2.5] "point3 to" [0 0 0.5] "float coneangle" 60 "float conedeltaangle" 10""",
+    "spot_side"        => """LightSource "spot" "rgb I" [80 80 80] "point3 from" [-1.5 -1 1.5] "point3 to" [0 0 0.5] "float coneangle" 25 "float conedeltaangle" 5""",
+    # Distant light variants
+    "distant_colored"  => """LightSource "distant" "rgb L" [2.0 0.5 0.5] "point3 from" [2 -1 3] "point3 to" [0 0 0.5]""",
+    "distant_blue"     => """LightSource "distant" "rgb L" [0.5 0.5 2.0] "point3 from" [2 -1 3] "point3 to" [0 0 0.5]""",
+    "distant_low"      => """LightSource "distant" "rgb L" [3.0 3.0 3.0] "point3 from" [3 -0.5 0.5] "point3 to" [0 0 0.5]""",
+    # Area light variants
+    "area_colored"     => """AttributeBegin
+AreaLightSource "diffuse" "rgb L" [12 4 2] "bool twosided" true
+Material "diffuse" "rgb reflectance" [1 1 1]
+Translate 0.8 -0.4 1.5
+Shape "trianglemesh"
+  "point3 P" [ -0.4 -0.4 0  0.4 -0.4 0  0.4 0.4 0  -0.4 0.4 0 ]
+  "integer indices" [ 0 1 2  0 2 3 ]
+AttributeEnd""",
+    "area_large"       => """AttributeBegin
+AreaLightSource "diffuse" "rgb L" [3 3 3] "bool twosided" true
+Material "diffuse" "rgb reflectance" [1 1 1]
+Translate 0.8 -0.4 1.5
+Shape "trianglemesh"
+  "point3 P" [ -1.0 -1.0 0  1.0 -1.0 0  1.0 1.0 0  -1.0 1.0 0 ]
+  "integer indices" [ 0 1 2  0 2 3 ]
+AttributeEnd""",
+    # Multi-light
+    "point_plus_ambient" => """LightSource "point" "rgb I" [30 30 30] "point3 from" [2 -1.5 3]
+LightSource "infinite" "rgb L" [0.15 0.15 0.15]""",
+    "two_points"         => """LightSource "point" "rgb I" [30 10 5] "point3 from" [2 -1.5 3]
+LightSource "point" "rgb I" [5 10 30] "point3 from" [-2 -1.5 3]""",
 )
 
 # ============================================================================
@@ -185,6 +217,27 @@ const TEXTURE_MATERIALS = Dict(
   "float uscale" 8 "float vscale" 8""",
         material = """Material "diffuse" "texture reflectance" "checker_tex\""""
     ),
+    "diffuse_checker_scale4" => (
+        textures = """Texture "checker_tex" "spectrum" "checkerboard"
+  "rgb tex1" [0.8 0.2 0.1]
+  "rgb tex2" [0.1 0.2 0.8]
+  "float uscale" 4 "float vscale" 4""",
+        material = """Material "diffuse" "texture reflectance" "checker_tex\""""
+    ),
+    "diffuse_checker_scale16" => (
+        textures = """Texture "checker_tex" "spectrum" "checkerboard"
+  "rgb tex1" [0.8 0.2 0.1]
+  "rgb tex2" [0.1 0.2 0.8]
+  "float uscale" 16 "float vscale" 16""",
+        material = """Material "diffuse" "texture reflectance" "checker_tex\""""
+    ),
+    "diffuse_checker_aniso" => (
+        textures = """Texture "checker_tex" "spectrum" "checkerboard"
+  "rgb tex1" [0.8 0.2 0.1]
+  "rgb tex2" [0.1 0.2 0.8]
+  "float uscale" 4 "float vscale" 12""",
+        material = """Material "diffuse" "texture reflectance" "checker_tex\""""
+    ),
     "coateddiffuse_checker" => (
         textures = """Texture "checker_tex" "spectrum" "checkerboard"
   "rgb tex1" [0.6 0.4 0.2]
@@ -199,24 +252,37 @@ const TEXTURE_MATERIALS = Dict(
   "float uscale" 6 "float vscale" 6""",
         material = """Material "conductor" "spectrum eta" "metal-Au-eta" "spectrum k" "metal-Au-k" "texture roughness" "rough_tex\""""
     ),
+    "dielectric_checker_rough" => (
+        textures = """Texture "rough_tex" "float" "checkerboard"
+  "float tex1" 0.02
+  "float tex2" 0.25
+  "float uscale" 6 "float vscale" 6""",
+        material = """Material "dielectric" "float eta" 1.5 "texture uroughness" "rough_tex" "texture vroughness" "rough_tex\""""
+    ),
 )
 
 # Filter configurations
 const FILTERS = Dict(
-    "box"      => "",  # default (no filter directive = pbrt default)
-    "gaussian" => """PixelFilter "gaussian" "float xradius" 1.5 "float yradius" 1.5 "float sigma" 0.5""",
-    "mitchell" => """PixelFilter "mitchell" "float xradius" 2.0 "float yradius" 2.0""",
-    "triangle" => """PixelFilter "triangle" "float xradius" 2.0 "float yradius" 2.0""",
-    "lanczos"  => """PixelFilter "sinc" "float xradius" 4.0 "float yradius" 4.0 "float tau" 3.0""",
+    "box"             => "",  # default (no filter directive = pbrt default)
+    "gaussian"        => """PixelFilter "gaussian" "float xradius" 1.5 "float yradius" 1.5 "float sigma" 0.5""",
+    "gaussian_sharp"  => """PixelFilter "gaussian" "float xradius" 0.75 "float yradius" 0.75 "float sigma" 0.3""",
+    "gaussian_wide"   => """PixelFilter "gaussian" "float xradius" 2.5 "float yradius" 2.5 "float sigma" 1.5""",
+    "mitchell"        => """PixelFilter "mitchell" "float xradius" 2.0 "float yradius" 2.0""",
+    "mitchell_catmull" => """PixelFilter "mitchell" "float xradius" 2.0 "float yradius" 2.0 "float B" 0 "float C" 0.5""",
+    "triangle"        => """PixelFilter "triangle" "float xradius" 2.0 "float yradius" 2.0""",
+    "triangle_wide"   => """PixelFilter "triangle" "float xradius" 3.0 "float yradius" 3.0""",
+    "lanczos"         => """PixelFilter "sinc" "float xradius" 4.0 "float yradius" 4.0 "float tau" 3.0""",
+    "lanczos_narrow"  => """PixelFilter "sinc" "float xradius" 2.0 "float yradius" 2.0 "float tau" 3.0""",
 )
 
 # Sensor configurations
 const SENSORS = Dict(
-    "default"   => "",  # default cie1931, iso=100
-    "iso200"    => "iso200",   # just a tag — encoded in Film line
-    "iso50"     => "iso50",
-    "wb4000"    => "wb4000",   # warm white balance
-    "wb8000"    => "wb8000",   # cool white balance
+    "default"      => "",  # default cie1931, iso=100
+    "iso200"       => "iso200",   # just a tag — encoded in Film line
+    "iso50"        => "iso50",
+    "wb4000"       => "wb4000",   # warm white balance
+    "wb8000"       => "wb8000",   # cool white balance
+    "nikon_d850"   => "nikon_d850",  # Nikon D850 spectral sensor
 )
 
 # ============================================================================
@@ -314,10 +380,18 @@ end
 
 function generate_light_variant_scenes()
     count = 0
+    # Diffuse sphere for all light variants (primary test)
     mat = MATERIALS["diffuse"]
     for (lname, ldef) in LIGHT_VARIANTS
         write_scene(joinpath(SCENES_DIR, "light_$(lname).pbrt");
                     light=ldef, sphere_mat=mat)
+        count += 1
+    end
+    # Conductor (specular) sphere for selected light variants to test specular highlights
+    specular_mat = MATERIALS["conductor_gold"]
+    for lname in ["point_warm", "point_side", "point_top", "two_points", "area_large"]
+        write_scene(joinpath(SCENES_DIR, "light_$(lname)_specular.pbrt");
+                    light=LIGHT_VARIANTS[lname], sphere_mat=specular_mat)
         count += 1
     end
     println("  Generated $count light variant scenes")
@@ -351,6 +425,8 @@ function generate_sensor_scenes()
             """$FILM_BASE "float whitebalance" 4000"""
         elseif sname == "wb8000"
             """$FILM_BASE "float whitebalance" 8000"""
+        elseif sname == "nikon_d850"
+            FILM_BASE * " \"string sensor\" \"nikon_d850\""
         else
             FILM_BASE
         end
@@ -366,19 +442,25 @@ function generate_medium_scenes()
     count = 0
     light = LIGHTS["point"]
 
-    # Homogeneous medium in dielectric sphere (cloud-like)
-    medium_def = """MakeNamedMedium "cloud"
-  "string type" "homogeneous"
+    # NanoVDB cloud: generate Perlin/Worley density, save as .nvdb, reference in scene
+    # Sphere is at center (0,0,0.5) radius 0.5 → NanoVDB bounds match
+    nvdb_path = joinpath(SCENES_DIR, "cloud_density.nvdb")
+    cloud_data = Hikari.generate_cloud_density(128; scale=2.5, threshold=0.15, worley_weight=0.2, edge_sharpness=4.0, density_scale=4.5)
+    Hikari.save_nanovdb(nvdb_path, cloud_data, (-0.5, -0.5, 0.0), (1.0, 1.0, 1.0))
+
+    nvdb_medium_def = """MakeNamedMedium "cloud"
+  "string type" "nanovdb"
+  "string filename" "cloud_density.nvdb"
   "rgb sigma_a" [0.5 0.5 0.5]
-  "rgb sigma_s" [10.0 10.0 10.0]
-  "float g" 0.0
-  "float scale" 1.0"""
-    medium_interface = """MediumInterface "" "cloud\""""
+  "rgb sigma_s" [15.0 15.0 15.0]
+  "float g" 0.0"""
+    medium_interface = """MediumInterface "cloud" \"\""""
     sphere_mat = """Material "dielectric" "float eta" 1.0"""
 
+    cloud_light = LIGHTS["point"] * "\nLightSource \"infinite\" \"rgb L\" [0.5 0.5 0.5]"
     write_scene(joinpath(SCENES_DIR, "medium_cloud_point.pbrt");
-                light=light, sphere_mat=sphere_mat,
-                medium_before=medium_def, medium_after=medium_interface)
+                light=cloud_light, sphere_mat=sphere_mat,
+                medium_before=nvdb_medium_def, medium_after=medium_interface)
     count += 1
 
     # Colored absorbing medium (tinted glass)
@@ -393,6 +475,45 @@ function generate_medium_scenes()
     write_scene(joinpath(SCENES_DIR, "medium_tinted_point.pbrt");
                 light=light, sphere_mat=sphere_mat2,
                 medium_before=medium_def2, medium_after=medium_interface2)
+    count += 1
+
+    # Milk (Wholemilk preset, scale=0.1) — dielectric glass sphere
+    milk_def = """MakeNamedMedium "milk"
+  "string type" "homogeneous"
+  "rgb sigma_s" [0.255 0.321 0.377]
+  "rgb sigma_a" [0.00011 0.00024 0.0014]
+  "float g" 0.0"""
+    write_scene(joinpath(SCENES_DIR, "medium_milk_point.pbrt");
+                light=light,
+                sphere_mat="""Material "dielectric" "float eta" 1.5""",
+                medium_before=milk_def,
+                medium_after="""MediumInterface "milk" \"\"""")
+    count += 1
+
+    # Coffee (Espresso preset, scale=0.5) — dielectric glass sphere
+    coffee_def = """MakeNamedMedium "coffee"
+  "string type" "homogeneous"
+  "rgb sigma_s" [0.36 0.425 0.51]
+  "rgb sigma_a" [2.4 3.29 4.425]
+  "float g" 0.0"""
+    write_scene(joinpath(SCENES_DIR, "medium_coffee_point.pbrt");
+                light=light,
+                sphere_mat="""Material "dielectric" "float eta" 1.5""",
+                medium_before=coffee_def,
+                medium_after="""MediumInterface "coffee" \"\"""")
+    count += 1
+
+    # Smoke (density=5.0, albedo=0.95, g=0.3) — thin dielectric shell (eta=1)
+    smoke_def = """MakeNamedMedium "smoke"
+  "string type" "homogeneous"
+  "rgb sigma_s" [4.75 4.75 4.75]
+  "rgb sigma_a" [0.25 0.25 0.25]
+  "float g" 0.3"""
+    write_scene(joinpath(SCENES_DIR, "medium_smoke_point.pbrt");
+                light=light,
+                sphere_mat="""Material "dielectric" "float eta" 1.0""",
+                medium_before=smoke_def,
+                medium_after="""MediumInterface "smoke" \"\"""")
     count += 1
 
     println("  Generated $count medium scenes")
