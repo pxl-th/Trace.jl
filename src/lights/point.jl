@@ -68,8 +68,12 @@ function PointLight(rgb::RGB, position; kwargs...)
     PointLight(RGB{Float32}(rgb.r, rgb.g, rgb.b), position; kwargs...)
 end
 
-# Legacy: RGBSpectrum constructor (for direct spectral specification without conversion)
+# RGBSpectrum constructors: apply photometric normalization (matching pbrt-v4)
 function PointLight(i::RGBSpectrum, position)
+    scale = 1f0 / D65_PHOTOMETRIC
+    PointLight(translate(Vec3f(position)), i, scale)
+end
+function PointLight(position, i::RGBSpectrum)
     scale = 1f0 / D65_PHOTOMETRIC
     PointLight(translate(Vec3f(position)), i, scale)
 end

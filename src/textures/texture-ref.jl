@@ -118,20 +118,15 @@ end
     sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy) -> T
 
 Sample texture with filtering based on UV derivatives.
-Uses the derivatives to compute the filter footprint for mipmap selection.
-
-TODO: Implement proper mipmap-based filtering. Currently uses bilinear sampling
-as a simple improvement over point sampling.
+TODO: Implement proper mipmap-based filtering with EWA or box filter.
+Currently uses nearest-neighbor (point) sampling, which matches pbrt-v4's
+behavior for pre-rasterized textures and avoids spurious blur.
 """
 @propagate_inbounds function sample_texture_data_filtered(
     data::AbstractArray{T,N}, uv::Point2f,
     dudx::Float32, dudy::Float32, dvdx::Float32, dvdy::Float32
 )::T where {T,N}
-    # For now, use bilinear sampling as a simple filter
-    # TODO: Implement mipmap selection based on derivatives:
-    #   width = max(sqrt(dudx^2 + dvdx^2), sqrt(dudy^2 + dvdy^2)) * tex_size
-    #   level = log2(max(1, width))
-    return sample_texture_bilinear(data, uv)
+    return sample_texture_data(data, uv)
 end
 
 # 0-dim arrays (scalar constants) - just return the value

@@ -115,27 +115,23 @@ Adapt.adapt_structure(to, light::Hikari.SunLight) = light
 
 
 
-# Film - adapt pixel/tile arrays and framebuffers
+# Film - adapt arrays for GPU
 function Adapt.adapt_structure(to, film::Film)
     Film(
         film.resolution,
         film.crop_bounds,
         film.diagonal,
-        Adapt.adapt(to, film.pixels),
-        Adapt.adapt(to, film.tiles),
-        film.tile_size,
-        film.ntiles,
         film.filter_table,
         film.filter_table_width,
         film.filter_radius,
-        film.filter_params,  # GPUFilterParams is already bitstype
+        film.filter_params,
         film.scale,
         Adapt.adapt(to, film.framebuffer),
         Adapt.adapt(to, film.albedo),
         Adapt.adapt(to, film.normal),
         Adapt.adapt(to, film.depth),
         Adapt.adapt(to, film.postprocess),
-        film.iteration_index,  # RefValue is shared across CPU/GPU
+        film.iteration_index,
     )
 end
 

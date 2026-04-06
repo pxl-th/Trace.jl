@@ -140,12 +140,11 @@ begin
     backend = AMDGPU.ROCBackend()
     scene = create_scene(; glass_cat=false, backend=backend)
     film, camera = create_film_and_camera(; width=1820, height=720, use_pbrt_camera=true)
-    sensor = Hikari.FilmSensor(iso=100, white_balance=6500)
     integrator = Hikari.VolPath(samples=100, max_depth=8)
     # Film still needs GPU conversion, scene already on GPU
     gpu_film = Adapt.adapt(backend, film)
     Hikari.clear!(gpu_film)
     @time integrator(scene, gpu_film, camera)
-    img = Hikari.postprocess!(gpu_film; sensor, exposure=0.5f0, tonemap=:aces, gamma=2.2f0)
+    img = Hikari.postprocess!(gpu_film; exposure=0.5f0, tonemap=:aces, gamma=2.2f0)
     Array(img)
 end

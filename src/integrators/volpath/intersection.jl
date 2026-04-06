@@ -344,8 +344,11 @@ while opaque surfaces block it. The final contribution is computed as:
         n = vp_compute_geometric_normal(primitive)
         entering = dot(dir, n) < 0f0
 
-        # Check if surface is a medium transition (transmissive boundary)
-        is_transmissive = is_medium_transition(mi)
+        # A surface only acts as a transparent boundary for shadow rays if it's a
+        # pure medium transition with no BSDF material. Surfaces with a material
+        # (e.g. dielectric glass) block shadow rays — pbrt-v4: result.hit && result.material → T_ray=0.
+        # Refracted-light contributions are captured by explicit path bouncing through the BSDF.
+        is_transmissive = is_medium_transition(mi) && !Raycore.is_valid(mi.material)
 
         if !is_transmissive
             # Check alpha for stochastic pass-through (e.g. GLTF BLEND mode foliage)

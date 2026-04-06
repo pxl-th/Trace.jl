@@ -1102,7 +1102,9 @@ Returns (f_value, pdf) for the given wo/wi pair.
         G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
 
         f_val = D * G * R / (4f0 * wo[3] * wi[3])
-        pdf = trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) / (4f0 * abs(cos_θo_h))
+        # PDF includes reflection mixing weight R/(R+T) = R (since R+T=1, BXDF_ALL assumed)
+        # Matches pbrt-v4 DielectricBxDF::PDF: mfDistrib.PDF(wo,wm)/(4*AbsDot(wo,wm)) * pr/(pr+pt)
+        pdf = trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) / (4f0 * abs(cos_θo_h)) * R
 
         return (SpectralRadiance(f_val), pdf)
     else
@@ -1136,8 +1138,10 @@ Returns (f_value, pdf) for the given wo/wi pair.
             f_val /= etap * etap
         end
 
+        # PDF includes transmission mixing weight T/(R+T) = T (since R+T=1, BXDF_ALL assumed)
+        # Matches pbrt-v4 DielectricBxDF::PDF: mfDistrib.PDF(wo,wm)*dwm_dwi * pt/(pr+pt)
         dwm_dwi = abs(cos_θi_h) / denom
-        pdf = trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) * dwm_dwi
+        pdf = trowbridge_reitz_pdf(wo, wh, alpha_x, alpha_y) * dwm_dwi * T
 
         return (SpectralRadiance(f_val), pdf)
     end

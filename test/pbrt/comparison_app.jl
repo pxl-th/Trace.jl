@@ -203,8 +203,8 @@ function make_comparison_app(names, scores, energies; spp=SPP)
             )
             push!(cards_vec, card)
         end
-        n_energy_ok = count(e -> 0.95 < e < 1.05, energies)
-        n_tile_ok = count(s -> s < 0.07, scores)
+        n_energy_ok = Base.count(e -> 0.95 < e < 1.05, energies)
+        n_tile_ok = Base.count(s -> s < 0.07, scores)
         DOM.div(
             DOM.h1("Hikari vs pbrt-v4 ($(spp) spp)", style="color:white; text-align:center; margin:8px;"),
             DOM.div("$(length(scores)) scenes | energy within 5%: $(n_energy_ok)/$(length(scores)) | tile<0.07: $(n_tile_ok)/$(length(scores)) -- click to toggle",
@@ -234,7 +234,7 @@ all_names = all_names[order]
 all_scores = all_scores[order]
 all_energies = all_energies[order]
 
-n_energy_ok = count(e -> 0.95 < e < 1.05, all_energies)
+n_energy_ok = Base.count(e -> 0.95 < e < 1.05, all_energies)
 println("Step 4: Launching Bonito app...")
 server = Bonito.Server(make_comparison_app(all_names, all_scores, all_energies; spp=SPP), "0.0.0.0", 9384)
 println("http://localhost:9384 -- energy within 5%: $(n_energy_ok)/$(length(all_scores)) at $(SPP) spp")
