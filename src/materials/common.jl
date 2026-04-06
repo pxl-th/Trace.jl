@@ -132,80 +132,17 @@ This uses the exact same formula as pbrt-v4 with complex arithmetic.
 """
 @propagate_inbounds function fr_complex(cos_theta_i::Float32, eta::Float32, k::Float32)::Float32
     cos_theta_i = clamp(cos_theta_i, 0f0, 1f0)
-
-    # Compute complex cos(θt) for Fresnel equations using Snell's law
     sin2_theta_i = 1f0 - cos_theta_i * cos_theta_i
 
-    # Complex eta: eta_c = eta + i*k
-    # sin²θt = sin²θi / eta_c²
-    # For complex division: (a+bi)² = a² - b² + 2abi
-    # eta_c² = eta² - k² + 2*eta*k*i
-    eta2 = eta * eta
-    k2 = k * k
-    eta_c2_re = eta2 - k2
-    eta_c2_im = 2f0 * eta * k
+    # Complex IOR and Snell's law (pbrt-v4 FrComplex)
+    eta_c = Complex{Float32}(eta, k)
+    sin2_theta_t = sin2_theta_i / (eta_c * eta_c)
+    cos_theta_t = sqrt(1f0 - sin2_theta_t)
 
-    # sin²θt (complex) = sin²θi / eta_c²
-    # For complex division: (a) / (c + di) = a*(c - di) / (c² + d²)
-    denom = eta_c2_re * eta_c2_re + eta_c2_im * eta_c2_im
-    sin2_theta_t_re = sin2_theta_i * eta_c2_re / denom
-    sin2_theta_t_im = -sin2_theta_i * eta_c2_im / denom
+    r_parl = (eta_c * cos_theta_i - cos_theta_t) / (eta_c * cos_theta_i + cos_theta_t)
+    r_perp = (cos_theta_i - eta_c * cos_theta_t) / (cos_theta_i + eta_c * cos_theta_t)
 
-    # cos²θt (complex) = 1 - sin²θt
-    cos2_theta_t_re = 1f0 - sin2_theta_t_re
-    cos2_theta_t_im = -sin2_theta_t_im
-
-    # cosθt (complex) = sqrt(cos²θt)
-    # For complex sqrt: sqrt(a + bi) where result has positive real part
-    mag = sqrt(cos2_theta_t_re * cos2_theta_t_re + cos2_theta_t_im * cos2_theta_t_im)
-    cos_theta_t_re = sqrt(0.5f0 * (mag + cos2_theta_t_re))
-    cos_theta_t_im = cos2_theta_t_im / (2f0 * cos_theta_t_re)
-    # Handle edge case where cos_theta_t_re would be 0
-    if cos_theta_t_re == 0f0
-        cos_theta_t_im = sqrt(0.5f0 * mag)
-    end
-
-    # r_parl = (eta_c * cos_theta_i - cos_theta_t) / (eta_c * cos_theta_i + cos_theta_t)
-    # eta_c * cos_theta_i = (eta + i*k) * cos_theta_i = eta*cos_i + i*k*cos_i
-    eta_cos_i_re = eta * cos_theta_i
-    eta_cos_i_im = k * cos_theta_i
-
-    # numerator: eta_c * cos_theta_i - cos_theta_t
-    num_parl_re = eta_cos_i_re - cos_theta_t_re
-    num_parl_im = eta_cos_i_im - cos_theta_t_im
-    # denominator: eta_c * cos_theta_i + cos_theta_t
-    den_parl_re = eta_cos_i_re + cos_theta_t_re
-    den_parl_im = eta_cos_i_im + cos_theta_t_im
-
-    # r_parl = num / den (complex division)
-    den_parl_mag2 = den_parl_re * den_parl_re + den_parl_im * den_parl_im
-    r_parl_re = (num_parl_re * den_parl_re + num_parl_im * den_parl_im) / den_parl_mag2
-    r_parl_im = (num_parl_im * den_parl_re - num_parl_re * den_parl_im) / den_parl_mag2
-
-    # r_perp = (cos_theta_i - eta_c * cos_theta_t) / (cos_theta_i + eta_c * cos_theta_t)
-    # eta_c * cos_theta_t = (eta + i*k) * (cos_t_re + i*cos_t_im)
-    #                     = eta*cos_t_re - k*cos_t_im + i*(eta*cos_t_im + k*cos_t_re)
-    eta_cos_t_re = eta * cos_theta_t_re - k * cos_theta_t_im
-    eta_cos_t_im = eta * cos_theta_t_im + k * cos_theta_t_re
-
-    # numerator: cos_theta_i - eta_c * cos_theta_t (cos_theta_i is real)
-    num_perp_re = cos_theta_i - eta_cos_t_re
-    num_perp_im = -eta_cos_t_im
-    # denominator: cos_theta_i + eta_c * cos_theta_t
-    den_perp_re = cos_theta_i + eta_cos_t_re
-    den_perp_im = eta_cos_t_im
-
-    # r_perp = num / den (complex division)
-    den_perp_mag2 = den_perp_re * den_perp_re + den_perp_im * den_perp_im
-    r_perp_re = (num_perp_re * den_perp_re + num_perp_im * den_perp_im) / den_perp_mag2
-    r_perp_im = (num_perp_im * den_perp_re - num_perp_re * den_perp_im) / den_perp_mag2
-
-    # Return (|r_parl|² + |r_perp|²) / 2
-    # |r|² = r_re² + r_im² (norm of complex number)
-    norm_parl = r_parl_re * r_parl_re + r_parl_im * r_parl_im
-    norm_perp = r_perp_re * r_perp_re + r_perp_im * r_perp_im
-
-    return (norm_parl + norm_perp) * 0.5f0
+    return (abs2(r_parl) + abs2(r_perp)) * 0.5f0
 end
 
 """

@@ -284,20 +284,20 @@ end
 GPU-compatible version that takes an explicit table parameter.
 """
 @propagate_inbounds function rgb_to_spectral_sigmoid_unbounded(table::RGBToSpectrumTable, r::Float32, g::Float32, b::Float32, lambda::Wavelengths)
-    # Find scale factor
+    # Matching pbrt-v4 RGBUnboundedSpectrum exactly:
+    #   scale = 2 * max(r,g,b)
+    #   rsp = ToRGBCoeffs(rgb / scale)
+    #   operator()(λ) = scale * rsp(λ)
+    # The 2x factor keeps normalized RGB in [0, 0.5], in the linear regime
+    # of the sigmoid, preserving spectral shape fidelity.
     m = max(r, g, b)
     if m <= 0.0f0
         return SpectralRadiance(0.0f0)
     end
 
-    # Normalize and get polynomial for unit-scale color
-    poly = rgb_to_spectrum(table, r / m, g / m, b / m)
+    scale = 2f0 * m
+    poly = rgb_to_spectrum(table, r / scale, g / scale, b / scale)
 
-    # Scale to match original intensity
-    max_poly = max_value(poly)
-    scale = m / max_poly
-
-    # Manually unrolled to avoid closure allocations
     @inbounds begin
         v1 = scale * poly(lambda.lambda[1])
         v2 = scale * poly(lambda.lambda[2])
