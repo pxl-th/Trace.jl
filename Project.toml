@@ -21,12 +21,6 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 Zlib_jll = "83775a58-1f1d-513f-b197-d71354ab007a"
 
-[weakdeps]
-Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
-
-[extensions]
-HikariLavaExt = "Lava"
-
 [compat]
 Adapt = "4.4.0"
 FileIO = "1.16"

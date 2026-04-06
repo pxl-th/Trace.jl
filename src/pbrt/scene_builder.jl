@@ -151,7 +151,7 @@ function build_hikari_scene(pbrt::PBRTScene;
     for srec in pbrt.shapes
         mesh = build_pbrt_shape(srec, pbrt)
         mesh === nothing && continue
-        mat = resolve_pbrt_material(srec, mat_cache, pbrt; scene=scene, textures=hikari_textures)
+        mat = resolve_pbrt_material(srec, mat_cache, pbrt; textures=hikari_textures)
 
         # Resolve media for this shape
         inside_medium = get(media_cache, srec.medium_inner, nothing)
@@ -410,7 +410,9 @@ function pbrt_get_float_texture(entity::PBRTEntity, name::String, textures::Dict
     return Float32(pbrt_get_float(entity, name, default_val))
 end
 
-function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene, textures::Dict{String, Any}=Dict{String,Any}())
+function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
+                             textures::Dict{String, Any}=Dict{String,Any}(),
+                             mat_cache::Dict{String, Material}=Dict{String,Material}())
     type = lowercase(entity.type)
 
     if type == "diffuse"
@@ -544,9 +546,15 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene, textures::Dict
         return Dielectric(Kr=(0,0,0), Kt=(1,1,1), index=1f0)
 
     elseif type == "mix"
-        # Mix needs special handling — returns nothing here,
-        # handled in resolve_pbrt_mix_material with scene context
-        return nothing
+        haskey(entity.params, "materials") || error("mix material without 'materials' param")
+        mat_names = String.(entity.params["materials"].values)
+        length(mat_names) == 2 || error("mix material needs exactly 2 sub-materials, got $(length(mat_names))")
+        amount = Float32(pbrt_get_float(entity, "amount", 0.5))
+        mat1 = get(mat_cache, mat_names[1], nothing)
+        mat2 = get(mat_cache, mat_names[2], nothing)
+        mat1 === nothing && error("mix: unknown material '$(mat_names[1])'")
+        mat2 === nothing && error("mix: unknown material '$(mat_names[2])'")
+        return MixMaterial(materials=(mat1, mat2), amount=amount)
 
     else
         @warn "pbrt: unsupported material type '$type', using default Diffuse"
@@ -554,32 +562,8 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene, textures::Dict
     end
 end
 
-"""Build a MixMaterial, resolving sub-material references from named materials cache."""
-function build_pbrt_mix_material(entity::PBRTEntity, mat_cache::Dict{String, Material},
-                                 scene::Scene, ::PBRTScene)
-    # Get sub-material names from "string materials" param
-    haskey(entity.params, "materials") || error("mix material without 'materials' param")
-    mat_names = String.(entity.params["materials"].values)
-    length(mat_names) == 2 || error("mix material needs exactly 2 sub-materials, got $(length(mat_names))")
-
-    amount = Float32(pbrt_get_float(entity, "amount", 0.5))
-
-    # Resolve sub-materials
-    mat1 = get(mat_cache, mat_names[1], nothing)
-    mat2 = get(mat_cache, mat_names[2], nothing)
-    mat1 === nothing && error("mix: unknown material '$(mat_names[1])'")
-    mat2 === nothing && error("mix: unknown material '$(mat_names[2])'")
-
-    # Push sub-materials to scene.materials to get SetKeys
-    key1 = push!(scene.materials, mat1)
-    key2 = push!(scene.materials, mat2)
-
-    return MixMaterial(mat1, mat2, to_texture(amount), key1, key2)
-end
-
 function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Material},
-                               pbrt::PBRTScene; scene::Union{Scene, Nothing}=nothing,
-                               textures::Dict{String,Any}=Dict{String,Any}())
+                               pbrt::PBRTScene; textures::Dict{String,Any}=Dict{String,Any}())
     entity = if srec.material_name !== nothing
         name = srec.material_name
         if haskey(mat_cache, name)
@@ -596,12 +580,7 @@ function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Ma
         return Diffuse(Kd=(0.5, 0.5, 0.5))
     end
 
-    # Handle mix material specially (needs scene for SetKey assignment)
-    if lowercase(entity.type) == "mix" && scene !== nothing
-        return build_pbrt_mix_material(entity, mat_cache, scene, pbrt)
-    end
-
-    mat = build_pbrt_material(entity, pbrt, textures)
+    mat = build_pbrt_material(entity, pbrt, textures, mat_cache)
     mat !== nothing && return mat
     return Diffuse(Kd=(0.5, 0.5, 0.5))
 end
@@ -617,15 +596,15 @@ function build_pbrt_shape(srec::PBRTShapeRecord, pbrt::PBRTScene)
     if type == "sphere"
         radius = Float32(pbrt_get_float(entity, "radius", 1.0))
         mesh = tessellate_sphere(radius; segments=64)
-        return apply_pbrt_transform(mesh, srec.transform)
+        mesh = apply_pbrt_transform(mesh, srec.transform)
 
     elseif type == "disk"
         radius = Float32(pbrt_get_float(entity, "radius", 1.0))
         mesh = tessellate_disk(radius; segments=64)
-        return apply_pbrt_transform(mesh, srec.transform)
+        mesh = apply_pbrt_transform(mesh, srec.transform)
 
     elseif type == "trianglemesh"
-        return build_trianglemesh(entity, srec.transform)
+        mesh = build_trianglemesh(entity, srec.transform)
 
     elseif type == "plymesh"
         filename = pbrt_get_string(entity, "filename", "")
@@ -633,15 +612,30 @@ function build_pbrt_shape(srec::PBRTShapeRecord, pbrt::PBRTScene)
         path = isabspath(filename) ? filename : joinpath(pbrt.base_dir, filename)
         isfile(path) || (@warn "pbrt: PLY file not found: $path"; return nothing)
         mesh = FileIO.load(path)
-        return apply_pbrt_transform(mesh, srec.transform)
+        mesh = apply_pbrt_transform(mesh, srec.transform)
 
     elseif type == "loopsubdiv"
-        return build_trianglemesh(entity, srec.transform)
+        mesh = build_trianglemesh(entity, srec.transform)
 
     else
         @warn "pbrt: unsupported shape type '$type'"
         return nothing
     end
+
+    # ReverseOrientation flips face winding, which flips computed normals.
+    # This is critical for one-sided area lights that only emit from the normal side.
+    if mesh !== nothing && srec.reverse_orientation
+        mesh = reverse_mesh_orientation(mesh)
+    end
+
+    return mesh
+end
+
+function reverse_mesh_orientation(mesh)
+    positions = collect(GeometryBasics.coordinates(mesh))
+    faces = collect(GeometryBasics.faces(mesh))
+    flipped = [TriangleFace{Int}(f[1], f[3], f[2]) for f in faces]
+    return GeometryBasics.Mesh(positions, flipped)
 end
 
 function build_trianglemesh(entity::PBRTEntity, transform::Mat4f)

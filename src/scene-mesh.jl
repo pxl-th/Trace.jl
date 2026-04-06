@@ -5,6 +5,15 @@
 
 using LinearAlgebra: I, norm
 
+# MixMaterial: resolve sub-material keys before pushing to the scene
+function Base.push!(scene::Scene, mix::MixMaterial)
+    key1 = push!(scene.materials, mix.material1)
+    key2 = push!(scene.materials, mix.material2)
+    resolved = MixMaterial(mix.material1, mix.material2, mix.amount, key1, key2)
+    interface = MediumInterface(resolved)
+    return push!(scene, interface)
+end
+
 # Single material for entire mesh
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, material::Material;
                     transform::Mat4f=Mat4f(I))
