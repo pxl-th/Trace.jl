@@ -47,7 +47,7 @@ sync!(scene)  # Build acceleration structure
 ```
 """
 default_accel(backend, ::Val{false}) = TLAS(backend)
-default_accel(backend, ::Val{true}) = TLAS(backend)  # overridden in hw-rt.jl for LavaBackend
+# Val{true} defined in hw-rt.jl -> HWTLAS(backend) for any HW-capable backend
 
 function Scene(; backend=KA.CPU(), accel=nothing, hw_accel::Bool=false)
     tlas = accel !== nothing ? accel : default_accel(backend, Val(hw_accel))

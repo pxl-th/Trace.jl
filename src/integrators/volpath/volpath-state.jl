@@ -94,6 +94,16 @@ mutable struct VolPathState{Backend}
 
     # Sobol RNG for low-discrepancy sampling (allocated once, reused across frames)
     sobol_rng::Any  # SobolRNG or nothing
+
+    # Hardware RT buffers (lazily allocated when using HW-accelerated tracing)
+    hw_primary_ray_buf::Any      # RTRay buffer for primary rays
+    hw_primary_result_buf::Any   # RTHitResult buffer for primary rays
+    hw_shadow_states::Any        # ShadowIterState buffer
+    hw_shadow_ray_buf::Any       # RTRay buffer for shadow rays
+    hw_shadow_result_buf::Any    # RTHitResult buffer for shadow rays
+    hw_shadow_counter::Any       # Int32 active counter for shadow iteration
+    hw_depth_ray_buf::Any        # RTRay buffer for depth pass
+    hw_depth_result_buf::Any     # RTHitResult buffer for depth pass
 end
 
 """
@@ -233,6 +243,8 @@ function VolPathState(
         num_bvh_lights, num_infinite_lights, Int32(n_lights),
         Int32(max_depth), Int32(rr_depth), Int32(width), Int32(height),
         sobol_rng,
+        # HW RT buffers (lazily allocated)
+        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     )
 end
 

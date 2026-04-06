@@ -135,8 +135,8 @@ include("integrators/volpath/medium-scatter.jl")
 include("integrators/volpath/intersection.jl")
 include("integrators/volpath/surface-eval.jl")
 include("integrators/volpath/volpath.jl")
-# Hardware RT integration (HWTLAS, HWAdaptedAccel, dispatch overrides)
-# Loaded via ext/HikariLavaExt.jl when Lava is available
+# Hardware RT dispatch (uses Raycore's backend-agnostic HWTLAS/HWAdaptedAccel interface)
+include("integrators/volpath/hw-rt.jl")
 include("kernel-abstractions.jl")
 # Postprocessing pipeline
 include("postprocess.jl")

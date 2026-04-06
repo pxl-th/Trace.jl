@@ -40,12 +40,12 @@ struct MixMaterial{M1<:Material, M2<:Material, AmountTex} <: Material
     material1::M1
     material2::M2
     amount::AmountTex
-    # Store material indices for use after resolution
+    # Material indices, resolved when pushed to scene
     material1_idx::SetKey
     material2_idx::SetKey
 end
 
-# Constructor with material tuple indices
+# Full constructor (used internally after keys are resolved)
 function MixMaterial(
     material1::M1,
     material2::M2,
@@ -57,43 +57,35 @@ function MixMaterial(
 end
 
 """
-    MixMaterial(; materials, amount, material_indices)
+    MixMaterial(; materials, amount)
 
-Create a MixMaterial with keyword arguments.
+Create a MixMaterial that blends between two sub-materials.
+
+Sub-material indices are resolved automatically when the material is pushed to a scene.
 
 # Arguments
 - `materials`: Tuple of two materials (material1, material2)
-- `amount`: Mixing amount (0-1 scalar, texture, or image path)
-- `material_indices`: Tuple of SetKey for each material
+- `amount`: Mixing amount (0-1 scalar, texture, or image path). 0 = material1, 1 = material2.
 
 # Examples
 ```julia
-# Simple 50-50 blend
-MixMaterial(
-    materials=(gold_material, red_diffuse),
-    amount=0.5,
-    material_indices=(gold_idx, diffuse_idx)
-)
-
-# Texture-based blend (e.g., mask texture)
-MixMaterial(
-    materials=(gold_material, red_diffuse),
-    amount=mask_texture,
-    material_indices=(gold_idx, diffuse_idx)
-)
+MixMaterial(materials=(gold, diffuse), amount=0.5)
+MixMaterial(materials=(gold, diffuse), amount=mask_texture)
 ```
 """
 function MixMaterial(;
     materials::Tuple{<:Material, <:Material},
     amount=0.5f0,
-    material_indices::Tuple{SetKey, SetKey}
+    material_indices::Union{Tuple{SetKey, SetKey}, Nothing}=nothing
 )
+    idx1 = material_indices !== nothing ? material_indices[1] : SetKey()
+    idx2 = material_indices !== nothing ? material_indices[2] : SetKey()
     MixMaterial(
         materials[1],
         materials[2],
         to_texture(amount),
-        material_indices[1],
-        material_indices[2]
+        idx1,
+        idx2
     )
 end
 
