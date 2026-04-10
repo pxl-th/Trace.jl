@@ -76,8 +76,19 @@ function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera; h
     n = h * w
     miss_depth = has_infinite_lights ? Float32(1e30) : Inf32
 
-    rays = KA.allocate(backend, RTRay, n)
-    results = KA.allocate(backend, RTHitResult, n)
+    # Cache rays/results buffers on the film. The framebuffer dimensions don't
+    # change between resizes (resize creates a new Film), so length(film.depth)
+    # is stable for the film's lifetime — one allocation per Film instance.
+    rays = film.aux_rays[]
+    if rays === nothing || length(rays::AbstractVector{RTRay}) != n
+        rays = KA.allocate(backend, RTRay, n)
+        film.aux_rays[] = rays
+    end
+    results = film.aux_results[]
+    if results === nothing || length(results::AbstractVector{RTHitResult}) != n
+        results = KA.allocate(backend, RTHitResult, n)
+        film.aux_results[] = results
+    end
 
     hw_generate_primary_rays_kernel!(backend)(
         rays, camera, film.crop_bounds.p_min, Int32(w), Int32(h); ndrange=n)

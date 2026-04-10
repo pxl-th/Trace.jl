@@ -40,6 +40,12 @@ struct Film{
 
     # Progressive rendering state
     iteration_index::Base.RefValue{Int32}
+
+    # Persistent scratch buffers for HW RT fill_aux_buffers!.
+    # Cached on the film so they survive across frames; freed in free!(film).
+    # `Any` to avoid leaking RTRay/RTHitResult types into Film's type parameters.
+    aux_rays::Base.RefValue{Any}
+    aux_results::Base.RefValue{Any}
 end
 
 """
@@ -94,6 +100,8 @@ function Film(
         depth,
         postprocess,
         Ref(Int32(0)),
+        Ref{Any}(nothing),
+        Ref{Any}(nothing),
     )
 end
 
@@ -186,5 +194,13 @@ function free!(film::Film)
     finalize(film.normal)
     finalize(film.depth)
     finalize(film.postprocess)
+    if film.aux_rays[] !== nothing
+        finalize(film.aux_rays[])
+        film.aux_rays[] = nothing
+    end
+    if film.aux_results[] !== nothing
+        finalize(film.aux_results[])
+        film.aux_results[] = nothing
+    end
     return nothing
 end

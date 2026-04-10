@@ -58,5 +58,5 @@ include("matrix.jl")
 get_camera_to_world(camera::PerspectiveCamera) = camera.core.core.camera_to_world
 get_camera_to_world(camera::MatrixCamera) = camera.core.camera_to_world
 
-get_camera_position(camera::PerspectiveCamera) = get_camera_to_world(camera)(Point3f(0f0))
-get_camera_position(camera::MatrixCamera) = get_camera_to_world(camera)(Point3f(0f0))
+get_camera_position(camera::PerspectiveCamera) = Raycore.transform_point(get_camera_to_world(camera).m, Point3f(0f0))
+get_camera_position(camera::MatrixCamera) = Raycore.transform_point(get_camera_to_world(camera).m, Point3f(0f0))

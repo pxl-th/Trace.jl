@@ -132,6 +132,8 @@ function Adapt.adapt_structure(to, film::Film)
         Adapt.adapt(to, film.depth),
         Adapt.adapt(to, film.postprocess),
         film.iteration_index,
+        film.aux_rays,
+        film.aux_results,
     )
 end
 

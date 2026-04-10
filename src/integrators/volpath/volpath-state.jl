@@ -9,11 +9,7 @@ import KernelAbstractions as KA
 
 # Override should_use_soa for VolPath work items that benefit from SOA layout
 should_use_soa(::Type{VPRayWorkItem}) = true
-should_use_soa(::Type{VPMaterialEvalWorkItem}) = true
 should_use_soa(::Type{VPShadowRayWorkItem}) = true
-should_use_soa(::Type{VPHitSurfaceWorkItem}) = true
-should_use_soa(::Type{VPMediumSampleWorkItem}) = true
-should_use_soa(::Type{VPMediumScatterWorkItem}) = true
 should_use_soa(::Type{VPEscapedRayWorkItem}) = true
 should_use_soa(::Type{VPRaySamples}) = true
 
@@ -293,4 +289,3 @@ end
 function reset_film!(state::VolPathState)
     KA.fill!(state.pixel_L, 0f0)
 end
-

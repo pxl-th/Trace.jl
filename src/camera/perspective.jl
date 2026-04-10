@@ -119,8 +119,8 @@ end
         sample.time,
     )
     # TODO add medium
-    ctw = camera.core.core.camera_to_world
-    o = ctw(o)
-    d = ctw(Vec3f(d))  # Convert to Vec3f for proper direction transformation
+    ctw = camera.core.core.camera_to_world.m
+    o = Raycore.transform_point(ctw, o)
+    d = Raycore.transform_direction(ctw, Vec3f(d))  # Convert to Vec3f for proper direction transformation
     return Ray(d=normalize(d), o=o, time=time), 1.0f0
 end

@@ -1455,79 +1455,90 @@ end
     return RayMajorantSegment(t_min, t_max, σ_maj)
 end
 
-"""Build a coarse majorant grid from the density field"""
-function build_majorant_grid(density::AbstractArray{Float32,3}, res::Vec3i)
+"""Build a coarse majorant grid from the density field (CPU path)."""
+function build_majorant_grid(density::Array{Float32,3}, res::Vec3i)
     nx, ny, nz = size(density)
     grid = MajorantGrid(res, Vector{Float32})
-
-    # For each majorant voxel, find max density in corresponding region
-    # Use floating point mapping to handle cases where majorant res > density res
-    for iz in 0:res[3]-1
-        # Map majorant voxel [iz, iz+1)/res to density range [0, nz)
-        z_start_f = iz * nz / res[3]
-        z_end_f = (iz + 1) * nz / res[3]
-        z_start = max(1, floor(Int, z_start_f) + 1)
-        z_end = min(nz, ceil(Int, z_end_f))
-
-        for iy in 0:res[2]-1
-            y_start_f = iy * ny / res[2]
-            y_end_f = (iy + 1) * ny / res[2]
-            y_start = max(1, floor(Int, y_start_f) + 1)
-            y_end = min(ny, ceil(Int, y_end_f))
-
-            for ix in 0:res[1]-1
-                x_start_f = ix * nx / res[1]
-                x_end_f = (ix + 1) * nx / res[1]
-                x_start = max(1, floor(Int, x_start_f) + 1)
-                x_end = min(nx, ceil(Int, x_end_f))
-
-                # Find max in this region
-                max_val = 0f0
-                for z in z_start:z_end, y in y_start:y_end, x in x_start:x_end
-                     max_val = max(max_val, density[x, y, z])
-                end
-
-                majorant_set!(grid, ix, iy, iz, max_val)
-            end
-        end
-    end
-
+    build_majorant_grid_cpu!(grid, density, nx, ny, nz)
     return grid
 end
 
-"""In-place majorant grid rebuild for GridMedium density updates."""
-function build_majorant_grid!(grid::MajorantGrid, density::AbstractArray{Float32,3})
-    res = grid.res
+"""Build a coarse majorant grid from a GPU density field using a KA kernel."""
+function build_majorant_grid(density::AbstractArray{Float32,3}, res::Vec3i)
     nx, ny, nz = size(density)
+    backend = KA.get_backend(density)
+    n_voxels = Int(res[1]) * Int(res[2]) * Int(res[3])
+    voxels = KA.allocate(backend, Float32, n_voxels)
+    fill!(voxels, 0f0)
+    grid = MajorantGrid(voxels, Vec{3,Int32}(Int32(res[1]), Int32(res[2]), Int32(res[3])))
+    build_majorant_kernel!(backend)(
+        grid.voxels, density, Int32(res[1]), Int32(res[2]), Int32(res[3]),
+        Int32(nx), Int32(ny), Int32(nz); ndrange=n_voxels)
+    KA.synchronize(backend)
+    return grid
+end
 
+@kernel function build_majorant_kernel!(voxels, @Const(density),
+        rx::Int32, ry::Int32, rz::Int32, nx::Int32, ny::Int32, nz::Int32)
+    linear = @index(Global)
+    idx = Int32(linear) - Int32(1)
+    ix = idx % rx
+    iy = (idx ÷ rx) % ry
+    iz = idx ÷ (rx * ry)
+
+    x_start = max(Int32(1), (ix * nx) ÷ rx + Int32(1))
+    x_end   = min(nx, ((ix + Int32(1)) * nx + rx - Int32(1)) ÷ rx)
+    y_start = max(Int32(1), (iy * ny) ÷ ry + Int32(1))
+    y_end   = min(ny, ((iy + Int32(1)) * ny + ry - Int32(1)) ÷ ry)
+    z_start = max(Int32(1), (iz * nz) ÷ rz + Int32(1))
+    z_end   = min(nz, ((iz + Int32(1)) * nz + rz - Int32(1)) ÷ rz)
+
+    max_val = 0f0
+    for z in z_start:z_end, y in y_start:y_end, x in x_start:x_end
+        @inbounds max_val = max(max_val, density[x, y, z])
+    end
+    @inbounds voxels[linear] = max_val
+end
+
+"""In-place majorant grid rebuild (CPU path)."""
+function build_majorant_grid!(grid::MajorantGrid{Vector{Float32}}, density::Array{Float32,3})
+    nx, ny, nz = size(density)
+    build_majorant_grid_cpu!(grid, density, nx, ny, nz)
+    return grid
+end
+
+"""In-place majorant grid rebuild (GPU path)."""
+function build_majorant_grid!(grid::MajorantGrid, density::AbstractArray{Float32,3})
+    nx, ny, nz = size(density)
+    res = grid.res
+    backend = KA.get_backend(density)
+    n_voxels = Int(res[1]) * Int(res[2]) * Int(res[3])
+    build_majorant_kernel!(backend)(
+        grid.voxels, density, Int32(res[1]), Int32(res[2]), Int32(res[3]),
+        Int32(nx), Int32(ny), Int32(nz); ndrange=n_voxels)
+    KA.synchronize(backend)
+    return grid
+end
+
+function build_majorant_grid_cpu!(grid::MajorantGrid, density, nx, ny, nz)
+    res = grid.res
     for iz in 0:res[3]-1
-        z_start_f = iz * nz / res[3]
-        z_end_f = (iz + 1) * nz / res[3]
-        z_start = max(1, floor(Int, z_start_f) + 1)
-        z_end = min(nz, ceil(Int, z_end_f))
-
+        z_start = max(1, floor(Int, iz * nz / res[3]) + 1)
+        z_end   = min(nz, ceil(Int, (iz + 1) * nz / res[3]))
         for iy in 0:res[2]-1
-            y_start_f = iy * ny / res[2]
-            y_end_f = (iy + 1) * ny / res[2]
-            y_start = max(1, floor(Int, y_start_f) + 1)
-            y_end = min(ny, ceil(Int, y_end_f))
-
+            y_start = max(1, floor(Int, iy * ny / res[2]) + 1)
+            y_end   = min(ny, ceil(Int, (iy + 1) * ny / res[2]))
             for ix in 0:res[1]-1
-                x_start_f = ix * nx / res[1]
-                x_end_f = (ix + 1) * nx / res[1]
-                x_start = max(1, floor(Int, x_start_f) + 1)
-                x_end = min(nx, ceil(Int, x_end_f))
-
+                x_start = max(1, floor(Int, ix * nx / res[1]) + 1)
+                x_end   = min(nx, ceil(Int, (ix + 1) * nx / res[1]))
                 max_val = 0f0
                 for z in z_start:z_end, y in y_start:y_end, x in x_start:x_end
-                    max_val = max(max_val, density[x, y, z])
+                    @inbounds max_val = max(max_val, density[x, y, z])
                 end
-
                 majorant_set!(grid, ix, iy, iz, max_val)
             end
         end
     end
-    return grid
 end
 
 @propagate_inbounds is_emissive(::GridMedium) = false
