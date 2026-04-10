@@ -39,7 +39,7 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
     # The camera has precomputed dx_camera and dy_camera (change per pixel in camera space)
 
     # Get camera position (world space origin)
-    camera_pos = camera_to_world(Point3f(0f0))
+    camera_pos = Raycore.transform_point(camera_to_world.m, Point3f(0f0))
 
     # Distance from camera to intersection point
     to_point = Vec3f(pi - camera_pos)
@@ -51,8 +51,8 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
 
     # Transform dx_camera and dy_camera to world space
     # These represent how the ray direction changes per pixel
-    dx_world = camera_to_world(camera.dx_camera)
-    dy_world = camera_to_world(camera.dy_camera)
+    dx_world = Raycore.transform_direction(camera_to_world.m, camera.dx_camera)
+    dy_world = Raycore.transform_direction(camera_to_world.m, camera.dy_camera)
 
     # Project onto the tangent plane at the intersection
     # dpdx ≈ scale * (dx_world - n * dot(n, dx_world))
@@ -585,4 +585,3 @@ function vp_evaluate_materials!(state::VolPathState, materials, camera, samples_
     )
     return nothing
 end
-
