@@ -194,7 +194,11 @@ end
 
 @propagate_inbounds function majorant_lookup(grid::MajorantGrid, media, x::Integer, y::Integer, z::Integer)::Float32
      # Use Int32 arithmetic for GPU compatibility
-     idx = Int32(x) + grid.res[1] * (Int32(y) + grid.res[2] * Int32(z)) + Int32(1)
+     # Clamp indices to prevent out-of-bounds access from floating point edge cases
+     cx = clamp(Int32(x), Int32(0), grid.res[1] - Int32(1))
+     cy = clamp(Int32(y), Int32(0), grid.res[2] - Int32(1))
+     cz = clamp(Int32(z), Int32(0), grid.res[3] - Int32(1))
+     idx = cx + grid.res[1] * (cy + grid.res[2] * cz) + Int32(1)
      # Deref voxels TextureRef to get actual array
      voxels = Raycore.deref(media, grid.voxels)
      voxels[idx]
