@@ -167,7 +167,8 @@ function VolPathState(
     scene_radius::Float32 = 10f0,  # Scene bounding sphere radius for light power estimation
     samples_per_pixel::Integer = 1,  # For SobolRNG parameter computation
     sampler_seed::UInt32 = UInt32(0),  # Scrambling seed for Sobol
-    accumulation_eltype::DataType = Float32  # Element type for accumulators (Float32 for OpenCL)
+    accumulation_eltype::DataType = Float32,  # Element type for accumulators (Float32 for OpenCL)
+    sensor::PixelSensor = PixelSensor()  # Pixel sensor for spectral → RGB conversion
 )
     n_pixels = width * height
 
@@ -200,9 +201,9 @@ function VolPathState(
     # Pre-computed samples per pixel (SOA layout)
     pixel_samples = allocate_array(backend, VPRaySamples, n_pixels; soa=true)
 
-    # Load lookup tables to GPU
+    # Load lookup tables to GPU (sensor determines response curves)
     rgb2spec_table = to_gpu(backend, get_srgb_table())
-    cie_table = to_gpu(backend, CIEXYZTable())
+    cie_table = to_gpu(backend, sensor_response_table(sensor.sensor_name))
 
     # Build BVH light sampler (spatially-aware importance sampling)
     n_lights = length(lights)
@@ -234,7 +235,7 @@ function VolPathState(
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
         pixel_samples,
         rgb2spec_table, cie_table,
-        SRGB_FROM_XYZ, 1f0,  # default: CIE XYZ → sRGB, no exposure scaling
+        sensor.output_from_sensor, sensor.imaging_ratio,
         bvh_nodes, light_to_bit_trail, infinite_light_indices,
         num_bvh_lights, num_infinite_lights, Int32(n_lights),
         Int32(max_depth), Int32(rr_depth), Int32(width), Int32(height),

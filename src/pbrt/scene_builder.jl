@@ -902,19 +902,8 @@ function render_pbrt(filename::AbstractString;
     spp = s.samples
     vp = VolPath(samples=spp, max_depth=s.max_depth, regularize=s.regularize,
                  russian_roulette_depth=s.russian_roulette_depth,
-                 max_component_value=s.max_component_value)
-
-    # Pre-create the state with sensor configured BEFORE any rendering.
-    height, width = size(r.film.framebuffer)
-    sobol_spp = max(spp, 4096)
-    vp.state = VolPathState(KA.get_backend(r.film.framebuffer), width, height, r.scene.lights;
-                            max_depth=vp.max_depth,
-                            rr_depth=vp.russian_roulette_depth,
-                            scene_radius=world_radius(r.scene),
-                            samples_per_pixel=sobol_spp,
-                            sampler_seed=UInt32(0),
-                            accumulation_eltype=vp.accumulation_eltype)
-    configure_sensor!(vp.state, r.sensor, r.sensor_name)
+                 max_component_value=s.max_component_value,
+                 sensor=r.sensor)
 
     img = vp(r.scene, r.film, r.camera)
 

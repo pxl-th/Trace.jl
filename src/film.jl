@@ -107,9 +107,9 @@ end
 
 function clear!(film::Film)
     film.iteration_index[] = Int32(0)
-    film.albedo .= (RGB{Float32}(0, 0, 0),)
-    film.normal .= (Vec3f(0, 0, 0),)
-    film.depth .= 0.0f0
+    fill!(film.albedo, RGB{Float32}(0, 0, 0))
+    fill!(film.normal, Vec3f(0, 0, 0))
+    fill!(film.depth, 0.0f0)
 end
 
 # ============================================================================

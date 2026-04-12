@@ -40,6 +40,9 @@ mutable struct VolPath <: Integrator
     # Hardware ray tracing flag — when true, RayMakie creates HWTLAS instead of software TLAS
     hw_accel::Bool
 
+    # Pixel sensor: spectral → RGB conversion with ISO, white balance, exposure
+    sensor::PixelSensor
+
     # Cached render state
     state::Union{Nothing, VolPathState}
 
@@ -92,7 +95,8 @@ function VolPath(;
     max_component_value::Real = 10f0,
     filter::AbstractFilter = GaussianFilter(),  # pbrt-v4 default: Gaussian(1.5, 0.5)
     accumulation_eltype::DataType = Float32,
-    hw_accel::Bool = false
+    hw_accel::Bool = false,
+    sensor::PixelSensor = PixelSensor()
 )
     @assert accumulation_eltype in (Float32, Float64) "accumulation_eltype must be Float32 or Float64"
     # Build filter sampler data for importance sampling (nothing for Box/Triangle)
@@ -107,12 +111,15 @@ function VolPath(;
         sampler_data,
         accumulation_eltype,
         hw_accel,
+        sensor,
         nothing,  # state
         nothing,  # _adapted_scene_cache
         nothing,  # _initial_medium_cache
         nothing   # _filter_sampler_gpu
     )
-    finalizer(close, vp)
+    # No GC finalizer — the VolPathState is shared with scene_state.integrator_state,
+    # so proactive free! from a finalizer would free arrays still in use by the render loop.
+    # GPU memory is freed by: explicit close(screen), or LavaArray's own DataRef finalizers.
     return vp
 end
 
@@ -529,7 +536,8 @@ function render!(
                                 scene_radius=world_radius(scene),
                                 samples_per_pixel=sobol_spp,
                                 sampler_seed=UInt32(0),
-                                accumulation_eltype=vp.accumulation_eltype)
+                                accumulation_eltype=vp.accumulation_eltype,
+                                sensor=vp.sensor)
     end
     state = vp.state
 

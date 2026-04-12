@@ -228,18 +228,18 @@ end
 Create a pixel sensor matching pbrt-v4's defaults.
 """
 function PixelSensor(; sensor::String="cie1931",
-                     iso::Float32=100f0,
-                     whitebalance::Float32=0f0,
-                     exposure_time::Float32=1f0)
-    imaging_ratio = exposure_time * iso / 100f0
-
+                     iso=100f0,
+                     whitebalance=0f0,
+                     exposure_time=1f0)
+    imaging_ratio = Float32(exposure_time) * Float32(iso) / 100f0
+    _whitebalance = Float32(whitebalance)
     if sensor == "cie1931"
         # CIE XYZ matching functions → just white balance
-        if whitebalance == 0f0
+        if _whitebalance == 0f0
             # No white balance: identity mapping XYZ→XYZ, then sRGB
             output_from_sensor = SRGB_FROM_XYZ
         else
-            wb_xy = cie_d_illuminant_xy(whitebalance)
+            wb_xy = cie_d_illuminant_xy(_whitebalance)
             wb_matrix = white_balance(wb_xy, D65_WHITE_XY)
             output_from_sensor = SRGB_FROM_XYZ * wb_matrix
         end
@@ -252,7 +252,7 @@ function PixelSensor(; sensor::String="cie1931",
     curves = SENSOR_REGISTRY[sensor_key]
 
     # Determine white balance illuminant
-    wb_temp = whitebalance == 0f0 ? 6500f0 : whitebalance
+    wb_temp = _whitebalance == 0f0 ? 6500f0 : _whitebalance
     wb_xy = cie_d_illuminant_xy(wb_temp)
 
     # Compute XYZFromSensorRGB via ColorChecker calibration
