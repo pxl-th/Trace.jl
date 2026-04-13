@@ -107,3 +107,26 @@ end
 @propagate_inbounds function get_crossing_medium(mi::MediumInterfaceIdx, entering::Bool)
     entering ? mi.inside : mi.outside
 end
+
+# ============================================================================
+# NullMaterial — pbrt-v4 `Material "interface"` / `nullptr`
+# ============================================================================
+
+"""
+    NullMaterial
+
+Marker material for medium-boundary surfaces that have no BSDF. Pbrt-v4 sets
+the surface material to `nullptr`; rays cross the boundary transparently and
+only the medium swap fires. In Hikari we make `push!(scene.materials, ::NullMaterial)`
+return an invalid `SetKey()`, so the existing `!is_valid(mi.material)` checks in
+the primary- and shadow-ray paths identify the surface as a null interface and
+skip BSDF sampling.
+
+Usage:
+```julia
+push!(scene, bounding_mesh, MediumInterface(NullMaterial(); inside=medium))
+```
+"""
+struct NullMaterial <: Material end
+
+Base.push!(set::Raycore.MultiTypeSet, ::NullMaterial; kwargs...) = SetKey()

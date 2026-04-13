@@ -269,6 +269,13 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     # Skip if no lights
     num_lights < Int32(1) && return
 
+    # Skip null-material boundaries (pbrt `Material "interface"` / nullptr):
+    # no BSDF to evaluate, no direct lighting contribution at this surface.
+    # `evaluate_material_inner!` advances the ray past the boundary.
+    if !Raycore.is_valid(work.material_idx) && is_medium_transition(work.interface)
+        return
+    end
+
     # Use pre-computed Sobol samples for light sampling (pbrt-v4 RaySamples.direct)
     pixel_idx = work.pixel_index
     u_light = pixel_samples_direct_u[pixel_idx]
@@ -425,6 +432,27 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     samples_per_pixel::Int32,
     rr_depth::Int32
 )
+    # ── Null-material skip (pbrt `Material "interface"` / nullptr) ──
+    # No BSDF; rays pass through with medium swap only and consume no path depth.
+    # Mirrors pbrt cpu/integrators.cpp:420,568,681 `if (!bsdf) SkipIntersection(...)`.
+    if !Raycore.is_valid(work.material_idx) && is_medium_transition(work.interface)
+        ray_d = -work.wo
+        new_medium = get_medium_index(work.interface, ray_d, work.n)
+        offset_dir = if dot(ray_d, work.n) > 0f0; work.n; else; -work.n; end
+        ray_origin = Point3f(work.pi + offset_dir * 1f-4)
+        new_ray = Raycore.Ray(o=ray_origin, d=ray_d, t_max=Inf32, time=0f0)
+        ray_item = VPRayWorkItem(
+            new_ray, work.depth,                    # depth NOT incremented
+            work.lambda, work.pixel_index,
+            work.beta, work.r_u, work.r_l,
+            work.prev_intr_p, work.prev_intr_n,
+            work.eta_scale,
+            work.specular_bounce, work.any_non_specular_bounces,
+            new_medium)
+        push!(next_ray_queue, ray_item)
+        return
+    end
+
     # Check depth limit
     new_depth = work.depth + Int32(1)
     if new_depth >= max_depth

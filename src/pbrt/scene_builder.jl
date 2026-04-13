@@ -542,8 +542,11 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
         return Mirror(Kr=refl)
 
     elseif type == "interface"
-        # Transparent boundary material for volumes — fully transmissive dielectric
-        return Dielectric(Kr=(0,0,0), Kt=(1,1,1), index=1f0)
+        # pbrt `Material "interface"` = nullptr surface: rays pass through, only
+        # the medium swap fires. Wrapping in a transmissive Dielectric was wrong —
+        # it makes shadow rays treat the boundary as opaque (intersection.jl:351)
+        # and paints the volume's bounding mesh as a uniformly-shadowed cuboid.
+        return NullMaterial()
 
     elseif type == "mix"
         haskey(entity.params, "materials") || error("mix material without 'materials' param")

@@ -14,6 +14,7 @@
 
 using Hikari, FileIO, Colors, ImageFiltering, Statistics
 import KernelAbstractions as KA
+using Lava
 
 const PBRT_DIR     = @__DIR__
 const SCENES_DIR   = joinpath(PBRT_DIR, "scenes")
@@ -66,25 +67,30 @@ end
 # Step 1: Render missing Hikari scenes
 # ============================================================================
 
+function render_all_missing(scene_files, backend, SPP, SCENES_DIR, REFS_DIR, RECORDED_DIR)
+    n_rendered = 0
+    for (i, fname) in enumerate(scene_files)
+        name = replace(fname, ".pbrt" => "")
+        rec_exr = joinpath(RECORDED_DIR, "$(name).exr")
+        isfile(rec_exr) && continue
+        ref_exr = joinpath(REFS_DIR, "$(name).exr")
+        isfile(ref_exr) || continue
+        try
+            fb = Array(Hikari.render_pbrt(joinpath(SCENES_DIR, fname); backend, samples=SPP))
+            FileIO.save(rec_exr, fb)
+            n_rendered += 1
+            println("  [$i/$(length(scene_files))] $name")
+        catch e
+            println("  [$i/$(length(scene_files))] SKIP $name: $(sprint(showerror, e; context=:limit=>120))")
+        end
+    end
+    return n_rendered
+end
+
 println("Step 1: Rendering Hikari scenes at $SPP spp...")
 scene_files = sort(filter(f -> endswith(f, ".pbrt"), readdir(SCENES_DIR)))
-backend = KA.CPU()
-n_rendered = 0
-for (i, fname) in enumerate(scene_files)
-    name = replace(fname, ".pbrt" => "")
-    rec_exr = joinpath(RECORDED_DIR, "$(name).exr")
-    isfile(rec_exr) && continue
-    ref_exr = joinpath(REFS_DIR, "$(name).exr")
-    isfile(ref_exr) || continue
-    try
-        fb = Array(Hikari.render_pbrt(joinpath(SCENES_DIR, fname); backend, samples=SPP))
-        FileIO.save(rec_exr, fb)
-        n_rendered += 1
-        println("  [$i/$(length(scene_files))] $name")
-    catch e
-        println("  [$i/$(length(scene_files))] SKIP $name: $(sprint(showerror, e; context=:limit=>120))")
-    end
-end
+backend = Lava.LavaBackend()
+n_rendered = render_all_missing(scene_files, backend, SPP, SCENES_DIR, REFS_DIR, RECORDED_DIR)
 n_rendered > 0 && println("  Rendered $n_rendered scenes")
 
 # ============================================================================

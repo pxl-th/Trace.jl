@@ -1,0 +1,48 @@
+# Null-interface boundary regression test.
+# A homogeneous scattering medium inside a cube bounded by a `Material "interface"`
+# mesh. pbrt treats the interface as a null (nullptr) surface — rays pass through
+# transparently, only the medium swap fires. If Hikari incorrectly wraps the
+# interface in a transmissive Dielectric (Kr=0, Kt=1, index=1) instead of a null
+# material, shadow rays are blocked at the cube surface and the bounding box
+# renders as a hard-edged shadowed cube (see intersection.jl:351).
+LookAt 1.8 -2.5 1.2   0 0 0   0 0 1
+Camera "perspective" "float fov" 40
+Film "rgb" "integer xresolution" 128 "integer yresolution" 128 "float maxcomponentvalue" 10
+Integrator "volpath" "integer maxdepth" 12 "bool regularize" true
+Sampler "sobol" "integer pixelsamples" 64
+
+WorldBegin
+
+MakeNamedMedium "fog"
+  "string type" "homogeneous"
+  "rgb sigma_a" [ 0.1 0.1 0.4 ]
+  "rgb sigma_s" [ 0.0 0.2 6.0 ]
+  "float g" 0.0
+
+LightSource "point" "rgb I" [ 150 150 150 ] "point3 from" [ 3 -2 4 ]
+LightSource "infinite" "rgb L" [ 0.25 0.3 0.4 ]
+
+# Ground plane
+AttributeBegin
+Material "diffuse" "rgb reflectance" [ 0.5 0.5 0.5 ]
+Shape "trianglemesh"
+  "integer indices" [ 0 1 2  0 2 3 ]
+  "point3 P" [ -5 -5 -1  5 -5 -1  5 5 -1  -5 5 -1 ]
+  "normal N" [ 0 0 1  0 0 1  0 0 1  0 0 1 ]
+AttributeEnd
+
+# Fog volume — cube with null-interface boundary
+AttributeBegin
+Material "interface"
+MediumInterface "fog" ""
+Shape "trianglemesh"
+  "point3 P" [ -1 -1 -1  1 -1 -1  1 1 -1  -1 1 -1  -1 -1 1  1 -1 1  1 1 1  -1 1 1 ]
+  "integer indices" [
+    0 1 2  0 2 3
+    4 6 5  4 7 6
+    0 5 1  0 4 5
+    2 7 3  2 6 7
+    0 3 7  0 7 4
+    1 6 2  1 5 6
+  ]
+AttributeEnd
