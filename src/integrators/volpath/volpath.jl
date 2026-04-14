@@ -46,14 +46,22 @@ mutable struct VolPath <: Integrator
     # Cached render state
     state::Union{Nothing, VolPathState}
 
-    # Cached adapted scene (avoids re-uploading BVH every sample)
-    _adapted_scene_cache::Any  # (scene_id, adapted) or nothing
+    # Adapted-scene cache: saves ~30 MiB / sample vs re-adapting the scene.
+    # `adapted_scene_id == 0` (== objectid of nothing) means "invalid".
+    # Both Hikari and the caller (e.g. RayMakie) go through
+    # `get_or_adapt_scene!(vp, backend, scene)` — do not reach for the
+    # fields directly.
+    adapted_scene::Any              # nothing when invalid
+    adapted_scene_id::UInt64        # 0 when invalid
 
-    # Cached initial medium detection (avoids per-sample GPU alloc + flush)
-    _initial_medium_cache::Any  # (camera_pos, SetKey) or nothing
+    # Cached initial medium detection (avoids per-sample GPU alloc + flush).
+    # `initial_medium_camera_pos === nothing` means invalid.
+    initial_medium_camera_pos::Any  # Point3f or nothing
+    initial_medium_key::Any         # SetKey or nothing
 
-    # Cached GPU-adapted filter sampler data (avoids re-uploading every sample)
-    _filter_sampler_gpu::Any  # adapted GPUFilterSamplerData or nothing
+    # Cached GPU-adapted filter sampler data (avoids re-uploading every sample).
+    # nothing = not yet adapted.
+    filter_sampler_gpu::Any
 end
 
 """
@@ -112,10 +120,12 @@ function VolPath(;
         accumulation_eltype,
         hw_accel,
         sensor,
-        nothing,  # state
-        nothing,  # _adapted_scene_cache
-        nothing,  # _initial_medium_cache
-        nothing   # _filter_sampler_gpu
+        nothing,           # state
+        nothing,           # adapted_scene
+        UInt64(0),         # adapted_scene_id (0 = invalid)
+        nothing,           # initial_medium_camera_pos
+        nothing,           # initial_medium_key
+        nothing,           # filter_sampler_gpu
     )
     # No GC finalizer — the VolPathState is shared with scene_state.integrator_state,
     # so proactive free! from a finalizer would free arrays still in use by the render loop.
@@ -129,14 +139,36 @@ end
 Release all GPU memory held by the integrator's cached render state and adapted scene.
 """
 function Base.close(vp::VolPath)
-    vp._filter_sampler_gpu = nothing
+    vp.filter_sampler_gpu = nothing
     if vp.state !== nothing
         free!(vp.state)
         vp.state = nothing
     end
-    vp._adapted_scene_cache = nothing
-    vp._initial_medium_cache = nothing
+    vp.adapted_scene = nothing
+    vp.adapted_scene_id = UInt64(0)
+    vp.initial_medium_camera_pos = nothing
+    vp.initial_medium_key = nothing
     return nothing
+end
+
+"""
+    get_or_adapt_scene!(vp::VolPath, backend, scene) -> adapted
+
+Return the GPU-adapted view of `scene` for this integrator.  If `scene`
+hasn't changed since the last adapt, returns the cached result; otherwise
+re-adapts and updates the cache.  This is the canonical way to obtain the
+adapted scene — neither the integrator nor external callers should reach
+for `vp.adapted_scene` directly.
+"""
+function get_or_adapt_scene!(vp::VolPath, backend, scene::AbstractScene)
+    id = objectid(scene)
+    if vp.adapted_scene_id === id && vp.adapted_scene !== nothing
+        return vp.adapted_scene
+    end
+    adapted = adapt_scene_for_render(backend, scene, vp)
+    vp.adapted_scene = adapted
+    vp.adapted_scene_id = id
+    return adapted
 end
 
 # Dispatch wrappers: pass `vp` so external packages (e.g. hikari_integration.jl)
@@ -501,16 +533,9 @@ function render!(
     height, width = size(img)
     backend = KA.get_backend(img)
 
-    # Adapt scene for kernel dispatch (TLAS → StaticTLAS, MultiTypeSet → StaticMultiTypeSet)
-    # Cache the adapted scene to avoid re-uploading BVH every sample (~30 MiB per adapt)
-    scene_id = objectid(scene)
-    cached = vp._adapted_scene_cache
-    if cached !== nothing && cached[1] === scene_id
-        adapted = cached[2]
-    else
-        adapted = adapt_scene_for_render(backend, scene, vp)
-        vp._adapted_scene_cache = (scene_id, adapted)
-    end
+    # Adapt scene for kernel dispatch (TLAS → StaticTLAS, MultiTypeSet → StaticMultiTypeSet).
+    # Cached — avoids re-uploading BVH on every sample (~30 MiB per adapt).
+    adapted = get_or_adapt_scene!(vp, backend, scene)
     accel = adapted.accel
     materials = adapted.materials
     media = adapted.media
@@ -560,12 +585,12 @@ function render!(
     # Detect which medium the camera is inside (vacuum if outside all media)
     # Cached: camera position doesn't change between samples, so detect once per render
     camera_pos = get_camera_position(camera)
-    cached_medium = vp._initial_medium_cache
-    if cached_medium !== nothing && cached_medium[1] === camera_pos
-        initial_medium = cached_medium[2]
+    if vp.initial_medium_camera_pos === camera_pos && vp.initial_medium_key !== nothing
+        initial_medium = vp.initial_medium_key
     else
         initial_medium = detect_initial_medium(backend, accel, media_interfaces, camera_pos, vp)
-        vp._initial_medium_cache = (camera_pos, initial_medium)
+        vp.initial_medium_camera_pos = camera_pos
+        vp.initial_medium_key = initial_medium
     end
 
     # Clear spectral buffer (pixel_L) for this sample iteration
@@ -577,10 +602,10 @@ function render!(
 
     # Generate camera rays with filter sampling (pbrt-v4 style) and ZSobol sampler
     # Adapt filter sampler data to GPU — cache on struct to avoid re-uploading every sample
-    if vp._filter_sampler_gpu === nothing
-        vp._filter_sampler_gpu = Adapt.adapt(backend, vp.filter_sampler_data)
+    if vp.filter_sampler_gpu === nothing
+        vp.filter_sampler_gpu = Adapt.adapt(backend, vp.filter_sampler_data)
     end
-    filter_sampler_data_gpu = vp._filter_sampler_gpu
+    filter_sampler_data_gpu = vp.filter_sampler_gpu
 
     kernel! = vp_generate_camera_rays_kernel!(backend)
     kernel!(

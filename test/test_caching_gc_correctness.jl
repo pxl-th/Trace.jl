@@ -65,9 +65,11 @@ end
             close(vp)
 
             @test vp.state === nothing
-            @test vp._adapted_scene_cache === nothing
-            @test vp._initial_medium_cache === nothing
-            @test vp._filter_sampler_gpu === nothing
+            @test vp.adapted_scene === nothing
+            @test vp.adapted_scene_id === UInt64(0)
+            @test vp.initial_medium_camera_pos === nothing
+            @test vp.initial_medium_key === nothing
+            @test vp.filter_sampler_gpu === nothing
         end
 
         @testset "close() is idempotent" begin
@@ -201,10 +203,12 @@ end
             camera, film = _make_test_camera_film()
             Hikari.clear!(film)
 
-            @test vp._adapted_scene_cache === nothing
+            @test vp.adapted_scene === nothing
+            @test vp.adapted_scene_id === UInt64(0)
 
             vp(scene, film, camera)
-            @test vp._adapted_scene_cache !== nothing
+            @test vp.adapted_scene !== nothing
+            @test vp.adapted_scene_id === objectid(scene)
 
             close(vp)
         end
@@ -217,12 +221,12 @@ end
 
             # First render — populates cache
             vp(scene, film, camera)
-            cached_1 = vp._adapted_scene_cache
+            cached_1 = vp.adapted_scene
 
             # Second render — should reuse cache (same scene)
             Hikari.clear!(film)
             vp(scene, film, camera)
-            cached_2 = vp._adapted_scene_cache
+            cached_2 = vp.adapted_scene
 
             # Same cache object (objectid of scene hasn't changed)
             @test cached_1 === cached_2
@@ -238,7 +242,7 @@ end
             vp = Hikari.VolPath(samples=1, max_depth=2,
                                 filter=Hikari.LanczosSincFilter(Point2f(1.0f0), 3.0f0))
 
-            @test vp._filter_sampler_gpu === nothing
+            @test vp.filter_sampler_gpu === nothing
 
             scene = _make_test_scene()
             camera, film = _make_test_camera_film()
@@ -247,7 +251,7 @@ end
 
             # After render, should be cached
             # Filter sampler data should be cached from film after render
-            @test vp._filter_sampler_gpu !== nothing
+            @test vp.filter_sampler_gpu !== nothing
 
             close(vp)
         end
