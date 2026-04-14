@@ -1,6 +1,28 @@
 # Ray tracing and intersection handling for VolPath
 # Handles ray-scene intersection and classifies results into work queues
 
+"""
+    resolve_mi_idx(accel, inst_idx, primitive) -> UInt32
+
+Pick the medium_interface_idx for a hit.  `inst_idx` is the 1-based
+instance-array position returned by `Raycore.closest_hit`; if the
+corresponding `InstanceDescriptor.instance_id` is nonzero, use it as an
+interface override (see `Raycore.InstanceDescriptor`).  Otherwise fall
+back to the triangle's per-face metadata.
+
+This is the single place where instance-level interface override
+resolves for software traversal.
+"""
+@inline function resolve_mi_idx(accel, inst_idx::UInt32, primitive)
+    if inst_idx != UInt32(0)
+        @inbounds override = accel.instances[inst_idx].instance_id
+        if override != UInt32(0)
+            return override
+        end
+    end
+    return primitive.metadata.medium_interface_idx
+end
+
 # ============================================================================
 # Geometry Helpers (shared with PhysicalWavefront)
 # ============================================================================
@@ -197,10 +219,10 @@ end
     # Check if ray is currently traveling through a medium
     if has_medium(work.medium_idx)
         # Medium case: trace once, push to medium_sample_queue (alpha not handled here yet)
-        hit, primitive, t_hit, barycentric = Raycore.closest_hit(accel, work.ray)
+        hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, work.ray)
 
         if hit
-            mi_idx = primitive.metadata.medium_interface_idx
+            mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
             mi = media_interfaces[mi_idx]
             mat_idx = mi.material
 
@@ -222,14 +244,14 @@ end
         # Following pbrt-v4: alpha-killed surfaces are skipped without consuming depth
         ray = work.ray
         for _ in 1:Int32(16)
-            hit, primitive, t_hit, barycentric = Raycore.closest_hit(accel, ray)
+            hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, ray)
 
             if !hit
                 push!(escaped_queue, VPEscapedRayWorkItem(work))
                 return
             end
 
-            mi_idx = primitive.metadata.medium_interface_idx
+            mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
             mi = media_interfaces[mi_idx]
             mat_idx = mi.material
 
@@ -322,7 +344,7 @@ while opaque surfaces block it. The final contribution is computed as:
         end
 
         ray = Raycore.Ray(o=ray_o, d=dir, t_max=t_remaining)
-        hit, primitive, t_hit, barycentric = Raycore.closest_hit(accel, ray)
+        hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, ray)
 
         if !hit
             # No more surfaces - compute transmittance for remaining distance
@@ -338,8 +360,8 @@ while opaque surfaces block it. The final contribution is computed as:
             return (T_ray, r_u, r_l, true)  # Visible
         end
 
-        # Hit a surface - look up MediumInterfaceIdx
-        mi_idx = primitive.metadata.medium_interface_idx
+        # Hit a surface - look up MediumInterfaceIdx (per-instance override takes priority)
+        mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
         mi = media_interfaces[mi_idx]
         n = vp_compute_geometric_normal(primitive)
         entering = dot(dir, n) < 0f0
@@ -729,13 +751,13 @@ which medium the camera is inside. Writes a SetKey to result[1].
 
     for _ in 1:Int32(16)
         if !found
-            hit, primitive, t_hit, barycentric = Raycore.closest_hit(accel, ray)
+            hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, ray)
 
             if !hit
                 result[1] = SetKey()
                 found = true
             else
-                mi_idx = primitive.metadata.medium_interface_idx
+                mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
                 mi = media_interfaces[mi_idx]
 
                 if is_medium_transition(mi)

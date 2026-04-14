@@ -402,7 +402,7 @@ end
 # The primitive (triangle) contains material_type and material_idx for dispatch
 # Note: Only StaticTLAS is used in kernels (adapt converts TLAS → StaticTLAS)
 @propagate_inbounds function intersect!(accel::Raycore.StaticTLAS, ray::AbstractRay)
-    hit_found, triangle, distance, bary_coords, instance_id = closest_hit(accel, ray)
+    hit_found, triangle, distance, bary_coords, inst_idx = closest_hit(accel, ray)
 
     if !hit_found
         return false, triangle, SurfaceInteraction()
@@ -411,12 +411,10 @@ end
     # Convert to SurfaceInteraction (in local/BLAS space)
     interaction = triangle_to_surface_interaction(triangle, ray, bary_coords)
 
-    # Transform surface interaction to world space using instance transform
-    # instance_id is 1-based array index into accel.instances (set during TLAS construction)
-    # Use it directly instead of searching - this ensures we get the current transform
-    # even after updates via update_transform!
-    if instance_id >= 1 && instance_id <= length(accel.instances)
-        inst = accel.instances[instance_id]
+    # Transform surface interaction to world space using the instance's transform.
+    # `inst_idx` is the 1-based position in `accel.instances` returned by closest_hit.
+    if inst_idx >= 1 && inst_idx <= length(accel.instances)
+        inst = accel.instances[inst_idx]
         transform = inst.transform
         inv_transform = inst.inv_transform
 
@@ -459,7 +457,7 @@ end
             world_dpdu, world_dpdv, interaction.∂n∂u, interaction.∂n∂v,
             interaction.∂u∂x, interaction.∂u∂y, interaction.∂v∂x, interaction.∂v∂y,
             interaction.∂p∂x, interaction.∂p∂y,
-            interaction.face_idx, interaction.bary, UInt32(instance_id)
+            interaction.face_idx, interaction.bary, UInt32(inst_idx)
         )
     end
 
