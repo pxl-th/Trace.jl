@@ -7,7 +7,7 @@
 import Raycore: HWTLAS, HWAdaptedAccel, RTRay, RTHitResult,
                 trace_closest_hits!, trace_closest_hits_indirect!,
                 batch_trace_indirect, set_custom_anyhit!,
-                rt_primitive_id, rt_instance_custom_index, rt_launch_id_x,
+                rt_primitive_id, rt_instance_custom_index, rt_instance_id, rt_launch_id_x,
                 rt_ignore_intersection, rt_payload_store!, rt_payload_load, rt_trace_ray!
 
 # Any backend with hw_accel=true creates an HWTLAS
@@ -237,13 +237,17 @@ end
                         st.ray_o, st.dir, st.t_remaining, st.medium_idx,
                         T_new, r_u_new, r_l_new, UInt32(0), UInt32(1))
                 else
-                    tri_idx = Int(off_gpu[result.instance_custom_index + UInt32(1)]) + Int(result.primitive_id) + 1
+                    # off_gpu is per-instance (keyed by gl_InstanceID = result.instance_id).
+                    tri_idx = Int(off_gpu[result.instance_id + UInt32(1)]) + Int(result.primitive_id) + 1
                     tri = tri_gpu[tri_idx]
                     t_hit = result.t
                     w_bary = 1f0 - result.bary_u - result.bary_v
                     bary = SVector{3,Float32}(w_bary, result.bary_u, result.bary_v)
 
-                    mi_idx = tri.metadata.medium_interface_idx
+                    # instance_custom_index = interface override (0 = inherit from triangle).
+                    mi_idx = result.instance_custom_index != UInt32(0) ?
+                             result.instance_custom_index :
+                             tri.metadata.medium_interface_idx
                     mi = media_interfaces[mi_idx]
                     ng = vp_compute_geometric_normal(tri)
                     entering = dot(Vec3f(st.dir), ng) < 0f0
@@ -408,20 +412,24 @@ function hw_raygen_shadow(accel, rays, results, tri_gpu, off_gpu, media_interfac
     ci  = rt_payload_load(accel, UInt32(3))
     bu  = rt_payload_load(accel, UInt32(4))
     bv  = rt_payload_load(accel, UInt32(5))
+    iid = rt_payload_load(accel, UInt32(6))
 
     results[lid + 1] = RTHitResult(
         reinterpret(UInt32, hit), t,
         reinterpret(UInt32, pid), reinterpret(UInt32, ci),
-        bu, bv, UInt32(0), UInt32(0))
+        bu, bv,
+        reinterpret(UInt32, iid),   # gl_InstanceID (0-based)
+        UInt32(0))
     return nothing
 end
 
 function hw_anyhit_shadow(accel, tri_gpu, off_gpu, media_interfaces)
-    prim_id = rt_primitive_id(accel)
-    inst_idx = rt_instance_custom_index(accel)
-    tri_offset = off_gpu[inst_idx + UInt32(1)]
+    prim_id  = rt_primitive_id(accel)
+    override = rt_instance_custom_index(accel)   # interface override
+    iid      = rt_instance_id(accel)             # 0-based instance index → triangle lookup
+    tri_offset = off_gpu[iid + UInt32(1)]
     tri = tri_gpu[Int(tri_offset) + Int(prim_id) + 1]
-    mi_idx = tri.metadata.medium_interface_idx
+    mi_idx = override != UInt32(0) ? override : tri.metadata.medium_interface_idx
     mi = media_interfaces[Int(mi_idx)]
     if mi.inside.type_idx != mi.outside.type_idx || mi.inside.vec_idx != mi.outside.vec_idx
         rt_ignore_intersection(accel)

@@ -2,18 +2,23 @@
 # Handles ray-scene intersection and classifies results into work queues
 
 """
-    resolve_mi_idx(accel, inst_idx, primitive) -> UInt32
+    resolve_mi_idx(accel, inst_slot, primitive) -> UInt32
 
-Pick the medium_interface_idx for a hit.  `inst_idx` is the 1-based
-instance-array position returned by `Raycore.closest_hit`; if the
-corresponding `InstanceDescriptor.instance_id` is nonzero, use it as an
-interface override (see `Raycore.InstanceDescriptor`).  Otherwise fall
-back to the triangle's per-face metadata.
+Pick the medium_interface_idx for a hit.  `inst_slot` is the 5th value
+returned by `Raycore.closest_hit` / `Raycore.any_hit`; its meaning
+depends on the accelerator type:
 
-This is the single place where instance-level interface override
-resolves for software traversal.
+- `StaticTLAS` (software traversal): 1-based instance array index.  The
+  override is `accel.instances[inst_slot].instance_id`.
+- Hardware-adapted accelerators (e.g. `PrecomputedHitsAccel`): the
+  override value itself, forwarded straight from
+  `gl_InstanceCustomIndexEXT`.
+
+Either way, a nonzero override replaces the triangle's per-face
+`medium_interface_idx`; zero means "inherit".  This is the single place
+where the per-instance interface override resolves.
 """
-@inline function resolve_mi_idx(accel, inst_idx::UInt32, primitive)
+@inline function resolve_mi_idx(accel::Raycore.StaticTLAS, inst_idx::UInt32, primitive)
     if inst_idx != UInt32(0)
         @inbounds override = accel.instances[inst_idx].instance_id
         if override != UInt32(0)
@@ -21,6 +26,13 @@ resolves for software traversal.
         end
     end
     return primitive.metadata.medium_interface_idx
+end
+
+# Hardware-adapted accelerators: the 5th closest_hit return is already the
+# resolved override (carried through `gl_InstanceCustomIndexEXT`), so no
+# `.instances` lookup is needed.
+@inline function resolve_mi_idx(::Any, override::UInt32, primitive)
+    override != UInt32(0) ? override : primitive.metadata.medium_interface_idx
 end
 
 # ============================================================================
