@@ -24,6 +24,57 @@ function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, material::Material;
     return SceneHandle(scene, mat_idx, handle)
 end
 
+"""
+    push!(scene::Scene, mesh::GeometryBasics.Mesh,
+          materials::AbstractVector{<:Material},
+          transforms::AbstractVector{Mat4f}) -> Vector{SceneHandle}
+
+N-instance push: build **one** BLAS from `mesh` and append N
+`InstanceDescriptor`s — one per (material, transform) pair.  Each
+instance's `instance_id` carries its own `medium_interface_idx`, so the
+hit shader resolves material per-instance via `resolve_mi_idx`.
+
+This is the path `meshscatter` should use.  It avoids the "N BLASes with
+identical geometry" explosion of calling the single-transform push!
+per instance (~1 GB / frame memory growth in the dolphin demo).
+
+`materials` and `transforms` must have equal length.  Emissive materials
+are not yet supported here — an emitter would need per-instance area
+lights and per-instance-transformed geometry, which is a different
+feature.  Use the per-mesh `push!` for emitters.
+"""
+function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh,
+                    materials::AbstractVector{<:Material},
+                    transforms::AbstractVector{Mat4f})
+    length(materials) == length(transforms) ||
+        throw(ArgumentError("materials ($(length(materials))) and transforms ($(length(transforms))) must have same length"))
+
+    for m in materials
+        if get_emission_info(m) !== nothing
+            throw(ArgumentError("per-instance emissive materials are not supported; use the single-transform push! for each emitter"))
+        end
+    end
+
+    # Register each material as its own MediumInterface → distinct mi_idx.
+    # These become the per-instance `instance_id` overrides.
+    mi_indices = map(materials) do m
+        push!(scene, MediumInterface(m))    # returns UInt32 mi_idx
+    end
+
+    # Bake a neutral per-face metadata: `medium_interface_idx = 0` marks
+    # "inherit from instance override".  `arealight_flat_idx = 0` —
+    # no per-face area lights (we already rejected emissive materials).
+    gb_faces = GeometryBasics.faces(mesh)
+    n_faces = length(gb_faces)
+    face_meta = [TriangleMeta(UInt32(0), UInt32(i), UInt32(0)) for i in 1:n_faces]
+    mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
+
+    accel_handle = push!(scene.accel, mesh_with_meta, collect(transforms);
+                         instance_ids=mi_indices)
+    # One SceneHandle per instance, all sharing the same accel handle.
+    return [SceneHandle(scene, mi_indices[i], accel_handle) for i in eachindex(mi_indices)]
+end
+
 # Per-face materials (for MetaMesh with multiple materials)
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, materials::AbstractVector{<:Material};
                     transform::Mat4f=Mat4f(I))
