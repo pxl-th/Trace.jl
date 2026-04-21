@@ -185,7 +185,12 @@ end
 """
     free!(film::Film)
 
-Release GPU memory held by the film.
+Release GPU memory held by the film.  Does **not** synchronize.
+
+**Precondition (caller's responsibility):** the GPU must be idle before
+this is called.  The simplest way is to call this only after a
+`colorbuffer` has completed (it issues `device_wait_idle`) or after
+`sync!(scene)`.  Calling while a render is in flight is a use-after-free.
 """
 function free!(film::Film)
     finalize(film.filter_table)

@@ -149,16 +149,9 @@ end
 # =============================================================================
 
 # 5x5 B-spline wavelet kernel weights: h = [1/16, 1/4, 3/8, 1/4, 1/16].
-# Returned as a select chain rather than a const SVector so Julia/LLVM does
-# NOT hoist the values into a module-level addrspace(1) constant global
-# (which the Lava SPIR-V emitter mishandles for runtime-indexed Private
-# constants). A select chain compiles to cmp+select ops with no global lookup.
 @inline function atrous_kernel_1d(i::Int32)
-    i == Int32(1) ? 0.0625f0 :
-    i == Int32(2) ? 0.25f0   :
-    i == Int32(3) ? 0.375f0  :
-    i == Int32(4) ? 0.25f0   :
-                    0.0625f0
+    kern = SVector{5,Float32}(0.0625f0, 0.25f0, 0.375f0, 0.25f0, 0.0625f0)
+    return kern[i]
 end
 
 """

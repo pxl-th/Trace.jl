@@ -25,6 +25,26 @@ function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, material::Material;
 end
 
 """
+    push!(scene::Scene, mesh::GeometryBasics.Mesh, mat_idx::UInt32, material::Material;
+          transform=Mat4f(I))
+
+Push geometry pointing at a **pre-existing** medium-interface slot.  Callers
+are responsible for having already brought the slot's stored material up to
+date via [`update_material!`](@ref) — this overload only builds the face
+metadata / BLAS and registers the instance.  RayMakie's mesh-rebuild path
+uses this to recycle a single material slot across many geometry rebuilds
+instead of growing `scene.materials` and `scene.media_interfaces` on every
+frame.
+"""
+function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, mat_idx::UInt32,
+                    material::Material; transform::Mat4f=Mat4f(I))
+    face_meta = build_face_meta(scene, mesh, mat_idx, material)
+    mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
+    handle = push!(scene.accel, mesh_with_meta, transform)
+    return SceneHandle(scene, mat_idx, handle)
+end
+
+"""
     push!(scene::Scene, mesh::GeometryBasics.Mesh,
           materials::AbstractVector{<:Material},
           transforms::AbstractVector{Mat4f}) -> Vector{SceneHandle}
@@ -45,7 +65,8 @@ feature.  Use the per-mesh `push!` for emitters.
 """
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh,
                     materials::AbstractVector{<:Material},
-                    transforms::AbstractVector{Mat4f})
+                    transforms::AbstractVector{Mat4f};
+                    reuse_mi_indices::Union{Nothing, AbstractVector{UInt32}}=nothing)
     length(materials) == length(transforms) ||
         throw(ArgumentError("materials ($(length(materials))) and transforms ($(length(transforms))) must have same length"))
 
@@ -55,10 +76,31 @@ function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh,
         end
     end
 
-    # Register each material as its own MediumInterface → distinct mi_idx.
-    # These become the per-instance `instance_id` overrides.
-    mi_indices = map(materials) do m
-        push!(scene, MediumInterface(m))    # returns UInt32 mi_idx
+    # Resolve one `mi_idx` per instance.  If the caller hands us
+    # `reuse_mi_indices` (the indices returned by a prior push for the same
+    # meshscatter/streamplot), update those slots in place via
+    # `update_material!` — no growth of scene.materials at all.  Any excess
+    # (`length(materials) > length(reuse_mi_indices)`) is pushed as new
+    # MediumInterfaces, so the materials vector grows only up to the high
+    # water mark of instance count.
+    n = length(materials)
+    if reuse_mi_indices === nothing
+        # Push all materials; MultiTypeSet's dirty flag absorbs the batch and
+        # the next `get_static` read triggers a single rebuild.
+        mi_indices = Vector{UInt32}(undef, n)
+        for i in 1:n
+            mi_indices[i] = push!(scene, MediumInterface(materials[i]))
+        end
+    else
+        n_reuse = min(n, length(reuse_mi_indices))
+        mi_indices = Vector{UInt32}(undef, n)
+        for i in 1:n_reuse
+            mi_indices[i] = reuse_mi_indices[i]
+            Hikari.update_material!(scene, mi_indices[i], materials[i])
+        end
+        for i in (n_reuse+1):n
+            mi_indices[i] = push!(scene, MediumInterface(materials[i]))
+        end
     end
 
     # Bake a neutral per-face metadata: `medium_interface_idx = 0` marks
@@ -78,8 +120,10 @@ end
 # Per-face materials (for MetaMesh with multiple materials)
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, materials::AbstractVector{<:Material};
                     transform::Mat4f=Mat4f(I))
-    # Deduplicate materials via cache (push! already deduplicates at scene level)
-    mat_cache = Dict{UInt64, UInt32}()  # objectid → scene index
+    # Deduplicate materials via cache (push! already deduplicates at scene level).
+    # Each push! just marks its MultiTypeSet dirty; the next `get_static` read
+    # collapses the whole batch into one rebuild.
+    mat_cache = Dict{UInt64, UInt32}()
     mat_indices = map(materials) do m
         get!(mat_cache, objectid(m)) do
             push!(scene, m)
@@ -185,11 +229,10 @@ function register_face_area_lights!(scene, mesh, face_meta, mat_idx::UInt32, emi
         normal = Raycore.Normal3f(cross_product / twice_area)
         tri_area = 0.5f0 * twice_area
         light = DiffuseAreaLight(vs, normal, tri_area, face_uv, Le, emission.scale, emission.two_sided)
-        push!(scene.lights, light; rebuild=false)
+        push!(scene.lights, light)
         face_meta[i] = TriangleMeta(mat_idx, UInt32(i), UInt32(length(scene.lights)))
     end
 
-    Raycore.rebuild_static!(scene.lights)
 end
 
 # Per-face materials (different materials per face, some may be emissive)
@@ -231,9 +274,8 @@ function register_face_area_lights!(scene, mesh, face_meta,
         normal = Raycore.Normal3f(cross_product / twice_area)
         tri_area = 0.5f0 * twice_area
         light = DiffuseAreaLight(vs, normal, tri_area, face_uv, Le, emission.scale, emission.two_sided)
-        push!(scene.lights, light; rebuild=false)
+        push!(scene.lights, light)
         face_meta[i] = TriangleMeta(mat_indices[i], UInt32(i), UInt32(length(scene.lights)))
     end
 
-    Raycore.rebuild_static!(scene.lights)
 end

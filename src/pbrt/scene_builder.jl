@@ -28,15 +28,17 @@ img = VolPath(samples=64)(r.scene, r.film, r.camera)
 function load_pbrt(filename::AbstractString;
                    backend=KA.CPU(),
                    samples::Union{Nothing, Int}=nothing,
-                   max_depth::Union{Nothing, Int}=nothing)
+                   max_depth::Union{Nothing, Int}=nothing,
+                   hw_accel::Bool=false)
     pbrt = parse_pbrt(filename)
-    build_hikari_scene(pbrt; backend=backend, samples=samples, max_depth=max_depth)
+    build_hikari_scene(pbrt; backend=backend, samples=samples, max_depth=max_depth, hw_accel=hw_accel)
 end
 
 function build_hikari_scene(pbrt::PBRTScene;
                             backend=KA.CPU(),
                             samples::Union{Nothing, Int}=nothing,
-                            max_depth::Union{Nothing, Int}=nothing)
+                            max_depth::Union{Nothing, Int}=nothing,
+                            hw_accel::Bool=false)
     # --- Film ---
     xres = 512
     yres = 512
@@ -139,7 +141,7 @@ function build_hikari_scene(pbrt::PBRTScene;
     end
 
     # --- Build scene ---
-    scene = Scene(; backend=backend)
+    scene = Scene(; backend=backend, hw_accel=hw_accel)
 
     # Add standalone lights
     for lrec in pbrt.lights

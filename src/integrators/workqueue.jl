@@ -88,6 +88,8 @@ end
     free!(queue::WorkQueue)
 
 Release GPU memory held by the work queue's items and size arrays.
+Does **not** synchronize — caller must ensure the GPU is idle (see the
+sync!/free! contract in Raycore and Hikari).
 """
 function free!(queue::WorkQueue)
     finalize(queue.items)

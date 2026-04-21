@@ -80,15 +80,14 @@ function Base.push!(scene::Scene, light::Light)
 end
 
 function Base.push!(scene::Scene, material::Material)
-    interface = MediumInterface(material)
-    return push!(scene, interface)
+    return push!(scene, MediumInterface(material))
 end
 
 function Base.push!(scene::Scene, medium::Medium)
     push!(scene.media, medium)
 end
 
-Base.push!(scene::Scene, medium::Nothing) = SetKey()
+Base.push!(scene::Scene, ::Nothing) = SetKey()
 
 function Base.push!(scene::Scene, medium::MediumInterface)
     mat_idx = push!(scene.materials, medium.material)
@@ -103,6 +102,22 @@ function Base.push!(scene::Scene, medium::MediumInterface)
     return UInt32(idx)
 end
 
+"""
+    update_material!(scene, idx::UInt32, new_medium::Medium)
+    update_material!(scene, idx::UInt32, new_material::Material)
+
+Mutate an existing entry in `scene.media` / `scene.materials` in place.
+Does **not** synchronize with the GPU.
+
+Invariants:
+- CPU-side bookkeeping and MultiTypeSet slot contents are updated.
+- If a texture slot in the backing MultiTypeSet has to be reshaped,
+  `copyto_texture!` handles the retirement sync internally (see its
+  docstring) — callers don't need to pair this with anything.
+- If the update rendered any transitively-owned resource unreachable,
+  the caller is responsible for pairing the release with a `sync!` call:
+  this function does not force one.
+"""
 function update_material!(scene::Scene, idx::UInt32, new_medium::Medium)
     mi = @allowscalar scene.media_interfaces[idx]
     Raycore.update!(scene.media, mi.inside, new_medium)
@@ -140,11 +155,25 @@ end
 """
     sync!(scene::Scene)
 
-Build/rebuild the acceleration structure and update scene bounds.
-Call this after adding geometry with `push!`.
+Build/rebuild the acceleration structure, update scene bounds, and **wait
+for the GPU to finish** all work queued on the scene's backend (via
+`Raycore.sync!`).
+
+After `sync!(scene)` returns:
+- The acceleration structure reflects all prior `push!` / `delete!`.
+- Scene bounds are up to date on the CPU.
+- The GPU is idle for this scene's backend — it is safe to release
+  resources that are no longer reachable (old materials / media / AS
+  storage that a just-completed `update_material!` or `push!` rendered
+  unreachable).
+
+Invariants for callers (see the accel's `sync!` docstrings for detail):
+- `push!`, `delete!`, and `update_material!` do NOT synchronize; they
+  mutate CPU bookkeeping and mark state dirty. Pair any follow-up
+  release of transitively-owned resources with a `sync!` call.
 """
 function sync!(scene::Scene{<:TLAS})
-    sync!(scene.accel)
+    sync!(scene.accel)   # Raycore.sync! runs KA.synchronize at the end.
     bound = Raycore.world_bound(scene.accel)
     scene.bounds[] = (bound, bounding_sphere(bound))
     return scene

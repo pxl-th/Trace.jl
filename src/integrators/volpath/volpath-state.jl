@@ -105,7 +105,12 @@ end
 """
     free!(state::VolPathState)
 
-Release all GPU memory held by the VolPath render state (work queues, pixel buffers, tables).
+Release all GPU memory held by the VolPath render state (work queues,
+pixel buffers, tables).  Does **not** synchronize.
+
+**Precondition (caller's responsibility):** the GPU must be idle.  Same
+rule as `free!(::Film)` — pair this with the end of a `colorbuffer` / a
+`sync!(scene)`, or explicitly `KA.synchronize(backend)` before calling.
 """
 function free!(state::VolPathState)
     # Work queues (bulk of GPU memory — each holds items + size arrays)

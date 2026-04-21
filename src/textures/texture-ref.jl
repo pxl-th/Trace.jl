@@ -215,6 +215,40 @@ function Raycore.maybe_convert_field(dhv::Raycore.MultiTypeSet, vtex::VertexColo
 end
 
 # ============================================================================
+# update_item overloads — let `Raycore.update!` reuse existing texture slots
+# instead of pushing a new one on every update.  Without these the raw
+# `Texture` / `VertexColorTexture` values coming through `update_material!`
+# would hit the generic struct fallback, mis-match on field names vs the
+# stored (converted) form, and leak ~hundreds of MB of GPU memory per
+# rebuild in scenes with per-frame mesh updates.
+# ============================================================================
+
+# Const Texture over a scalar field: unwrap to the raw value.
+function Raycore.update_item(::Raycore.MultiTypeSet, old, new::Texture)
+    new.isconst && return new.constval
+    error("update_item: non-const Texture cannot overwrite a scalar field of type $(typeof(old)); rebuild the scene")
+end
+
+# Non-const Texture against a stored TextureRef: copy into the existing GPU
+# buffer (reallocating on size mismatch).
+function Raycore.update_item(dhv::Raycore.MultiTypeSet, old::Raycore.TextureRef,
+                              new::Texture)
+    new.isconst && error("update_item: replacing a sampled TextureRef with a const Texture is not supported; rebuild the scene")
+    Raycore.copyto_texture!(dhv, old, new.data)
+    return old
+end
+
+# VertexColorTexture update: reuse the existing ref, copy face_colors in.
+# `old.face_colors` is always a `TextureRef` once the item has been pushed,
+# `new.face_colors` is the raw CPU array the user supplied.
+function Raycore.update_item(dhv::Raycore.MultiTypeSet,
+                              old::VertexColorTexture{<:Raycore.TextureRef},
+                              new::VertexColorTexture{<:AbstractArray})
+    Raycore.copyto_texture!(dhv, old.face_colors, new.face_colors)
+    return old
+end
+
+# ============================================================================
 # SurfaceInteraction-based Texture Evaluation
 # ============================================================================
 

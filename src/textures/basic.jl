@@ -20,8 +20,13 @@ Base.zero(::Type{RGBSpectrum}) = RGBSpectrum(0.0f0, 0.0f0, 0.0f0, 1.0f0)
 #              rasterization center is just ABOVE the boundary (same checker cell as pbrt).
 # dim 2 (col): uv_adj[2] = u (non-inverted). Use floor+1 for the same reason.
 # Both formulas ensure pixel i covers [i-1, i) in the respective scaled coordinate.
+#
+# Out-of-[0,1] UVs wrap (pbrt ImageMap default is "repeat" — see pbrt-v4/src/pbrt/
+# textures.cpp::ImageTexture). `mod(x, 1)` handles negative u/v as well.
 @propagate_inbounds function sample_texture_data(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
-    uv_adj = Vec2f(1f0 - uv[2], uv[1])
+    u_wrapped = uv[1] - floor(uv[1])
+    v_wrapped = uv[2] - floor(uv[2])
+    uv_adj = Vec2f(1f0 - v_wrapped, u_wrapped)
     s = unsafe_trunc.(Int32, size(data))
     # dim 1 uses ceil (inverted direction), dim 2 uses floor+1 (non-inverted)
     row = clamp(unsafe_trunc(Int32, ceil(s[1] * uv_adj[1])), Int32(1), s[1])

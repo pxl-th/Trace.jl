@@ -141,7 +141,8 @@ Release all GPU memory held by the integrator's cached render state and adapted 
 function Base.close(vp::VolPath)
     vp.filter_sampler_gpu = nothing
     if vp.state !== nothing
-        free!(vp.state)
+        # TEMPORARY: skip eager free!(state); drop the reference and let
+        # Julia GC finalize each LavaArray through its DataRef.
         vp.state = nothing
     end
     vp.adapted_scene = nothing
