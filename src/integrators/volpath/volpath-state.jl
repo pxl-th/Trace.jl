@@ -97,9 +97,6 @@ mutable struct VolPathState{Backend}
     hw_shadow_states::Any        # ShadowIterState buffer
     hw_shadow_ray_buf::Any       # RTRay buffer for shadow rays
     hw_shadow_result_buf::Any    # RTHitResult buffer for shadow rays
-    hw_shadow_counter::Any       # Int32 active counter for shadow iteration
-    hw_depth_ray_buf::Any        # RTRay buffer for depth pass
-    hw_depth_result_buf::Any     # RTHitResult buffer for depth pass
 end
 
 """
@@ -246,7 +243,7 @@ function VolPathState(
         Int32(max_depth), Int32(rr_depth), Int32(width), Int32(height),
         sobol_rng,
         # HW RT buffers (lazily allocated)
-        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
+        nothing, nothing, nothing, nothing, nothing,
     )
 end
 

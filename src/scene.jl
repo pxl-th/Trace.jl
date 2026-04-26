@@ -128,6 +128,30 @@ function update_material!(scene::Scene, idx::UInt32, new_material::Material)
     Raycore.update!(scene.materials, mi.material, new_material)
 end
 
+# `MediumInterface` is itself a `<:Material`, so plots that use it (e.g. a
+# volume-bounding cube with `MediumInterface(NullMaterial(); inside=medium)`)
+# hit this overload instead of the generic `::Material` one.  Falling through
+# to the generic path is wrong: it would try to stuff a whole `MediumInterface`
+# into the inner-material slot of `scene.materials`, which is a type mismatch,
+# and with a `NullMaterial` inside the inner slot is `SetKey()` (unpushed)
+# which used to trip a `BoundsError`.  Instead, refresh the three component
+# slots independently — each guarded by `Raycore.is_valid` so invalid /
+# unpushed slots (NullMaterial, `inside=nothing`, `outside=nothing`) are
+# silent no-ops.
+function update_material!(scene::Scene, idx::UInt32,
+                          new_mi::MediumInterface)
+    mi = @allowscalar scene.media_interfaces[idx]
+    Raycore.is_valid(mi.material) &&
+        Raycore.update!(scene.materials, mi.material, new_mi.material)
+    if new_mi.inside !== nothing && Raycore.is_valid(mi.inside)
+        Raycore.update!(scene.media, mi.inside, new_mi.inside)
+    end
+    if new_mi.outside !== nothing && Raycore.is_valid(mi.outside)
+        Raycore.update!(scene.media, mi.outside, new_mi.outside)
+    end
+    return nothing
+end
+
 struct SceneHandle
     scene::Scene
     interface::UInt32 # Index into  scene.media_interfaces

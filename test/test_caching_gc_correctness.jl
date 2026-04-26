@@ -58,15 +58,12 @@ end
             vp(scene, film, camera)
 
             @test vp.state !== nothing
-            # After render, adapted_scene_cache and filter_sampler_gpu should be populated
-            # (filter_sampler_gpu may be nothing for Gaussian filter with default sampler)
+            # filter_sampler_gpu may be nothing for Gaussian filter with default sampler
 
             # Close should clear everything
             close(vp)
 
             @test vp.state === nothing
-            @test vp.adapted_scene === nothing
-            @test vp.adapted_scene_id === UInt64(0)
             @test vp.initial_medium_camera_pos === nothing
             @test vp.initial_medium_key === nothing
             @test vp.filter_sampler_gpu === nothing
@@ -195,47 +192,7 @@ end
         end
     end
 
-    # ── 4. Adapted scene caching ──
-    @testset "adapted scene cache" begin
-        @testset "cache populated after first render" begin
-            vp = Hikari.VolPath(samples=1, max_depth=2)
-            scene = _make_test_scene()
-            camera, film = _make_test_camera_film()
-            Hikari.clear!(film)
-
-            @test vp.adapted_scene === nothing
-            @test vp.adapted_scene_id === UInt64(0)
-
-            vp(scene, film, camera)
-            @test vp.adapted_scene !== nothing
-            @test vp.adapted_scene_id === objectid(scene)
-
-            close(vp)
-        end
-
-        @testset "cache reused on second render" begin
-            vp = Hikari.VolPath(samples=1, max_depth=2)
-            scene = _make_test_scene()
-            camera, film = _make_test_camera_film()
-            Hikari.clear!(film)
-
-            # First render — populates cache
-            vp(scene, film, camera)
-            cached_1 = vp.adapted_scene
-
-            # Second render — should reuse cache (same scene)
-            Hikari.clear!(film)
-            vp(scene, film, camera)
-            cached_2 = vp.adapted_scene
-
-            # Same cache object (objectid of scene hasn't changed)
-            @test cached_1 === cached_2
-
-            close(vp)
-        end
-    end
-
-    # ── 5. Filter sampler caching ──
+    # ── 4. Filter sampler caching ──
     @testset "filter sampler cache" begin
         @testset "filter sampler cached on struct" begin
             # LanczosSinc filter produces GPUFilterSamplerData that gets cached

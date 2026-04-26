@@ -12,16 +12,15 @@
 #
 # Exit code 1 if any scene fails energy (5%) or tile (<0.07) thresholds.
 
-using Hikari, FileIO, Colors, ImageFiltering, Statistics
-import KernelAbstractions as KA
-using Lava
+using FileIO, Colors
+using Hikari, Lava
 
-const PBRT_DIR     = @__DIR__
-const SCENES_DIR   = joinpath(PBRT_DIR, "scenes")
-const REFS_DIR     = joinpath(PBRT_DIR, "references")
-const RECORDED_DIR = joinpath(PBRT_DIR, "recorded")
-const DISPLAY_DIR  = joinpath(PBRT_DIR, "display")
+include(joinpath(@__DIR__, "suite.jl"))
+
+const RECORDED_DIR = joinpath(@__DIR__, "recorded")
+const DISPLAY_DIR  = joinpath(@__DIR__, "display")
 const SPP          = 256
+const HW_ACCEL     = get(ENV, "HIKARI_HW_ACCEL", "false") == "true"
 
 mkpath(RECORDED_DIR)
 mkpath(DISPLAY_DIR)
@@ -44,39 +43,21 @@ function tonemap_to_png(exr_path, png_path)
     FileIO.save(png_path, out)
 end
 
-function tile_score(ref_img, rec_img; tile_size=16, percentile=0.95)
-    size(ref_img) == size(rec_img) || return Inf
-    a = imfilter(ref_img, Kernel.gaussian((0.75, 0.75)))[1:2:end, 1:2:end]
-    b = imfilter(rec_img, Kernel.gaussian((0.75, 0.75)))[1:2:end, 1:2:end]
-    h, w = size(a)
-    rh = round.(Int, range(0, h, length=max(2, ceil(Int, h / tile_size))))
-    rw = round.(Int, range(0, w, length=max(2, ceil(Int, w / tile_size))))
-    bnd(r) = zip(r[1:end-1] .+ 1, r[2:end])
-    dist(p1, p2) = begin
-        r1 = log1p(max(0.0, Float64(red(p1)))); g1 = log1p(max(0.0, Float64(green(p1)))); b1 = log1p(max(0.0, Float64(blue(p1))))
-        r2 = log1p(max(0.0, Float64(red(p2)))); g2 = log1p(max(0.0, Float64(green(p2)))); b2 = log1p(max(0.0, Float64(blue(p2))))
-        sqrt((r1-r2)^2+(g1-g2)^2+(b1-b2)^2)
-    end
-    scores = [mean(dist.(a[r1:r2,c1:c2], b[r1:r2,c1:c2]))
-              for (r1,r2) in bnd(rh) for (c1,c2) in bnd(rw)]
-    sort!(scores)
-    return scores[clamp(ceil(Int, percentile * length(scores)), 1, length(scores))]
-end
-
 # ============================================================================
 # Step 1: Render missing Hikari scenes
 # ============================================================================
 
-function render_all_missing(scene_files, backend, SPP, SCENES_DIR, REFS_DIR, RECORDED_DIR)
+function render_all_missing(scene_files; backend, samples, hw_accel,
+                            scenes_dir, refs_dir, out_dir)
     n_rendered = 0
     for (i, fname) in enumerate(scene_files)
-        name = replace(fname, ".pbrt" => "")
-        rec_exr = joinpath(RECORDED_DIR, "$(name).exr")
+        name    = replace(fname, ".pbrt" => "")
+        rec_exr = joinpath(out_dir, "$(name).exr")
         isfile(rec_exr) && continue
-        ref_exr = joinpath(REFS_DIR, "$(name).exr")
+        ref_exr = joinpath(refs_dir, "$(name).exr")
         isfile(ref_exr) || continue
         try
-            fb = Array(Hikari.render_pbrt(joinpath(SCENES_DIR, fname); backend, samples=SPP))
+            fb = render_scene(name; backend, samples, hw_accel)
             FileIO.save(rec_exr, fb)
             n_rendered += 1
             println("  [$i/$(length(scene_files))] $name")
@@ -87,10 +68,12 @@ function render_all_missing(scene_files, backend, SPP, SCENES_DIR, REFS_DIR, REC
     return n_rendered
 end
 
-println("Step 1: Rendering Hikari scenes at $SPP spp...")
+println("Step 1: Rendering Hikari scenes at $SPP spp (hw_accel=$HW_ACCEL)...")
 scene_files = sort(filter(f -> endswith(f, ".pbrt"), readdir(SCENES_DIR)))
 backend = Lava.LavaBackend()
-n_rendered = render_all_missing(scene_files, backend, SPP, SCENES_DIR, REFS_DIR, RECORDED_DIR)
+n_rendered = render_all_missing(scene_files;
+    backend=backend, samples=SPP, hw_accel=HW_ACCEL,
+    scenes_dir=SCENES_DIR, refs_dir=REFS_DIR, out_dir=RECORDED_DIR)
 n_rendered > 0 && println("  Rendered $n_rendered scenes")
 
 # ============================================================================
@@ -117,11 +100,9 @@ for fname in scene_files
 
     ref_img = FileIO.load(ref_exr)
     rec_img = FileIO.load(rec_exr)
-    total_ref = sum(Float64(red(p)) + Float64(green(p)) + Float64(blue(p)) for p in ref_img)
-    total_rec = sum(Float64(red(p)) + Float64(green(p)) + Float64(blue(p)) for p in rec_img)
-    energy = total_rec / max(total_ref, 1e-10)
-    sc = tile_score(ref_img, rec_img)
-    push!(results, SceneResult(name, sc, energy))
+    push!(results, SceneResult(name,
+        tile_score(ref_img, rec_img),
+        energy_ratio(ref_img, rec_img)))
 end
 
 sort!(results; by=s -> (-abs(s.energy - 1.0), -s.tile))

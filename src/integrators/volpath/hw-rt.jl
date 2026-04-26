@@ -4,14 +4,22 @@
 # Uses only Raycore types and stubs -- no backend (Lava/Metal) imports.
 # Backend extensions in Raycore implement the actual dispatch.
 
-import Raycore: HWTLAS, HWAdaptedAccel, RTRay, RTHitResult,
-                trace_closest_hits!, trace_closest_hits_indirect!,
-                batch_trace_indirect, set_custom_anyhit!,
-                rt_primitive_id, rt_instance_custom_index, rt_instance_id, rt_launch_id_x,
-                rt_ignore_intersection, rt_payload_store!, rt_payload_load, rt_trace_ray!
+import Raycore: RTRay, RTHitResult
+import Lava: HWTLAS, HWAdaptedAccel,
+             trace_closest_hits!, trace_closest_hits_indirect!,
+             batch_trace_indirect, set_custom_anyhit!,
+             lava_rt_launch_id_x,
+             lava_rt_primitive_id, lava_rt_instance_custom_index, lava_rt_instance_id,
+             lava_rt_ignore_intersection,
+             lava_rt_payload_store_f32_at, lava_rt_payload_load_f32_at,
+             lava_rt_trace_ray
 
-# Any backend with hw_accel=true creates an HWTLAS
-default_accel(backend, ::Val{true}) = HWTLAS(backend)
+# Any backend with hw_accel=true creates an HWTLAS.  Parametrised on
+# `Raycore.Triangle{TriangleMeta}` because Hikari's scene API pushes meshes
+# with `TriangleMeta` per-face data — `Lava.HWTLAS(backend)`'s default
+# narrowing to `Triangle{UInt32}` would reject those pushes with a convert
+# error.
+default_accel(backend, ::Val{true}) = HWTLAS{Raycore.Triangle{TriangleMeta}}(backend)
 
 # Scene sync! for HWTLAS scenes
 function sync!(scene::Scene{<:HWTLAS})
@@ -211,10 +219,17 @@ end
 
 @kernel inbounds=true function process_shadow_round_kernel!(
     states, @Const(result_buf), @Const(tri_gpu), @Const(off_gpu),
-    media_interfaces, media, materials, rgb2spec_table, @Const(n::Int32)
+    media_interfaces, media, materials, rgb2spec_table, @Const(n::Int32),
+    @Const(queue_size)
 )
     i = @index(Global)
-    if i <= n
+    # Bound by the LIVE queue size, not `cap`.  shadow_states is reused across
+    # renders via _get_hw_buf!; entries past `queue_size[1]` may hold stale
+    # data from a previous render with active=1.  Without this gate, the
+    # `if st.active == 1` branch below passes for stale entries and reads
+    # garbage struct fields, triggering RADV PERMISSION_FAULTS at GART
+    # addresses.  See docs/specs/2026-04-25-iter6-cascade-investigation.md.
+    if i <= n && i <= queue_size[1]
         st = states[i]
         if st.active == UInt32(1)
             if st.t_remaining < 1f-6
@@ -319,28 +334,28 @@ end
     end
 end
 
-@kernel inbounds=true function count_active_shadows_kernel!(
-    counter, @Const(states), @Const(n::Int32)
-)
-    i = @index(Global)
-    if i <= n && states[i].active == UInt32(1)
-        Atomix.@atomic counter[1] += Int32(1)
-    end
-end
-
 @kernel inbounds=true function finalize_shadow_kernel!(
-    states, pixel_L, @Const(n::Int32)
+    states, pixel_L, @Const(n::Int32), @Const(n_pixels::Int32),
+    @Const(queue_size)
 )
     i = @index(Global)
-    if i <= n
+    # Bound by the LIVE queue size, not `cap` (see process_shadow_round_kernel
+    # comment).  shadow_states is reused across renders; stale entries past
+    # `queue_size[1]` would otherwise pass `st.visible == 1` and OOB-write
+    # `pixel_L` via garbage `pixel_index`.
+    if i <= n && i <= queue_size[1]
         st = states[i]
-        if st.visible == UInt32(1) && !is_black(st.T_ray)
+        # Defensive belt-and-suspenders: even within the live queue, if any
+        # path leaves bad data, prevent OOB writes by checking pixel_index.
+        pix = st.pixel_index
+        if st.visible == UInt32(1) && !is_black(st.T_ray) &&
+           pix >= Int32(1) && pix <= n_pixels
             mis_weight = st.r_u_path * st.tr_r_u + st.r_l_path * st.tr_r_l
             mis_denom = average(mis_weight)
             if mis_denom > 1f-10
                 final_L = st.Ld * st.T_ray / mis_denom
                 if !is_black(final_L)
-                    base_idx = (st.pixel_index - Int32(1)) * Int32(4)
+                    base_idx = (pix - Int32(1)) * Int32(4)
                     accumulate_spectrum!(pixel_L, base_idx, final_L)
                 end
             end
@@ -357,7 +372,6 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
     shadow_states = _get_hw_buf!(state, :hw_shadow_states, ShadowIterState, cap)
     ray_buf = _get_hw_buf!(state, :hw_shadow_ray_buf, RTRay, cap)
     result_buf = _get_hw_buf!(state, :hw_shadow_result_buf, RTHitResult, cap)
-    active_counter = _get_hw_buf!(state, :hw_shadow_counter, Int32, 1)
     n_rays_gpu = shadow_queue.size
 
     init_k! = init_shadow_states_kernel!(backend, 256)
@@ -365,28 +379,34 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
 
     extract_k! = extract_shadow_rays2_kernel!(backend, 256)
     process_k! = process_shadow_round_kernel!(backend, 256)
-    count_k! = count_active_shadows_kernel!(backend, 256)
 
     # Round 1
     extract_k!(ray_buf, shadow_states, Int32(cap); ndrange=n_rays_gpu)
     trace_closest_hits_indirect!(result_buf, ray_buf, accel, n_rays_gpu)
     process_k!(shadow_states, result_buf, hwtlas.tri_gpu, hwtlas.off_gpu,
                media_interfaces, media, materials, state.rgb2spec_table,
-               Int32(cap); ndrange=n_rays_gpu)
+               Int32(cap), shadow_queue.size; ndrange=n_rays_gpu)
 
-    # Extra rounds for medium traversal
+    # Extra rounds for medium traversal.  Trace all `n_rays_gpu` rays per round
+    # rather than just the active count: `extract_shadow_rays2_kernel!` writes
+    # ray_buf in state-index order (with a degenerate `tmin>tmax` no-op ray for
+    # inactive states), and `hw_raygen_shadow` reads `rays[lid+1]` linearly.
+    # Dispatching only `active_counter` rays would skip any actives at indices
+    # >= active_counter (e.g. actives at i=2,5,9 with count=3 → state 5 and 9
+    # silently re-use round 1 results).  Degenerate rays are cheap misses.
     max_shadow_rounds = isempty(media) ? 1 : 3
     for _round in 2:max_shadow_rounds
-        fill!(active_counter, Int32(0))
-        count_k!(active_counter, shadow_states, Int32(cap); ndrange=n_rays_gpu)
         extract_k!(ray_buf, shadow_states, Int32(cap); ndrange=n_rays_gpu)
-        trace_closest_hits_indirect!(result_buf, ray_buf, accel, active_counter)
+        trace_closest_hits_indirect!(result_buf, ray_buf, accel, n_rays_gpu)
         process_k!(shadow_states, result_buf, hwtlas.tri_gpu, hwtlas.off_gpu,
                    media_interfaces, media, materials, state.rgb2spec_table,
-                   Int32(cap); ndrange=n_rays_gpu)
+                   Int32(cap), shadow_queue.size; ndrange=n_rays_gpu)
     end
 
-    finalize_shadow_kernel!(backend, 256)(shadow_states, state.pixel_L, Int32(cap); ndrange=n_rays_gpu)
+    n_pixels = Int32(length(state.pixel_L) ÷ 4)  # pixel_L is 4 floats per pixel
+    finalize_shadow_kernel!(backend, 256)(shadow_states, state.pixel_L,
+                                           Int32(cap), n_pixels, shadow_queue.size;
+                                           ndrange=n_rays_gpu)
     return nothing
 end
 
@@ -395,24 +415,24 @@ end
 # ============================================================================
 
 function hw_raygen_shadow(accel, rays, results, tri_gpu, off_gpu, media_interfaces)
-    lid = rt_launch_id_x(accel)
+    lid = lava_rt_launch_id_x()
     ray = rays[lid + 1]
 
-    rt_payload_store!(accel, 0f0, UInt32(0))
-    rt_payload_store!(accel, -1f0, UInt32(1))
+    lava_rt_payload_store_f32_at(0f0, UInt32(0))
+    lava_rt_payload_store_f32_at(-1f0, UInt32(1))
 
-    rt_trace_ray!(accel,
+    lava_rt_trace_ray(
         UInt32(0), UInt32(0xFF), UInt32(0), UInt32(0), UInt32(0),
         ray.origin_x, ray.origin_y, ray.origin_z, ray.tmin,
         ray.dir_x, ray.dir_y, ray.dir_z, ray.tmax)
 
-    hit = rt_payload_load(accel, UInt32(0))
-    t   = rt_payload_load(accel, UInt32(1))
-    pid = rt_payload_load(accel, UInt32(2))
-    ci  = rt_payload_load(accel, UInt32(3))
-    bu  = rt_payload_load(accel, UInt32(4))
-    bv  = rt_payload_load(accel, UInt32(5))
-    iid = rt_payload_load(accel, UInt32(6))
+    hit = lava_rt_payload_load_f32_at(UInt32(0))
+    t   = lava_rt_payload_load_f32_at(UInt32(1))
+    pid = lava_rt_payload_load_f32_at(UInt32(2))
+    ci  = lava_rt_payload_load_f32_at(UInt32(3))
+    bu  = lava_rt_payload_load_f32_at(UInt32(4))
+    bv  = lava_rt_payload_load_f32_at(UInt32(5))
+    iid = lava_rt_payload_load_f32_at(UInt32(6))
 
     results[lid + 1] = RTHitResult(
         reinterpret(UInt32, hit), t,
@@ -424,15 +444,15 @@ function hw_raygen_shadow(accel, rays, results, tri_gpu, off_gpu, media_interfac
 end
 
 function hw_anyhit_shadow(accel, tri_gpu, off_gpu, media_interfaces)
-    prim_id  = rt_primitive_id(accel)
-    override = rt_instance_custom_index(accel)   # interface override
-    iid      = rt_instance_id(accel)             # 0-based instance index → triangle lookup
+    prim_id  = lava_rt_primitive_id()
+    override = lava_rt_instance_custom_index()   # interface override
+    iid      = lava_rt_instance_id()             # 0-based instance index -> triangle lookup
     tri_offset = off_gpu[iid + UInt32(1)]
     tri = tri_gpu[Int(tri_offset) + Int(prim_id) + 1]
     mi_idx = override != UInt32(0) ? override : tri.metadata.medium_interface_idx
     mi = media_interfaces[Int(mi_idx)]
     if mi.inside.type_idx != mi.outside.type_idx || mi.inside.vec_idx != mi.outside.vec_idx
-        rt_ignore_intersection(accel)
+        lava_rt_ignore_intersection()
     end
     return nothing
 end

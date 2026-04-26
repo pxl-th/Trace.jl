@@ -893,7 +893,7 @@ end
 # ============================================================================
 
 """
-    render_pbrt(filename; backend, samples, max_depth, output)
+    render_pbrt(filename; backend, samples, max_depth, hw_accel, output)
 
 Load a pbrt scene, render it, and optionally save to file. Returns the rendered image.
 """
@@ -901,14 +901,15 @@ function render_pbrt(filename::AbstractString;
                      backend=KA.CPU(),
                      samples::Union{Nothing, Int}=nothing,
                      max_depth::Union{Nothing, Int}=nothing,
+                     hw_accel::Bool=false,
                      output::Union{Nothing, String}=nothing)
-    r = load_pbrt(filename; backend=backend, samples=samples, max_depth=max_depth)
+    r = load_pbrt(filename; backend=backend, samples=samples, max_depth=max_depth, hw_accel=hw_accel)
     s = r.integrator_settings
     spp = s.samples
     vp = VolPath(samples=spp, max_depth=s.max_depth, regularize=s.regularize,
                  russian_roulette_depth=s.russian_roulette_depth,
                  max_component_value=s.max_component_value,
-                 sensor=r.sensor)
+                 sensor=r.sensor, hw_accel=hw_accel)
 
     img = vp(r.scene, r.film, r.camera)
 

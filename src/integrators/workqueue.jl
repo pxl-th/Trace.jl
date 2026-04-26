@@ -9,6 +9,7 @@ import KernelAbstractions as KA
 using Atomix: @atomic
 using StructArrays
 using Adapt
+import Lava: LavaBackend
 
 # ============================================================================
 # SOA/AOS Array Allocation (following pbrt-v4's SOA pattern)
@@ -197,8 +198,8 @@ Lava overrides this to return the GPU array directly for indirect dispatch (no f
 # Backends supporting indirect dispatch (Lava) return the GPU array directly,
 # avoiding GPU->CPU sync. Others fall back to CPU readback.
 function gpu_ndrange(backend, size_buf)
-    if Raycore.supports_indirect_dispatch(backend)
-        return Raycore.indirect_ndrange(size_buf)
+    if backend isa LavaBackend
+        return size_buf
     end
     return max(Int(Array(size_buf)[1]), 1)
 end

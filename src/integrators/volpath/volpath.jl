@@ -46,14 +46,6 @@ mutable struct VolPath <: Integrator
     # Cached render state
     state::Union{Nothing, VolPathState}
 
-    # Adapted-scene cache: saves ~30 MiB / sample vs re-adapting the scene.
-    # `adapted_scene_id == 0` (== objectid of nothing) means "invalid".
-    # Both Hikari and the caller (e.g. RayMakie) go through
-    # `get_or_adapt_scene!(vp, backend, scene)` — do not reach for the
-    # fields directly.
-    adapted_scene::Any              # nothing when invalid
-    adapted_scene_id::UInt64        # 0 when invalid
-
     # Cached initial medium detection (avoids per-sample GPU alloc + flush).
     # `initial_medium_camera_pos === nothing` means invalid.
     initial_medium_camera_pos::Any  # Point3f or nothing
@@ -121,8 +113,6 @@ function VolPath(;
         hw_accel,
         sensor,
         nothing,           # state
-        nothing,           # adapted_scene
-        UInt64(0),         # adapted_scene_id (0 = invalid)
         nothing,           # initial_medium_camera_pos
         nothing,           # initial_medium_key
         nothing,           # filter_sampler_gpu
@@ -140,36 +130,10 @@ Release all GPU memory held by the integrator's cached render state and adapted 
 """
 function Base.close(vp::VolPath)
     vp.filter_sampler_gpu = nothing
-    if vp.state !== nothing
-        # TEMPORARY: skip eager free!(state); drop the reference and let
-        # Julia GC finalize each LavaArray through its DataRef.
-        vp.state = nothing
-    end
-    vp.adapted_scene = nothing
-    vp.adapted_scene_id = UInt64(0)
+    vp.state = nothing
     vp.initial_medium_camera_pos = nothing
     vp.initial_medium_key = nothing
     return nothing
-end
-
-"""
-    get_or_adapt_scene!(vp::VolPath, backend, scene) -> adapted
-
-Return the GPU-adapted view of `scene` for this integrator.  If `scene`
-hasn't changed since the last adapt, returns the cached result; otherwise
-re-adapts and updates the cache.  This is the canonical way to obtain the
-adapted scene — neither the integrator nor external callers should reach
-for `vp.adapted_scene` directly.
-"""
-function get_or_adapt_scene!(vp::VolPath, backend, scene::AbstractScene)
-    id = objectid(scene)
-    if vp.adapted_scene_id === id && vp.adapted_scene !== nothing
-        return vp.adapted_scene
-    end
-    adapted = adapt_scene_for_render(backend, scene, vp)
-    vp.adapted_scene = adapted
-    vp.adapted_scene_id = id
-    return adapted
 end
 
 # Dispatch wrappers: pass `vp` so external packages (e.g. hikari_integration.jl)
@@ -535,8 +499,10 @@ function render!(
     backend = KA.get_backend(img)
 
     # Adapt scene for kernel dispatch (TLAS → StaticTLAS, MultiTypeSet → StaticMultiTypeSet).
-    # Cached — avoids re-uploading BVH on every sample (~30 MiB per adapt).
-    adapted = get_or_adapt_scene!(vp, backend, scene)
+    # Cheap: `Adapt.adapt(backend, scene.accel)` reads `scene.accel.static_tlas`
+    # after a no-op `sync!`. Do NOT cache this return across calls — consumers
+    # MUST re-read per dispatch so scene mutations (push!/delete!) are visible.
+    adapted = adapt_scene_for_render(backend, scene, vp)
     accel = adapted.accel
     materials = adapted.materials
     media = adapted.media

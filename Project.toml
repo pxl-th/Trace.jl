@@ -12,6 +12,7 @@ GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 ImageCore = "a09fc81d-aa75-5fe9-8630-4744c3626534"
 ImageIO = "82e4d734-157c-48bb-816b-45c225c6df19"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -40,8 +41,7 @@ Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "sd/multit
 
 [extras]
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
-Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "JET", "Lava"]
+test = ["Test", "JET"]
