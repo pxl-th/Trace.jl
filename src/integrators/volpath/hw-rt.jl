@@ -75,7 +75,9 @@ end
     end
 end
 
-function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera; has_infinite_lights::Bool=false)
+function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera;
+                           has_infinite_lights::Bool=false,
+                           cull_mask::UInt32=UInt32(0xFF))
     hwtlas = scene.accel.hwtlas
     hwtlas.hw_accel === nothing && return nothing
 
@@ -100,7 +102,7 @@ function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera; h
 
     hw_generate_primary_rays_kernel!(backend)(
         rays, camera, film.crop_bounds.p_min, Int32(w), Int32(h); ndrange=n)
-    trace_closest_hits!(results, rays, scene.accel, n)
+    trace_closest_hits!(results, rays, scene.accel, n; cull_mask=cull_mask)
     hw_extract_depth_kernel!(backend)(
         film.depth, film.normal, film.albedo, results, miss_depth, Int32(n); ndrange=n)
     KA.synchronize(backend)
@@ -139,7 +141,7 @@ function _get_hw_buf!(state::VolPathState, field::Symbol, T, cap)
     return buf
 end
 
-function vp_trace_rays!(state::VolPathState, accel::HWAdaptedAccel, media_interfaces, materials, ::VolPath)
+function vp_trace_rays!(state::VolPathState, accel::HWAdaptedAccel, media_interfaces, materials, vp::VolPath)
     input_queue = state.current_ray_queue == :a ? state.ray_queue_a : state.ray_queue_b
     backend = KA.get_backend(input_queue.items)
     cap = Int(input_queue.capacity)
@@ -149,7 +151,7 @@ function vp_trace_rays!(state::VolPathState, accel::HWAdaptedAccel, media_interf
 
     extract_rays_kernel!(backend, 256)(ray_buf, input_queue.items, input_queue.size; ndrange=input_queue.size)
 
-    precomputed = batch_trace_indirect(result_buf, ray_buf, accel, input_queue.size)
+    precomputed = batch_trace_indirect(result_buf, ray_buf, accel, input_queue.size; cull_mask=vp.cull_mask)
 
     foreach(vp_trace_rays_kernel!,
         input_queue,
@@ -382,7 +384,7 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
 
     # Round 1
     extract_k!(ray_buf, shadow_states, Int32(cap); ndrange=n_rays_gpu)
-    trace_closest_hits_indirect!(result_buf, ray_buf, accel, n_rays_gpu)
+    trace_closest_hits_indirect!(result_buf, ray_buf, accel, n_rays_gpu; cull_mask=vp.cull_mask)
     process_k!(shadow_states, result_buf, hwtlas.tri_gpu, hwtlas.off_gpu,
                media_interfaces, media, materials, state.rgb2spec_table,
                Int32(cap), shadow_queue.size; ndrange=n_rays_gpu)
@@ -397,7 +399,7 @@ function vp_trace_shadow_rays!(state::VolPathState, accel::HWAdaptedAccel, media
     max_shadow_rounds = isempty(media) ? 1 : 3
     for _round in 2:max_shadow_rounds
         extract_k!(ray_buf, shadow_states, Int32(cap); ndrange=n_rays_gpu)
-        trace_closest_hits_indirect!(result_buf, ray_buf, accel, n_rays_gpu)
+        trace_closest_hits_indirect!(result_buf, ray_buf, accel, n_rays_gpu; cull_mask=vp.cull_mask)
         process_k!(shadow_states, result_buf, hwtlas.tri_gpu, hwtlas.off_gpu,
                    media_interfaces, media, materials, state.rgb2spec_table,
                    Int32(cap), shadow_queue.size; ndrange=n_rays_gpu)

@@ -54,6 +54,12 @@ mutable struct VolPath <: Integrator
     # Cached GPU-adapted filter sampler data (avoids re-uploading every sample).
     # nothing = not yet adapted.
     filter_sampler_gpu::Any
+
+    # Cull mask passed to trace_closest_hits! / trace_closest_hits_indirect!.
+    # ANDed against each TLAS instance's instance_mask; only instances where
+    # (cull_mask & instance_mask) != 0 are visible to rays from this integrator.
+    # Default 0xFF matches all instances (identical to old hard-coded behavior).
+    cull_mask::UInt32
 end
 
 """
@@ -96,7 +102,8 @@ function VolPath(;
     filter::AbstractFilter = GaussianFilter(),  # pbrt-v4 default: Gaussian(1.5, 0.5)
     accumulation_eltype::DataType = Float32,
     hw_accel::Bool = false,
-    sensor::PixelSensor = PixelSensor()
+    sensor::PixelSensor = PixelSensor(),
+    cull_mask::UInt32 = UInt32(0xFF)
 )
     @assert accumulation_eltype in (Float32, Float64) "accumulation_eltype must be Float32 or Float64"
     # Build filter sampler data for importance sampling (nothing for Box/Triangle)
@@ -116,6 +123,7 @@ function VolPath(;
         nothing,           # initial_medium_camera_pos
         nothing,           # initial_medium_key
         nothing,           # filter_sampler_gpu
+        cull_mask,
     )
     # No GC finalizer — the VolPathState is shared with scene_state.integrator_state,
     # so proactive free! from a finalizer would free arrays still in use by the render loop.
