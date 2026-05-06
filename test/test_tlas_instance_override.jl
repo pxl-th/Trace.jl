@@ -154,7 +154,11 @@ _channel_maxes(img) = (
     # ── 4. SW-path render: each instance shows its own color ────────────────
     @testset "SW render: per-instance materials produce distinct colors" begin
         backend = Lava.LavaBackend()
-        scene = Hikari.Scene()
+        # Scene's TLAS lives on the same backend the render dispatches on —
+        # cross-backend `Adapt.adapt(::LavaBackend, tlas::TLAS{CPU})` is not
+        # supported (static_tlas is owned per-TLAS-backend; the `to` argument
+        # to adapt is intentionally ignored). See instanced-bvh.jl docstring.
+        scene = Hikari.Scene(; backend=backend)
         push!(scene, _floor_mesh(),
               Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.3f0, 0.3f0, 0.3f0)))
 
@@ -183,14 +187,14 @@ _channel_maxes(img) = (
         @test !Lava.device_lost(backend.dispatch_bq.ctx)
     end
 
-    # ── 5. HW-path structure: 1 BLAS + N instances routed to overrides ──────
-    # The HW RT *render* works in isolation (see test_hw_rt_override_isolated
-    # in this file).  Running a HW render after any other render in the same
-    # Julia session currently DEVICE_LOSTs on the second render's rt_indirect
-    # dispatch around ~104 dispatches in — a cross-run lifetime/cache bug
-    # that's independent of the Phase-C override refactor.  Tracked as a
-    # follow-up; here we only verify the HW TLAS structure.
-    @testset "HW TLAS structure: 1 BLAS + per-instance overrides" begin
+    # ── 5. HW-path render: each instance shows its own color ────────────────
+    # Mirrors the SW test above on the HW backend. Previously disabled because
+    # a second HW render in the same session DEVICE_LOSTed around dispatch ~104;
+    # root cause was `combined_instance_buf` being shared across rebuilds (each
+    # build_tlas appended it to its TLAS's preserves, so freeing the older TLAS
+    # freed the buffer out from under the newer one). Fixed by allocating a
+    # fresh combined buf per rebuild — see rebuild_hw_tlas_from_batch!.
+    @testset "HW render: per-instance materials produce distinct colors" begin
         backend = Lava.LavaBackend()
         scene = Hikari.Scene(; backend=backend, hw_accel=true)
         push!(scene, _floor_mesh(),
@@ -206,15 +210,29 @@ _channel_maxes(img) = (
                                         Hikari.RGBSpectrum(30f0)))
         Hikari.sync!(scene)
 
-        # HWTLAS has 1 floor BLAS + 1 sphere BLAS = 2 total, 5 instances.
+        # HWTLAS structure: 1 floor BLAS + 1 sphere BLAS = 2 total, 5 instances,
+        # 2 batches (floor=1, sphere=4). All sphere instances share the second BLAS;
+        # their per-instance custom_indices are distinct nonzero overrides.
         @test length(scene.accel.blas_list) == 2
-        @test length(scene.accel.instance_blas_indices) == 5
-        # The 4 scatter instances all point to BLAS 2
-        @test scene.accel.instance_blas_indices[2:end] == [2, 2, 2, 2]
-        # Their custom_indices are distinct nonzero overrides (media_interfaces idx)
-        overrides = scene.accel.instance_custom_indices[2:end]
+        @test Raycore.n_instances(scene.accel) == 5
+        @test length(scene.accel.instance_batches) == 2
+        @test scene.accel.instance_batches[1].n == 1
+        @test scene.accel.instance_batches[2].n == 4
+        @test scene.accel.instance_batches[2].blas === scene.accel.blas_list[2]
+        sphere_records = Array(scene.accel.instance_batches[2].instance_buf)
+        overrides = UInt32[(r.custom_index_and_mask & 0x00FFFFFF) for r in sphere_records[1:4]]
         @test all(o != UInt32(0) for o in overrides)
         @test length(Set(overrides)) == 4
+
+        # Actual render: every instance must show its own color, proving the
+        # custom_index → media_interfaces lookup works on the HW path too.
+        film, camera = _make_film_camera(64)
+        img = _render(scene, film, camera; backend=backend, hw=true, samples=4, depth=3)
+        m = _channel_maxes(img)
+        @test m.r > 0.1f0
+        @test m.g > 0.1f0
+        @test m.b > 0.1f0
+        @test !Lava.device_lost(backend.dispatch_bq.ctx)
     end
 
     # ── 6. Rapid push/delete cycles — no BLAS growth ────────────────────────
