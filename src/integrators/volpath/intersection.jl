@@ -10,9 +10,9 @@ depends on the accelerator type:
 
 - `StaticTLAS` (software traversal): 1-based instance array index.  The
   override is `accel.instances[inst_slot].instance_id`.
-- Hardware-adapted accelerators (e.g. `PrecomputedHitsAccel`): the
-  override value itself, forwarded straight from
-  `gl_InstanceCustomIndexEXT`.
+- Hardware-adapted accelerators (`HWAdaptedAccel`): the override value
+  itself, forwarded straight from `gl_InstanceCustomIndexEXT` via the
+  inline ray query's `lava_ray_query_get_instance_custom_index`.
 
 Either way, a nonzero override replaces the triangle's per-face
 `medium_interface_idx`; zero means "inherit".  This is the single place

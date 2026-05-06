@@ -128,8 +128,13 @@ function build_hikari_scene(pbrt::PBRTScene;
 
     # --- Build materials cache ---
     mat_cache = Dict{String, Material}()
-    for (name, entity) in pbrt.named_materials
-        mat_cache[name] = build_pbrt_material(entity, pbrt, hikari_textures)
+    for pass in (false, true)
+        for (name, entity) in pbrt.named_materials
+            is_mix = lowercase(entity.type) == "mix"
+            is_mix == pass || continue
+            haskey(mat_cache, name) && continue
+            mat_cache[name] = build_pbrt_material(entity, pbrt, hikari_textures, mat_cache)
+        end
     end
 
     # --- Build media cache ---
@@ -162,7 +167,7 @@ function build_hikari_scene(pbrt::PBRTScene;
         # Area light → wrap material in MediumInterface with Emissive
         # pbrt normalizes: scale /= SpectrumToPhotometric(Lemit)
         if srec.area_light !== nothing
-            Le = pbrt_get_rgb(srec.area_light, "L", (1.0, 1.0, 1.0))
+            Le = pbrt_get_emissive_le(srec.area_light, (1.0, 1.0, 1.0))
             al_scale = Float32(pbrt_get_float(srec.area_light, "scale", 1.0))
             two_sided = pbrt_get_bool(srec.area_light, "twosided", false)
             table = get_srgb_table()
@@ -197,7 +202,9 @@ function pbrt_get_float(entity::PBRTEntity, name::String, default::Real)
     haskey(entity.params, name) || return default
     p = entity.params[name]
     isempty(p.values) && return default
-    return Float64(p.values[1])
+    v = p.values[1]
+    v isa Number || return default
+    return Float64(v)
 end
 
 function pbrt_get_int(entity::PBRTEntity, name::String, default::Int)
@@ -231,6 +238,31 @@ function pbrt_get_rgb(entity::PBRTEntity, name::String, default::NTuple{3, Float
     p = entity.params[name]
     length(p.values) >= 3 || return default
     return (Float64(p.values[1]), Float64(p.values[2]), Float64(p.values[3]))
+end
+
+# Convert a blackbody temperature (Kelvin) to a normalized sRGB triplet.
+# Uses CIE xy chromaticity → XYZ → linear sRGB, normalized so max channel = 1.
+function _blackbody_to_rgb(T::Float32)
+    x, y = planckian_xy(T)
+    X = x / y; Y = 1f0; Z = (1f0 - x - y) / y
+    r =  3.2406f0 * X - 1.5372f0 * Y - 0.4986f0 * Z
+    g = -0.9689f0 * X + 1.8758f0 * Y + 0.0415f0 * Z
+    b =  0.0557f0 * X - 0.2040f0 * Y + 1.0570f0 * Z
+    m = max(r, g, b, 1f-6)
+    return (Float64(r / m), Float64(g / m), Float64(b / m))
+end
+
+# Like pbrt_get_rgb but also handles "blackbody" type params (single temperature value).
+# Used for emissive Le values which can be RGB or blackbody spectra.
+function pbrt_get_emissive_le(entity::PBRTEntity, default::NTuple{3, Float64})
+    haskey(entity.params, "L") || return default
+    p = entity.params["L"]
+    if p.type == :blackbody && !isempty(p.values)
+        return _blackbody_to_rgb(Float32(p.values[1]))
+    elseif length(p.values) >= 3
+        return (Float64(p.values[1]), Float64(p.values[2]), Float64(p.values[3]))
+    end
+    return default
 end
 
 function pbrt_get_floats(entity::PBRTEntity, name::String)
@@ -331,8 +363,12 @@ const TEXTURE_RESOLUTION = 256  # Resolution for procedural textures (checkerboa
 
 function build_pbrt_textures(pbrt::PBRTScene)
     textures = Dict{String, Any}()
+    # Two passes: build base textures first, then derived (scale) textures
+    for pass in (false, true)
     for (name, tex_entity) in pbrt.named_textures
         tex_type = lowercase(tex_entity.type)
+        is_derived = tex_type == "scale"
+        is_derived == pass || continue
         tex_class = pbrt_get_string(tex_entity, "_class", "spectrum")
 
         if tex_type == "checkerboard"
@@ -378,8 +414,50 @@ function build_pbrt_textures(pbrt::PBRTScene)
                 c = pbrt_get_rgb(tex_entity, "value", (1.0, 1.0, 1.0))
                 textures[name] = ConstTexture(RGBSpectrum(Float32(c[1]), Float32(c[2]), Float32(c[3])))
             end
+
+        elseif tex_type == "imagemap"
+            filename = pbrt_get_string(tex_entity, "filename", "")
+            isempty(filename) && continue
+            path = isabspath(filename) ? filename : joinpath(pbrt.base_dir, filename)
+            isfile(path) || (@warn "pbrt: texture image not found: $path"; continue)
+            img = FileIO.load(path)
+            if tex_class == "float"
+                data = Matrix{Float32}(undef, size(img)...)
+                for idx in CartesianIndices(img)
+                    px = img[idx]
+                    r = Float32(Colors.red(px))
+                    g = Float32(Colors.green(px))
+                    b = Float32(Colors.blue(px))
+                    data[idx] = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
+                end
+                textures[name] = Texture(data)
+            else
+                data = Matrix{RGBSpectrum}(undef, size(img)...)
+                for idx in CartesianIndices(img)
+                    px = img[idx]
+                    data[idx] = RGBSpectrum(Float32(Colors.red(px)),
+                                            Float32(Colors.green(px)),
+                                            Float32(Colors.blue(px)))
+                end
+                textures[name] = Texture(data)
+            end
+
+        elseif tex_type == "scale"
+            # scale texture: output = tex * scale (float class only)
+            tex_class == "float" || continue
+            scale_val = Float32(pbrt_get_float(tex_entity, "scale", 1.0))
+            tex_ref = pbrt_get_string(tex_entity, "tex", "")
+            base = isempty(tex_ref) ? nothing : get(textures, tex_ref, nothing)
+            if base isa Texture{Float32}
+                textures[name] = Texture(base.data .* scale_val)
+            elseif base !== nothing
+                textures[name] = base  # best-effort: drop the scale
+            else
+                textures[name] = ConstTexture(scale_val)
+            end
         end
-    end
+    end  # for (name, tex_entity)
+    end  # for pass
     return textures
 end
 
@@ -402,14 +480,15 @@ end
 function pbrt_get_float_texture(entity::PBRTEntity, name::String, textures::Dict{String, Any}, default_val)
     if haskey(entity.params, name)
         p = entity.params[name]
-        if p.type == :texture && !isempty(p.values) && p.values[1] isa String
-            tex_name = p.values[1]
-            if haskey(textures, tex_name)
-                return textures[tex_name]
-            end
+        if !isempty(p.values) && p.values[1] isa AbstractString
+            # Texture reference: look it up or use default (don't try Float64(string))
+            tex_name = String(p.values[1])
+            haskey(textures, tex_name) && return textures[tex_name]
+            @warn "pbrt: float texture '$tex_name' not found, using default $default_val"
+            return Float32(default_val)
         end
     end
-    return Float32(pbrt_get_float(entity, name, default_val))
+    return Float32(pbrt_get_float(entity, name, Float64(default_val)))
 end
 
 function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
@@ -591,6 +670,104 @@ function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Ma
 end
 
 # ============================================================================
+# Loop subdivision (pbrt "loopsubdiv" shape)
+# ============================================================================
+
+loop_beta(valence::Int) = valence == 3 ? 3f0 / 16f0 : 3f0 / (8f0 * valence)
+
+function _loopsubdiv_adjacency(n::Int, faces::Vector{NTuple{3,Int}})
+    neighbors = [Set{Int}() for _ in 1:n]
+    for (v1, v2, v3) in faces
+        push!(neighbors[v1], v2, v3)
+        push!(neighbors[v2], v1, v3)
+        push!(neighbors[v3], v1, v2)
+    end
+    return neighbors
+end
+
+function _loopsubdiv_boundary(n::Int, faces::Vector{NTuple{3,Int}})
+    edge_count = Dict{Tuple{Int,Int}, Int}()
+    for (v1, v2, v3) in faces
+        for (a, b) in ((v1,v2), (v2,v3), (v3,v1))
+            edge = minmax(a, b)
+            edge_count[edge] = get(edge_count, edge, 0) + 1
+        end
+    end
+    boundary = falses(n)
+    for ((a, b), count) in edge_count
+        count == 1 && (boundary[a] = true; boundary[b] = true)
+    end
+    return boundary
+end
+
+function _loopsubdiv_once(vertices::Vector{Point3f}, faces::Vector{NTuple{3,Int}})
+    neighbors = _loopsubdiv_adjacency(length(vertices), faces)
+    boundary = _loopsubdiv_boundary(length(vertices), faces)
+
+    new_vertices = Vector{Point3f}(undef, length(vertices))
+    for (i, v) in enumerate(vertices)
+        neighs = collect(neighbors[i])
+        valence = length(neighs)
+        if boundary[i]
+            boundary_neighs = filter(n -> boundary[n], neighs)
+            if length(boundary_neighs) >= 2
+                bn = boundary_neighs[1:2]
+                new_vertices[i] = 0.75f0 * v + 0.125f0 * (vertices[bn[1]] + vertices[bn[2]])
+            else
+                new_vertices[i] = v
+            end
+        else
+            b = loop_beta(valence)
+            ring_sum = sum(vertices[n] for n in neighs)
+            new_vertices[i] = (1f0 - valence * b) * v + b * ring_sum
+        end
+    end
+
+    edge_faces = Dict{Tuple{Int,Int}, Vector{Int}}()
+    for (fi, (v1, v2, v3)) in enumerate(faces)
+        for (a, b) in ((v1,v2), (v2,v3), (v3,v1))
+            edge = minmax(a, b)
+            push!(get!(edge_faces, edge, Int[]), fi)
+        end
+    end
+
+    edge_vertex_map = Dict{Tuple{Int,Int}, Int}()
+    out_vertices = copy(new_vertices)
+    for (edge, adj_faces) in edge_faces
+        a, b = edge
+        new_p = if length(adj_faces) == 1
+            0.5f0 * (vertices[a] + vertices[b])
+        else
+            f1, f2 = adj_faces[1], adj_faces[2]
+            opp1 = only(filter(v -> v != a && v != b, (faces[f1][1], faces[f1][2], faces[f1][3])))
+            opp2 = only(filter(v -> v != a && v != b, (faces[f2][1], faces[f2][2], faces[f2][3])))
+            0.375f0 * (vertices[a] + vertices[b]) + 0.125f0 * (vertices[opp1] + vertices[opp2])
+        end
+        push!(out_vertices, new_p)
+        edge_vertex_map[edge] = length(out_vertices)
+    end
+
+    new_faces = NTuple{3,Int}[]
+    sizehint!(new_faces, 4 * length(faces))
+    for (v1, v2, v3) in faces
+        e12 = edge_vertex_map[minmax(v1, v2)]
+        e23 = edge_vertex_map[minmax(v2, v3)]
+        e31 = edge_vertex_map[minmax(v3, v1)]
+        push!(new_faces, (v1, e12, e31), (v2, e23, e12), (v3, e31, e23), (e12, e23, e31))
+    end
+
+    return out_vertices, new_faces
+end
+
+function loop_subdivide(vertices::Vector{Point3f}, faces::Vector{NTuple{3,Int}}, levels::Int)
+    v, f = vertices, faces
+    for _ in 1:levels
+        v, f = _loopsubdiv_once(v, f)
+    end
+    return v, f
+end
+
+# ============================================================================
 # Shape building
 # ============================================================================
 
@@ -620,7 +797,16 @@ function build_pbrt_shape(srec::PBRTShapeRecord, pbrt::PBRTScene)
         mesh = apply_pbrt_transform(mesh, srec.transform)
 
     elseif type == "loopsubdiv"
-        mesh = build_trianglemesh(entity, srec.transform)
+        levels = pbrt_get_int(entity, "levels", 3)
+        base_mesh = build_trianglemesh(entity, srec.transform)
+        if base_mesh === nothing
+            return nothing
+        end
+        pts = collect(Point3f, GeometryBasics.coordinates(base_mesh))
+        fs = [NTuple{3,Int}((f[1], f[2], f[3])) for f in GeometryBasics.faces(base_mesh)]
+        sub_pts, sub_fs = loop_subdivide(pts, fs, levels)
+        fi = [TriangleFace{Int}(f[1], f[2], f[3]) for f in sub_fs]
+        mesh = GeometryBasics.normal_mesh(GeometryBasics.Mesh(sub_pts, fi))
 
     else
         @warn "pbrt: unsupported shape type '$type'"
