@@ -443,17 +443,39 @@ function build_pbrt_textures(pbrt::PBRTScene)
             end
 
         elseif tex_type == "scale"
-            # scale texture: output = tex * scale (float class only)
-            tex_class == "float" || continue
+            # scale texture: output = tex * scale. Float class multiplies the
+            # underlying float data; spectrum class multiplies the underlying RGB
+            # texture (used e.g. for killeroo's `sgrid = 0.5 * imagemap(lines.png)`
+            # floor/wall pattern — without spectrum-scale support that texture
+            # silently fell through to the default grey diffuse).
             scale_val = Float32(pbrt_get_float(tex_entity, "scale", 1.0))
             tex_ref = pbrt_get_string(tex_entity, "tex", "")
             base = isempty(tex_ref) ? nothing : get(textures, tex_ref, nothing)
-            if base isa Texture{Float32}
-                textures[name] = Texture(base.data .* scale_val)
-            elseif base !== nothing
-                textures[name] = base  # best-effort: drop the scale
+            if tex_class == "float"
+                if base isa Texture{Float32}
+                    textures[name] = Texture(base.data .* scale_val)
+                elseif base !== nothing
+                    textures[name] = base
+                else
+                    textures[name] = ConstTexture(scale_val)
+                end
             else
-                textures[name] = ConstTexture(scale_val)
+                if base isa Texture{RGBSpectrum}
+                    scaled = Matrix{RGBSpectrum}(undef, size(base.data)...)
+                    @inbounds for i in eachindex(base.data)
+                        s = base.data[i]
+                        scaled[i] = RGBSpectrum(s.c[1] * scale_val,
+                                                s.c[2] * scale_val,
+                                                s.c[3] * scale_val,
+                                                s.c[4])
+                    end
+                    textures[name] = Texture(scaled)
+                elseif base !== nothing
+                    textures[name] = base
+                else
+                    textures[name] = ConstTexture(
+                        RGBSpectrum(scale_val, scale_val, scale_val))
+                end
             end
         end
     end  # for (name, tex_entity)
