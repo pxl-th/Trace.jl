@@ -133,7 +133,9 @@ function build_hikari_scene(pbrt::PBRTScene;
             is_mix = lowercase(entity.type) == "mix"
             is_mix == pass || continue
             haskey(mat_cache, name) && continue
-            mat_cache[name] = build_pbrt_material(entity, pbrt, hikari_textures, mat_cache)
+            mat_cache[name] = _wrap_with_bump(
+                build_pbrt_material(entity, pbrt, hikari_textures, mat_cache),
+                entity, hikari_textures)
         end
     end
 
@@ -483,6 +485,24 @@ function build_pbrt_textures(pbrt::PBRTScene)
     return textures
 end
 
+# Wrap a material in a `BumpMapped` if the pbrt entity has a `displacement`,
+# `bumpmap`, or `normalmap` parameter pointing at a named float texture. pbrt-v4
+# master uses `displacement`; older `.pbrt` files use `bumpmap`. Both are float
+# height fields read via finite differences in the BSDF dispatch.
+function _wrap_with_bump(mat::Material, entity::PBRTEntity, textures::Dict{String, Any})
+    for key in ("displacement", "bumpmap", "normalmap")
+        haskey(entity.params, key) || continue
+        p = entity.params[key]
+        isempty(p.values) && continue
+        tex_name = p.values[1]
+        tex_name isa AbstractString || continue
+        tex = get(textures, String(tex_name), nothing)
+        tex === nothing && continue
+        return BumpMapped(mat, tex)
+    end
+    return mat
+end
+
 """Get a material parameter as a texture or constant, resolving named texture references."""
 function pbrt_get_texture(entity::PBRTEntity, name::String, textures::Dict{String, Any}, default_rgb)
     if haskey(entity.params, name)
@@ -687,7 +707,9 @@ function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Ma
     end
 
     mat = build_pbrt_material(entity, pbrt, textures, mat_cache)
-    mat !== nothing && return mat
+    if mat !== nothing
+        return _wrap_with_bump(mat, entity, textures)
+    end
     return Diffuse(Kd=(0.5, 0.5, 0.5))
 end
 

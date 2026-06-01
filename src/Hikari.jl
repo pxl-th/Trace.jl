@@ -96,6 +96,7 @@ include("materials/coated-conductor.jl")
 include("materials/coated-diffuse-transmission.jl")
 include("materials/diffuse-transmission.jl")
 include("materials/emissive.jl")
+include("materials/bump-mapped.jl")
 include("materials/dispatch.jl")
 
 # Sobol sampler (needs mix_bits from materials/common.jl)
