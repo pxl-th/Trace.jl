@@ -39,6 +39,50 @@ regularized alphas. Here we pass the flag explicitly to achieve the same effect.
 end
 
 """
+    get_perturbed_shading_frame(materials, idx, ns, dpdus, tfc) -> (ns', dpdus')
+
+Type-stable dispatch that returns the bump-perturbed shading frame for a
+material. Default (any non-BumpMapped material) is identity; `BumpMapped`
+overrides to invoke `perturb_bump_frame`.
+
+This used to live inside `BumpMapped`'s `sample_bsdf_spectral` wrapper but
+the perturbation never reached the path-integrator's `cos_theta = dot(wi,
+work.ns)` factor, so bumps on Conductor surfaces vanished (Crown's gold
+dome rendered smooth even with the wrapper active). Hoisting it to the
+intersection point lets `work.ns` itself be the perturbed normal — the
+BSDF, MIS, and direct-lighting paths all see the same shading frame.
+"""
+@propagate_inbounds function get_perturbed_shading_frame(
+    materials::StaticMultiTypeSet, idx::SetKey,
+    ns::Vec3f, dpdus::Vec3f, dpdu::Vec3f, dpdv::Vec3f,
+    dndu::Vec3f, dndv::Vec3f,
+    ng::Vec3f, tfc::TextureFilterContext
+)::Tuple{Vec3f, Vec3f}
+    return with_index(perturb_shading_frame_impl, materials, idx,
+                      materials, ns, dpdus, dpdu, dpdv, dndu, dndv, ng, tfc)
+end
+
+# Default: any material that isn't BumpMapped leaves the frame untouched.
+# Non-bump materials want the normalized shading tangent `dpdus`; only
+# BumpMapped consumes the unnormalized geometric `dpdu` / `dpdv`.
+@inline perturb_shading_frame_impl(::Material, materials, ns::Vec3f,
+                                   dpdus::Vec3f, ::Vec3f, ::Vec3f,
+                                   ::Vec3f, ::Vec3f, ::Vec3f,
+                                   ::TextureFilterContext) =
+    (ns, dpdus)
+
+@inline function perturb_shading_frame_impl(mat::BumpMapped, materials,
+                                            ns::Vec3f, ::Vec3f,
+                                            dpdu::Vec3f, dpdv::Vec3f,
+                                            dndu::Vec3f, dndv::Vec3f,
+                                            ng::Vec3f,
+                                            tfc::TextureFilterContext)
+    return perturb_bump_frame(mat.bump, materials, ns, dpdu, dpdv,
+                              dndu, dndv, ng, tfc)
+end
+
+
+"""
     russian_roulette_spectral(beta, r_u, eta_scale, depth, rr_sample, min_depth=1)
 
 Apply Russian roulette for path termination. Follows pbrt-v4:

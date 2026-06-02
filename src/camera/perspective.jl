@@ -1,3 +1,9 @@
+# Near plane used by the perspective transform. Anything that needs to convert
+# Hikari's near-plane-relative `dx_camera`/`dy_camera` to angular units (e.g.
+# `approximate_dp_dxy` for ray differentials) must divide by this constant.
+const PERSPECTIVE_NEAR = 0.01f0
+const PERSPECTIVE_FAR  = 1000.0f0
+
 struct ProjectiveCamera <: Camera
     core::CameraCore
     camera_to_screen::Transformation
@@ -61,7 +67,7 @@ struct PerspectiveCamera <: Camera
     )
         pc = ProjectiveCamera(
             inv(camera_to_world),
-            perspective(fov, 0.01f0, 1000.0f0),
+            perspective(fov, PERSPECTIVE_NEAR, PERSPECTIVE_FAR),
             screen_window, shutter_open, shutter_close,
             lens_radius, focal_distance, film,
         )

@@ -286,14 +286,19 @@ end
 )
 
 """
-    compute_direct_lighting_spectral(p, n, wo, beta, r_u, lambda, light_sample, bsdf_f, bsdf_pdf)
+    compute_direct_lighting_spectral(p, ng, ns, wo, beta, r_u, lambda, light_sample, bsdf_f, bsdf_pdf)
 
 Compute direct lighting contribution from a light sample with MIS.
-Following pbrt-v4 (surfscatter.cpp lines 288-316).
+Following pbrt-v4 surfscatter.cpp lines 288-316 + interaction.h:
+  - cos_theta = AbsDot(wi, shading.n)  — uses SHADING normal (bumped)
+  - OffsetRayOrigin uses GEOMETRIC normal  — to dodge the real triangle plane
+
+`ng` is the geometric (face) normal; `ns` is the (possibly bumped) shading normal.
 """
 @propagate_inbounds function compute_direct_lighting_spectral(
     p::Point3f,
-    n::Vec3f,
+    ng::Vec3f,
+    ns::Vec3f,
     wo::Vec3f,
     beta::SpectralRadiance,
     r_u::SpectralRadiance,
@@ -308,13 +313,13 @@ Following pbrt-v4 (surfscatter.cpp lines 288-316).
     if is_black(bsdf_f)
         return DirectLightingResult()
     end
-    cos_theta = abs(dot(ls.wi, n))
+    cos_theta = abs(dot(ls.wi, ns))
     Ld = beta * bsdf_f * ls.Li * cos_theta
     if is_black(Ld)
         return DirectLightingResult()
     end
-    offset = 1f-4 * n
-    ray_origin = if dot(ls.wi, n) > 0f0
+    offset = 1f-4 * ng
+    ray_origin = if dot(ls.wi, ng) > 0f0
         Point3f((p + offset)...)
     else
         Point3f((p - offset)...)

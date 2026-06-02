@@ -45,9 +45,25 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
     to_point = Vec3f(pi - camera_pos)
     dist = sqrt(dot(to_point, to_point))
 
-    # Scale factor based on distance and samples per pixel
-    # Following pbrt-v4: scale by sqrt(samples) for antialiasing
-    scale = dist / sqrt(Float32(max(1, samples_per_pixel)))
+    # Hikari's `dx_camera` is the camera-space per-raster-pixel displacement
+    # on the perspective NEAR plane (z = PERSPECTIVE_NEAR), not the angular
+    # size of a pixel. To project it to world displacement at the actual hit
+    # distance we have to multiply by `dist / near`; otherwise the world
+    # displacement comes out ~100× too small and the per-pixel UV footprint
+    # falls below BUMP_DEFAULT_DELTA — so the bump fallback (5e-4) kicks in
+    # instead of the real screen-space derivative, leaving the gold-dome
+    # conductor with coherent mirror highlights.
+    #
+    # pbrt-v4's sppScale = max(.125, 1/sqrt(spp)) lives in the *fallback*
+    # `Approximate_dp_dxy` path only — used when ray differentials aren't
+    # present. When pbrt has true ray diffs (`ComputeDifferentials` uses
+    # the differential rays), it returns per-PIXEL dpdx without any spp
+    # scaling, and that's the regime BumpMap was tuned for. We're emulating
+    # the exact-diff path here, so skip the sppScale; otherwise the bump
+    # sampler ends up sqrt(spp) below the texel grid (16× too small at
+    # 256 spp), `h(u+du) == h(u)` bilinearly, dhdu collapses to zero, and
+    # the bumped mirror conductor stays coherent.
+    scale = dist / PERSPECTIVE_NEAR
 
     # Transform dx_camera and dy_camera to world space
     # These represent how the ray direction changes per pixel
@@ -316,7 +332,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         if !is_black(bsdf_f)
             # Compute direct lighting contribution with MIS
             result = compute_direct_lighting_spectral(
-                work.pi, work.ns, work.wo, work.beta, work.r_u, work.lambda,
+                work.pi, work.n, work.ns, work.wo, work.beta, work.r_u, work.lambda,
                 light_sample, bsdf_f, bsdf_pdf
             )
 

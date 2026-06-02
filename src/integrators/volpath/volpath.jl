@@ -147,8 +147,9 @@ end
 # Dispatch wrappers: pass `vp` so external packages (e.g. hikari_integration.jl)
 # can overload based on accel type.
 # Default (software BVH): delegate to the existing implementation.
-function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials, ::VolPath)
-    vp_trace_rays!(state, accel, media_interfaces, materials)
+function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials,
+                        camera, samples_per_pixel::Int32, ::VolPath)
+    vp_trace_rays!(state, accel, media_interfaces, materials, camera, samples_per_pixel)
 end
 function vp_trace_shadow_rays!(state::VolPathState, accel, media_interfaces, media, materials, ::VolPath)
     vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials)
@@ -606,7 +607,8 @@ function render!(
         vp_generate_ray_samples!(backend, state, sample_idx, Int32(depth), sobol_rng)
 
         reset_iteration_queues!(state)
-        vp_trace_rays!(state, accel, media_interfaces, materials, vp)
+        vp_trace_rays!(state, accel, media_interfaces, materials,
+                       camera, Int32(vp.samples_per_pixel), vp)
 
         # Medium sampling — indirect dispatch handles empty queues (0 groups = no-op)
         if !isempty(media)

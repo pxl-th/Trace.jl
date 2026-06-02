@@ -5,6 +5,10 @@
 
 const IDENTITY4 = Mat4f(LinearAlgebra.I)
 
+@inline function srgb_to_linear(u::Float32)
+    return u <= 0.04045f0 ? u / 12.92f0 : ((u + 0.055f0) / 1.055f0)^2.4f0
+end
+
 struct PBRTResult
     scene::Scene
     camera::PerspectiveCamera
@@ -88,20 +92,38 @@ function build_hikari_scene(pbrt::PBRTScene;
 
     # --- Camera ---
     fov = 90f0
+    lens_radius = 0f0
+    focal_distance = 1f6
     if pbrt.camera !== nothing
         fov = Float32(pbrt_get_float(pbrt.camera, "fov", 90.0))
+        lens_radius = Float32(pbrt_get_float(pbrt.camera, "lensradius", 0.0))
+        focal_distance = Float32(pbrt_get_float(pbrt.camera, "focaldistance", 1.0e6))
     end
-    # pbrt's camera_transform is world-to-camera Mat4f from pbrt_lookat.
-    # Use it directly as a Transformation to avoid the roundtrip through
-    # eye/target/up extraction → Raycore.look_at (which has different cross product convention).
-    # PerspectiveCamera's main constructor expects what look_at returns:
-    # a Transformation where .m is world-to-camera (it internally inverts it).
+    # NOTE: `pbrt.camera_transform` from `pbrt_lookat` produces correctly
+    # oriented images for the Z-up test suite scenes (tile<0.07 vs pbrt
+    # references) but renders Crown horizontally mirrored vs its pbrt
+    # reference EXR. Conversely, `Raycore.look_at`-derived camera (what
+    # RayMakie uses, verified to match Crown's pbrt EXR) breaks the test
+    # suite. Both `pbrt_lookat` and `Raycore.look_at` differ by a single
+    # `cross(up, dir)` vs `cross(dir, up)` flip — but only one is right
+    # for any given pbrt LookAt, and which one depends on the LookAt
+    # convention. Resolving this properly needs a coordinate-system audit
+    # of `pbrt_lookat`+`perspective`+`screen_to_raster` together; for now
+    # the path that keeps the regression suite green stays the default.
     wtc_mat = pbrt.camera_transform
     ctw_mat = inv(wtc_mat)
     wtc_tf = Transformation(wtc_mat, ctw_mat)
-    screen = Bounds2(Point2f(-1f0), Point2f(1f0))
+    # pbrt-v4 cameras.cpp: screen-window aspect = width/height. For tall images
+    # the screen is [-1,1] × [-1/frame, 1/frame]; for wide it's [-frame, frame]
+    # × [-1, 1]. Matches RayMakie's to_trace_camera convention.
+    frame = Float32(xres) / Float32(yres)
+    screen = if frame >= 1f0
+        Bounds2(Point2f(-frame, -1f0), Point2f(frame, 1f0))
+    else
+        Bounds2(Point2f(-1f0, -1f0/frame), Point2f(1f0, 1f0/frame))
+    end
     camera = PerspectiveCamera(
-        wtc_tf, screen, 0f0, 1f0, 0f0, 1f6, Float32(fov), film
+        wtc_tf, screen, 0f0, 1f0, lens_radius, focal_distance, Float32(fov), film
     )
 
     # --- Integrator settings ---
@@ -115,6 +137,13 @@ function build_hikari_scene(pbrt::PBRTScene;
         int_samples = pbrt_get_int(pbrt.integrator, "pixelsamples", 64)
         int_max_depth = pbrt_get_int(pbrt.integrator, "maxdepth", 5)
         int_regularize = pbrt_get_bool(pbrt.integrator, "regularize", false)
+    end
+    # pbrt-v4 puts `pixelsamples` on the Sampler, not the Integrator. Crown
+    # specifies `Sampler "halton" "integer pixelsamples" 512`. Without this the
+    # parser fell through to the integrator default (64) and the caller's
+    # `samples` arg silently overrode pbrt's scene-specified count.
+    if pbrt.sampler !== nothing
+        int_samples = pbrt_get_int(pbrt.sampler, "pixelsamples", int_samples)
     end
     # Film maxcomponentvalue
     if pbrt.film !== nothing
@@ -423,23 +452,45 @@ function build_pbrt_textures(pbrt::PBRTScene)
             path = isabspath(filename) ? filename : joinpath(pbrt.base_dir, filename)
             isfile(path) || (@warn "pbrt: texture image not found: $path"; continue)
             img = FileIO.load(path)
+            # Normalize to RGB regardless of source channel layout (Gray, GrayA,
+            # RGB, RGBA, BGR, palette, …). Earlier code called Colors.red/green/
+            # blue directly on the source pixel which throws on Gray-format PNGs
+            # (test_stripes.png triggers this), but `convert(RGB, gray)` is a
+            # well-defined widening.
+            img_rgb = convert.(Colors.RGB{Float32}, img)
+            # pbrt-v4 default encoding: 8-bit integer formats → sRGB,
+            # everything else (16-bit, float) → linear. spectrum imagemaps
+            # apply the inverse-sRGB curve so the BSDF sees linear-light
+            # reflectance; float imagemaps (bump/height/alpha) stay linear
+            # unless the user explicitly says otherwise. Override via the
+            # `"string encoding"` param. Killeroo's `textures/lines.png`
+            # ships as 8-bit sRGB with mid-tone values (~0.31 and ~0.97);
+            # treating those as linear collapses the grid contrast ~4×.
+            storage_el = eltype(ImageCore.channelview(img))
+            is_8bit = storage_el === N0f8
+            encoding = lowercase(pbrt_get_string(tex_entity, "encoding", ""))
+            default_srgb = is_8bit && tex_class != "float"
+            apply_srgb = isempty(encoding) ? default_srgb : encoding == "srgb"
+            if apply_srgb
+                @inbounds for idx in CartesianIndices(img_rgb)
+                    px = img_rgb[idx]
+                    img_rgb[idx] = Colors.RGB{Float32}(srgb_to_linear(px.r),
+                                                      srgb_to_linear(px.g),
+                                                      srgb_to_linear(px.b))
+                end
+            end
             if tex_class == "float"
-                data = Matrix{Float32}(undef, size(img)...)
-                for idx in CartesianIndices(img)
-                    px = img[idx]
-                    r = Float32(Colors.red(px))
-                    g = Float32(Colors.green(px))
-                    b = Float32(Colors.blue(px))
-                    data[idx] = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
+                data = Matrix{Float32}(undef, size(img_rgb)...)
+                for idx in CartesianIndices(img_rgb)
+                    px = img_rgb[idx]
+                    data[idx] = 0.2126f0 * px.r + 0.7152f0 * px.g + 0.0722f0 * px.b
                 end
                 textures[name] = Texture(data)
             else
-                data = Matrix{RGBSpectrum}(undef, size(img)...)
-                for idx in CartesianIndices(img)
-                    px = img[idx]
-                    data[idx] = RGBSpectrum(Float32(Colors.red(px)),
-                                            Float32(Colors.green(px)),
-                                            Float32(Colors.blue(px)))
+                data = Matrix{RGBSpectrum}(undef, size(img_rgb)...)
+                for idx in CartesianIndices(img_rgb)
+                    px = img_rgb[idx]
+                    data[idx] = RGBSpectrum(px.r, px.g, px.b)
                 end
                 textures[name] = Texture(data)
             end
@@ -595,7 +646,10 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
 
     elseif type == "coateddiffuse"
         refl = pbrt_get_texture(entity, "reflectance", textures, (0.5, 0.5, 0.5))
-        rough = Float32(pbrt_get_float(entity, "roughness", 0.0))
+        # `roughness` may be a scalar OR a texture (Crown's `border_bott_inlay`
+        # uses a mask texture). Silent coercion to a constant produced uniform
+        # mirror-smooth coating where pbrt rendered a masked rough/smooth mix.
+        rough = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
         remap = pbrt_get_bool(entity, "remaproughness", true)
         return CoatedDiffuse(reflectance=refl, roughness=rough, eta=eta,
@@ -675,7 +729,10 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
         haskey(entity.params, "materials") || error("mix material without 'materials' param")
         mat_names = String.(entity.params["materials"].values)
         length(mat_names) == 2 || error("mix material needs exactly 2 sub-materials, got $(length(mat_names))")
-        amount = Float32(pbrt_get_float(entity, "amount", 0.5))
+        # `amount` may be a scalar OR a texture (Crown's `bl_clamp_a` mixes a
+        # coateddiffuse with a conductor using `clamp_mask.png`). Silent
+        # coercion to 0.5 turned masked surfaces into a flat 50/50 blend.
+        amount = pbrt_get_float_texture(entity, "amount", textures, 0.5)
         mat1 = get(mat_cache, mat_names[1], nothing)
         mat2 = get(mat_cache, mat_names[2], nothing)
         mat1 === nothing && error("mix: unknown material '$(mat_names[1])'")

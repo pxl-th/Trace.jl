@@ -96,6 +96,7 @@ function run_pbrt_suite(; backend=Lava.LavaBackend(),
         end
 
         @testset "Textures"       _test_scenes_matching("tex_";    backend, samples, hw_accel)
+        @testset "Cast shadows"   _test_scenes_matching("shadow_"; backend, samples, hw_accel)
         @testset "Light variants" _test_scenes_matching("light_";  backend, samples, hw_accel)
         @testset "Filters"        _test_scenes_matching("filter_"; backend, samples, hw_accel)
         @testset "Sensors"        _test_scenes_matching("sensor_"; backend, samples, hw_accel)

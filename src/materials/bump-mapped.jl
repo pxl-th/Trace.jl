@@ -23,11 +23,11 @@
 
 # Floor on the finite-difference step when the texture-filter screen-space
 # derivatives are zero (e.g. when the integrator does not propagate ray
-# differentials). This is wider than pbrt's 5e-4 because Hikari's TextureFilter
-# Context currently passes du/dv = 0; without ray differentials we need a
-# step large enough to actually span one or two bump-texture texels, otherwise
-# the finite difference returns ~zero gradient.
-const BUMP_DEFAULT_DELTA = Float32(1 / 256)
+# differentials). Matches pbrt-v4 materials.h::BumpMap: `if (du == 0) du = .0005f`.
+# This is sub-texel on Crown's 1024×1024 bump maps; the earlier 1/256 default
+# was 4× the texel size and averaged out the high-frequency ornamental
+# engraving on the gold dome (mitra_right_back conductor + bump).
+const BUMP_DEFAULT_DELTA = 5f-4
 
 """
     BumpMapped(inner::Material, bump::Texture / TextureRef)
@@ -64,18 +64,30 @@ end
 end
 
 """
-    perturb_bump_frame(bump, materials, ns, dpdus, tfc) -> (ns_perturbed, dpdus_perturbed)
+    perturb_bump_frame(bump, materials, ns, dpdu, dpdv, dndu, dndv, ng, tfc)
+        -> (ns_perturbed, dpdus_perturbed)
 
-Return a perturbed shading normal and tangent from height-field gradient.
+Implements pbrt-v4 materials.h:BumpMap exactly:
+    dpdu' = dpdu + (∂h/∂u) * n + h * dndu
+    dpdv' = dpdv + (∂h/∂v) * n + h * dndv
+
+`dpdu` and `dpdv` are the UNNORMALIZED surface partial derivatives.
+pbrt-v4 (shapes.h:959 `ss = isect.dpdu`) feeds the BumpMap formula the
+raw geometric ∂p/∂u; the tilt of n_p depends on the ratio |dhdu|/|dpdu|.
+Passing the unit-length shading tangent over-tilted n_p by 2-60× — that
+was the bumped-gold leak into the crown interior pinned by
+`shadow_bumpgold_dome_over_velvet`.
+
+`ng` is the geometric (face) normal — pbrt-v4 `SetShadingGeometry` flips the
+new bumped normal against `ng`, not against the original interpolated `ns`.
 """
 @propagate_inbounds function perturb_bump_frame(bump, materials,
-                                                ns::Vec3f, dpdus::Vec3f,
+                                                ns::Vec3f,
+                                                dpdu::Vec3f, dpdv::Vec3f,
+                                                dndu::Vec3f, dndv::Vec3f,
+                                                ng::Vec3f,
                                                 tfc::TextureFilterContext)
     uv = tfc.uv
-    # pbrt-v4-style derivative-driven step: average the texture-filter screen-
-    # space (u,v) derivatives, falling back to BUMP_DEFAULT_DELTA when those
-    # are zero. Forward differences (rather than central) match pbrt's
-    # BumpMapping; the rest of the routine reproduces equations 9.20-9.22.
     δu = 0.5f0 * (abs(tfc.dudx) + abs(tfc.dudy))
     δu == 0f0 && (δu = BUMP_DEFAULT_DELTA)
     δv = 0.5f0 * (abs(tfc.dvdx) + abs(tfc.dvdy))
@@ -86,52 +98,46 @@ Return a perturbed shading normal and tangent from height-field gradient.
     dhdu = (hu - h0) / δu
     dhdv = (hv - h0) / δv
 
-    # Reconstruct the binormal the same way the volpath integrator does.
-    dpdvs = cross(ns, dpdus)
+    # pbrt-v4 materials.h:BumpMap eq. 9.20 — uses unnormalized dpdu/dpdv directly
+    dpdu_p = dpdu + dhdu * ns + h0 * dndu
+    dpdv_p = dpdv + dhdv * ns + h0 * dndv
 
-    dpdu_p = dpdus + dhdu * ns
-    dpdv_p = dpdvs + dhdv * ns
-
+    # pbrt-v4 interaction.cpp:184-187 — `Normal3f ns(Normalize(Cross(dpdu, dpdv)))`
+    # then `SetShadingGeometry(ns, dpdu, dpdv, ..., false)`, which inside
+    # SetShadingGeometry runs `shading.n = FaceForward(shading.n, n)` — i.e.
+    # flips the new bumped normal so it sits on the same side of the surface
+    # as the GEOMETRIC normal (`n`), not the interpolated `shading.n`.
     n_p_raw = cross(dpdu_p, dpdv_p)
     n_len = sqrt(dot(n_p_raw, n_p_raw))
-    n_p = n_len > 0f0 ? n_p_raw / n_len : ns
-    # Preserve original normal hemisphere (matches pbrt-v4's FaceForward).
-    if dot(n_p, ns) < 0f0
-        n_p = -n_p
+    n_p = n_len > 1f-10 ? n_p_raw / n_len : ns
+    if dot(n_p, ng) < 0f0
+        n_p = -n_p   # FaceForward(bumped_ns, geometric_n)
     end
-
-    # Re-orthonormalize the tangent against the new normal so dpdus stays
-    # perpendicular to ns (the convention every Hikari BSDF expects).
-    dpdus_p = dpdu_p - n_p * dot(n_p, dpdu_p)
-    len_t = sqrt(dot(dpdus_p, dpdus_p))
-    dpdus_out = len_t > 1f-8 ? dpdus_p / len_t : dpdus
-
-    return n_p, dpdus_out
+    # Hikari's BSDFs build their local frame from (ns, dpdus) via
+    # shading_frame, which Gram-Schmidts internally; pbrt-v4 does the same
+    # in BSDFFrame::FromXZ. So we hand back the raw bumped tangent — no
+    # extra orthonormalization, matching pbrt-v4 exactly.
+    return n_p, dpdu_p
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BSDF dispatch overrides — perturb the frame, then delegate
+# BSDF dispatch — pure passthrough to the inner material. The bump
+# perturbation is now applied at intersection time by
+# `get_perturbed_shading_frame` (see dispatch.jl). Doing it here as well
+# would double-apply the height-field gradient on every sample/evaluate.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@propagate_inbounds function sample_bsdf_spectral(
+@propagate_inbounds sample_bsdf_spectral(
     mat::BumpMapped, table::RGBToSpectrumTable, materials,
     wo::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
     lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
-)
-    ns_p, dpdus_p = perturb_bump_frame(mat.bump, materials, ns, dpdus, tfc)
-    return sample_bsdf_spectral(mat.inner, table, materials,
-                                wo, ns_p, dpdus_p, tfc,
-                                lambda, sample_u, rng, regularize)
-end
+    regularize::Bool = false,
+) = sample_bsdf_spectral(mat.inner, table, materials, wo, ns, dpdus, tfc,
+                         lambda, sample_u, rng, regularize)
 
-@propagate_inbounds function evaluate_bsdf_spectral(
+@propagate_inbounds evaluate_bsdf_spectral(
     mat::BumpMapped, table::RGBToSpectrumTable, materials,
     wo::Vec3f, wi::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, regularize::Bool = false
-)
-    ns_p, dpdus_p = perturb_bump_frame(mat.bump, materials, ns, dpdus, tfc)
-    return evaluate_bsdf_spectral(mat.inner, table, materials,
-                                  wo, wi, ns_p, dpdus_p, tfc,
-                                  lambda, regularize)
-end
+    lambda::Wavelengths, regularize::Bool = false,
+) = evaluate_bsdf_spectral(mat.inner, table, materials, wo, wi, ns, dpdus, tfc,
+                           lambda, regularize)

@@ -239,7 +239,13 @@ function parse_pbrt_string(text::AbstractString;
             eye = Point3f(vals[1], vals[2], vals[3])
             target = Point3f(vals[4], vals[5], vals[6])
             up = Vec3f(vals[7], vals[8], vals[9])
-            ctm = pbrt_lookat(eye, target, up)
+            # pbrt-v4 BasicSceneBuilder::LookAt CONCATENATES onto the CTM
+            # rather than replacing it, so a leading `Scale -1 1 1` (Crown's
+            # X-mirror at the top of crown.pbrt) propagates into the camera
+            # transform. Without this multiplication Hikari silently dropped
+            # the X-flip and rendered Crown horizontally mirrored vs the
+            # pbrt-v4 reference EXR.
+            ctm = ctm * pbrt_lookat(eye, target, up)
 
         elseif word == "Translate"
             x = Float32(parse(Float64, expect!(ts, TOK_NUMBER).value))

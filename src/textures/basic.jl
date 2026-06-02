@@ -15,23 +15,39 @@ end
 
 Base.zero(::Type{RGBSpectrum}) = RGBSpectrum(0.0f0, 0.0f0, 0.0f0, 1.0f0)
 
-# Sample texture data array with UV flip (standard texture coordinate convention).
-# dim 1 (row): uv_adj[1] = 1-v (inverted). Use ceil so that v=k/N maps to the row whose
-#              rasterization center is just ABOVE the boundary (same checker cell as pbrt).
-# dim 2 (col): uv_adj[2] = u (non-inverted). Use floor+1 for the same reason.
-# Both formulas ensure pixel i covers [i-1, i) in the respective scaled coordinate.
+# Sample texture data array with bilinear interpolation. pbrt-v4 uses
+# bilinear (and mipmap-trilinear) by default for imagemap textures. Without
+# at least bilinear the BumpMap function sees `h(u+du) == h(u)` whenever
+# du is sub-texel, which left Crown's gold dome with coherent mirror
+# reflections because the bump gradient came out as exactly zero.
 #
-# Out-of-[0,1] UVs wrap (pbrt ImageMap default is "repeat" — see pbrt-v4/src/pbrt/
-# textures.cpp::ImageTexture). `mod(x, 1)` handles negative u/v as well.
+# UV convention matches the prior nearest-neighbour version (dim 1 is
+# 1-v, dim 2 is u, repeat wrap via `frac`).
 @propagate_inbounds function sample_texture_data(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
     u_wrapped = uv[1] - floor(uv[1])
     v_wrapped = uv[2] - floor(uv[2])
-    uv_adj = Vec2f(1f0 - v_wrapped, u_wrapped)
-    s = unsafe_trunc.(Int32, size(data))
-    # dim 1 uses ceil (inverted direction), dim 2 uses floor+1 (non-inverted)
-    row = clamp(unsafe_trunc(Int32, ceil(s[1] * uv_adj[1])), Int32(1), s[1])
-    col = clamp(unsafe_trunc(Int32, floor(s[2] * uv_adj[2])) + Int32(1), Int32(1), s[2])
-    return data[row, col]
+    s = size(data)
+    # Convert wrapped UV into fractional texel-space coordinates. The 0.5
+    # offset puts (0,0) at the centre of texel (1,1) so the bilinear
+    # weights cleanly span the four surrounding texels.
+    fx = (1f0 - v_wrapped) * Float32(s[1]) - 0.5f0
+    fy = u_wrapped * Float32(s[2]) - 0.5f0
+    ix = floor(fx); iy = floor(fy)
+    tx = fx - ix;   ty = fy - iy
+    # Repeat wrap on the integer indices too (-1 → s, s → 1).
+    row0 = mod(Int(ix),   s[1]) + 1
+    row1 = mod(Int(ix)+1, s[1]) + 1
+    col0 = mod(Int(iy),   s[2]) + 1
+    col1 = mod(Int(iy)+1, s[2]) + 1
+    @inbounds v00 = data[row0, col0]
+    @inbounds v10 = data[row1, col0]
+    @inbounds v01 = data[row0, col1]
+    @inbounds v11 = data[row1, col1]
+    w00 = (1f0 - tx) * (1f0 - ty)
+    w10 = tx * (1f0 - ty)
+    w01 = (1f0 - tx) * ty
+    w11 = tx * ty
+    return v00 * w00 + v10 * w10 + v01 * w01 + v11 * w11
 end
 
 # 0-dim arrays are scalar constants - just return the value, no UV sampling

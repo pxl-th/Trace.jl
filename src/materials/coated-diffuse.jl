@@ -103,11 +103,11 @@ function CoatedDiffuse(;
     n_samples::Int = 1,
     remap_roughness::Bool = true
 )
-    # Handle roughness - can be scalar or (u,v) tuple
+    # Handle roughness - can be scalar, (u,v) tuple, or Texture{Float32}
     u_rough, v_rough = if roughness isa Tuple
-        Float32(roughness[1]), Float32(roughness[2])
+        roughness[1], roughness[2]
     else
-        Float32(roughness), Float32(roughness)
+        roughness, roughness
     end
 
     CoatedDiffuse(

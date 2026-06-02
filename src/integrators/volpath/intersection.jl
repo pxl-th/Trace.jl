@@ -109,6 +109,47 @@ Following pbrt-v4's Triangle::InteractionFromIntersection.
 end
 
 """
+    vp_compute_normal_derivatives(primitive) -> (dndu, dndv)
+
+Per-triangle shading-normal derivatives — pbrt-v4 BumpMap needs these to
+correctly perturb the shading frame on curved surfaces. The bump formula
+adds a `displace * dndu` term (eq. 9.20); skipping it makes the perturbation
+cancel out across surface curvature, which leaves the Crown's gold dome
+looking flat-smooth instead of engraved.
+
+Same Cramer's-rule layout as `vp_compute_partial_derivatives` but on vertex
+normals rather than vertex positions. Returns zero vectors if the triangle's
+UV mapping is degenerate.
+"""
+@propagate_inbounds function vp_compute_normal_derivatives(primitive)
+    n0 = primitive.normals[1]
+    n1 = primitive.normals[2]
+    n2 = primitive.normals[3]
+    uv0 = primitive.uv[1]
+    uv1 = primitive.uv[2]
+    uv2 = primitive.uv[3]
+
+    if isnan(n0[1]) || isnan(n1[1]) || isnan(n2[1])
+        return Vec3f(0f0, 0f0, 0f0), Vec3f(0f0, 0f0, 0f0)
+    end
+
+    δuv_10 = uv1 - uv0
+    δuv_20 = uv2 - uv0
+    δn_10 = Vec3f(n1[1] - n0[1], n1[2] - n0[2], n1[3] - n0[3])
+    δn_20 = Vec3f(n2[1] - n0[1], n2[2] - n0[2], n2[3] - n0[3])
+
+    det = δuv_10[1] * δuv_20[2] - δuv_10[2] * δuv_20[1]
+    if abs(det) < 1f-8
+        return Vec3f(0f0, 0f0, 0f0), Vec3f(0f0, 0f0, 0f0)
+    end
+
+    inv_det = 1f0 / det
+    dndu = (δuv_20[2] * δn_10 - δuv_10[2] * δn_20) * inv_det
+    dndv = (-δuv_20[1] * δn_10 + δuv_10[1] * δn_20) * inv_det
+    return dndu, dndv
+end
+
+"""
     vp_compute_shading_tangents(primitive, barycentric, ns, dpdu, dpdv) -> (dpdus, dpdvs)
 
 Compute shading tangent vectors from vertex tangents or geometric derivatives.
@@ -226,7 +267,9 @@ end
     hit_surface_queue,
     accel,
     media_interfaces,
-    materials
+    materials,
+    camera,
+    samples_per_pixel::Int32,
 )
     # Check if ray is currently traveling through a medium
     if has_medium(work.medium_idx)
@@ -240,10 +283,32 @@ end
 
             geom = vp_compute_surface_geometry(primitive, barycentric, work.ray.o, work.ray.d, t_hit)
 
+            # Apply BumpMap perturbation here so the path integrator (cos
+            # factors, MIS, direct lighting) sees the bumped shading frame.
+            # Without this, BumpMapped only patched the BSDF interior and the
+            # cos_theta = dot(wi, ns) in surface-eval.jl still used the raw
+            # interpolated normal, hiding the bump on mirror conductors.
+            #
+            # Use real ray differentials (pbrt-v4 ComputeDifferentials): the
+            # screen-space (u,v) derivatives give BumpMap a per-pixel UV
+            # footprint instead of the BUMP_DEFAULT_DELTA fallback. Without
+            # this, sub-texel sampling produced extreme `dhdu` values that
+            # collapsed the BSDF's shading frame and left coherent mirror
+            # reflections on the bumped gold panels.
+            dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
+            dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+            tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
+            dndu, dndv = vp_compute_normal_derivatives(primitive)
+            ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
+                                                       geom.ns, geom.dpdus,
+                                                       geom.dpdu, geom.dpdv,
+                                                       dndu, dndv, geom.n, tfc_bump)
+            dpdvs_b = cross(ns_b, dpdus_b)
+
             push!(medium_sample_queue, VPMediumSampleWorkItem(
                 work, t_hit,
                 geom.pi, geom.n, geom.dpdu, geom.dpdv,
-                geom.ns, geom.dpdus, geom.dpdvs,
+                ns_b, dpdus_b, dpdvs_b,
                 geom.uv, mat_idx, mi,
                 primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
                 primitive.metadata.arealight_flat_idx, Raycore.area(primitive)
@@ -287,10 +352,21 @@ end
             # Valid surface hit - compute geometry and push to queue
             geom = vp_compute_surface_geometry(primitive, barycentric, ray.o, ray.d, t_hit)
 
+            # See identical block in the medium branch above — the bump
+            # perturbation must happen here, not inside BumpMapped's BSDF
+            # wrapper, so cos factors downstream use the bumped normal.
+            tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
+            dndu, dndv = vp_compute_normal_derivatives(primitive)
+            ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
+                                                       geom.ns, geom.dpdus,
+                                                       geom.dpdu, geom.dpdv,
+                                                       dndu, dndv, geom.n, tfc_bump)
+            dpdvs_b = cross(ns_b, dpdus_b)
+
             push!(hit_surface_queue, VPHitSurfaceWorkItem(
                 work,
                 geom.pi, geom.n, geom.dpdu, geom.dpdv,
-                geom.ns, geom.dpdus, geom.dpdvs,
+                ns_b, dpdus_b, dpdvs_b,
                 geom.uv, mat_idx, mi,
                 primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
                 primitive.metadata.arealight_flat_idx, Raycore.area(primitive),
@@ -303,7 +379,8 @@ end
 end
 
 # 4-arg version: software BVH (original implementation)
-function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials)
+function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials,
+                       camera, samples_per_pixel::Int32)
     input_queue = current_ray_queue(state)
     foreach(vp_trace_rays_kernel!,
         input_queue,
@@ -313,6 +390,8 @@ function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials)
         accel,
         media_interfaces,
         materials,
+        camera,
+        samples_per_pixel,
     )
     return nothing
 end
