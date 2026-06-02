@@ -627,16 +627,16 @@ function render!(
             vp_handle_escaped_rays!(state, lights)
         end
 
-        # Surface hits — all dispatches use indirect (empty queues = no-op)
-        vp_process_surface_hits!(state, materials, lights)
-
-        if length(lights) > 0
-            vp_sample_surface_direct_lighting!(state, materials, lights, camera, Int32(vp.samples_per_pixel), vp.regularize)
-        end
+        # Surface hits + direct lighting + BSDF sample + RR — fused into one
+        # dispatch. `vp_shade_surface_hits!` was three kernels (process_hits,
+        # sample_direct_lighting, evaluate_materials) ping-ponged through the
+        # intermediate `material_queue`. Fusion bypasses that queue (≈170 MB
+        # less memory traffic on a 1.4M-pixel bounce 0) and saves two
+        # dispatch+barrier cycles per bounce.
+        vp_shade_surface_hits!(state, materials, lights, camera,
+                               Int32(vp.samples_per_pixel), vp.regularize)
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
-
-        vp_evaluate_materials!(state, materials, camera, Int32(vp.samples_per_pixel), vp.regularize)
 
         swap_ray_queues!(state)
     end

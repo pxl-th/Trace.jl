@@ -629,3 +629,138 @@ function vp_evaluate_materials!(state::VolPathState, materials, camera, samples_
     )
     return nothing
 end
+
+# ============================================================================
+# Fused Surface Shading Kernel
+# ============================================================================
+#
+# Fuses `vp_process_surface_hits` + `vp_sample_surface_direct_lighting` +
+# `vp_evaluate_materials` into a single dispatch. Each thread reads one
+# `VPHitSurfaceWorkItem`, computes wo + material_idx, accumulates emission,
+# then drives both `surface_direct_lighting_inner!` (pushes shadow ray) and
+# `evaluate_material_inner!` (pushes continuation ray) with a stack-local
+# `VPMaterialEvalWorkItem`. The intermediate `material_queue` is bypassed,
+# eliminating ~170 MB of memory traffic per bounce on a 1.4M-pixel scene.
+
+@propagate_inbounds function vp_shade_surface_hits_kernel!(
+    work,
+    next_ray_queue,
+    shadow_queue,
+    pixel_L,
+    materials,
+    lights,
+    rgb2spec_table,
+    bvh_nodes,
+    infinite_light_indices,
+    light_to_bit_trail,
+    num_infinite_lights::Int32,
+    num_bvh_lights::Int32,
+    num_lights::Int32,
+    max_depth::Int32,
+    do_regularize::Bool,
+    pixel_samples_direct_uc, pixel_samples_direct_u,
+    pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+    camera,
+    samples_per_pixel::Int32,
+    rr_depth::Int32,
+)
+    wo = -work.ray.d
+
+    material_idx = resolve_mix_material(
+        materials, work.material_idx,
+        work.pi, wo, work.uv
+    )
+
+    # ── HandleEmissiveIntersection (was vp_process_surface_hits) ──
+    if work.arealight_flat_idx > UInt32(0)
+        light_idx = flat_to_light_index(lights, Int32(work.arealight_flat_idx))
+        Le = with_index(arealight_Le, lights, light_idx,
+            lights, rgb2spec_table, wo, Vec3f(work.n), work.uv, work.lambda
+        )
+
+        if !is_black(Le)
+            contribution = work.beta * Le
+            final_contrib = if work.depth == Int32(0) || work.specular_bounce
+                contribution / average(work.r_u)
+            else
+                lightChoicePDF = bvh_pmf(
+                    bvh_nodes, light_to_bit_trail,
+                    num_infinite_lights, num_bvh_lights,
+                    work.prev_intr_p, work.prev_intr_n, Int32(work.arealight_flat_idx)
+                )
+                cos_theta = abs(dot(work.n, normalize(work.ray.d)))
+                lightPDF = if cos_theta > 0f0 && work.triangle_area > 0f0
+                    pdf_li = (work.t_hit * work.t_hit) / (cos_theta * work.triangle_area)
+                    lightChoicePDF * pdf_li
+                else
+                    0f0
+                end
+                r_l = work.r_l * lightPDF
+                mis_denom = average(work.r_u + r_l)
+                if mis_denom > 1f-10
+                    contribution / mis_denom
+                else
+                    contribution / average(work.r_u)
+                end
+            end
+
+            pixel_idx = work.pixel_index
+            base_idx = (pixel_idx - Int32(1)) * Int32(4)
+            accumulate_spectrum!(pixel_L, base_idx, final_contrib)
+        end
+    end
+
+    # Synthesize stack-local material eval work item. This is the same shape
+    # that used to be pushed into `material_queue` and re-read by both kernels.
+    mat_work = VPMaterialEvalWorkItem(work, wo, material_idx)
+
+    # ── Direct lighting (was vp_sample_surface_direct_lighting) ──
+    surface_direct_lighting_inner!(
+        shadow_queue,
+        mat_work, materials, lights, rgb2spec_table,
+        bvh_nodes, infinite_light_indices,
+        num_infinite_lights, num_bvh_lights, num_lights,
+        pixel_samples_direct_uc, pixel_samples_direct_u,
+        camera, samples_per_pixel,
+        do_regularize,
+    )
+
+    # ── BSDF sample + RR + push continuation (was vp_evaluate_materials) ──
+    evaluate_material_inner!(
+        next_ray_queue,
+        mat_work, materials, rgb2spec_table, max_depth,
+        do_regularize,
+        pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+        camera, samples_per_pixel,
+        rr_depth,
+    )
+    return
+end
+
+function vp_shade_surface_hits!(state::VolPathState, materials, lights,
+                                camera, samples_per_pixel::Int32,
+                                regularize::Bool = true)
+    pixel_samples = state.pixel_samples
+    foreach(vp_shade_surface_hits_kernel!,
+        state.hit_surface_queue,
+        next_ray_queue(state),
+        state.shadow_queue,
+        state.pixel_L,
+        materials,
+        lights,
+        state.rgb2spec_table,
+        state.bvh_nodes,
+        state.infinite_light_indices,
+        state.light_to_bit_trail,
+        state.num_infinite_lights,
+        state.num_bvh_lights,
+        state.num_lights,
+        state.max_depth,
+        regularize,
+        pixel_samples.direct_uc, pixel_samples.direct_u,
+        pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
+        camera, samples_per_pixel,
+        state.rr_depth,
+    )
+    return nothing
+end
