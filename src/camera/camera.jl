@@ -6,6 +6,17 @@ struct CameraCore
     shutter_close::Float32
 end
 
+# Does this camera need a per-ray time sample?  Only motion-blur cameras do
+# (shutter_open != shutter_close).  Used by the volpath camera-ray kernel to
+# skip a Sobol dimension when not needed — see compute_pixel_sample's 6-arg
+# overload in sampler/sobol.jl.  Default true (conservative); concrete
+# camera types override.
+camera_uses_motion_blur(::Camera) = true
+
+# Does this camera need a per-ray lens sample?  Only depth-of-field cameras
+# do (lens_radius > 0).  Same skip-when-not-needed pattern as above.
+camera_uses_lens(::Camera) = true
+
 struct CameraSample
     """
     Point on the film the ray passes through.

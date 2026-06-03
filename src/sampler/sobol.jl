@@ -422,6 +422,35 @@ Returns a PixelSample struct with jitter, wavelength, lens, and time samples.
 end
 
 """
+    compute_pixel_sample(rng, px, py, sample_idx, needs_time, needs_lens)
+
+Same as the 4-arg version but skips Sobol calls for dimensions the camera
+doesn't actually use.  Pinhole cameras (lens_radius == 0) ignore lens
+samples; no-motion-blur shutters (shutter_open == shutter_close) ignore
+time.  Per-kernel timing showed `vp_generate_camera_rays_kernel!` was
+77 % of GPU on killeroo, almost all of it Sobol; skipping the two unused
+dimensions on a pinhole-no-motion camera halves that work.
+
+`needs_time` / `needs_lens` are passed as runtime `Bool`s but the
+branches are uniform across the warp (whole render shares one camera),
+so the compiler can hoist them out of the inner sampling loops.
+Dimensions still match pbrt-v4 (1 / 3 / 4 / 6) so the sample stream
+for the kept dimensions is byte-identical to the 4-arg version.
+"""
+@inline function compute_pixel_sample(rng::SobolRNG, px::Int32, py::Int32, sample_idx::Int32,
+                                       needs_time::Bool, needs_lens::Bool)
+    wavelength_u = sample_1d(rng, px, py, sample_idx, Int32(1))
+    jitter_x, jitter_y = sample_2d(rng, px, py, sample_idx, Int32(3))
+    time = needs_time ? sample_1d(rng, px, py, sample_idx, Int32(4)) : 0f0
+    if needs_lens
+        lens_u, lens_v = sample_2d(rng, px, py, sample_idx, Int32(6))
+    else
+        lens_u = 0f0; lens_v = 0f0
+    end
+    return PixelSample(jitter_x, jitter_y, wavelength_u, lens_u, lens_v, time)
+end
+
+"""
     compute_path_sample_1d(rng::SobolRNG, px::Int32, py::Int32, sample_idx::Int32, depth::Int32, local_dim::Int32) -> Float32
 
 Compute a 1D sample for path tracing at a given depth using SobolRNG.

@@ -96,6 +96,14 @@ function PerspectiveCamera(eyepos, lookat, film; up=Vec3f(0, 1, 0), fov=55)
     )
 end
 
+# Camera effects accessors used by `vp_generate_camera_rays_kernel!` to
+# decide which Sobol dimensions to compute.  Pinhole + frozen shutter is
+# the common case (no DoF, no motion blur), and that's what the four
+# benchmark scenes use, so the camera-ray kernel can skip the lens 2D and
+# time 1D Sobol samples entirely.
+camera_uses_motion_blur(c::PerspectiveCamera) = c.core.core.shutter_close > c.core.core.shutter_open
+camera_uses_lens(c::PerspectiveCamera) = c.core.lens_radius > 0f0
+
 @propagate_inbounds function generate_ray(
         camera::PerspectiveCamera, sample::CameraSample,
     )::Tuple{Ray,Float32}

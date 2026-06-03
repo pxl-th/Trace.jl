@@ -191,6 +191,8 @@ Following pbrt-v4's GetCameraSample: samples the filter, computes offset and wei
     filter_weight_per_pixel,
     @Const(height::Int32),
     @Const(camera),
+    @Const(camera_needs_time::Bool),  # camera.shutter_open != shutter_close
+    @Const(camera_needs_lens::Bool),  # camera.lens_radius > 0
     @Const(sample_idx::Int32),
     @Const(initial_medium_idx),
     @Const(filter_params::GPUFilterParams),
@@ -206,8 +208,14 @@ Following pbrt-v4's GetCameraSample: samples the filter, computes offset and wei
         y = u_int32(div(pixel_idx, rng.width)) + Int32(1)
 
         # ZSobol sampling: deterministic low-discrepancy samples based on (pixel, sample_index)
-        # Matches PBRT-v4's ZSobolSampler for better convergence
-        pixel_sample = compute_pixel_sample(rng, Int32(x), Int32(y), sample_idx)
+        # Matches PBRT-v4's ZSobolSampler for better convergence.  Skip the
+        # lens 2D sample for pinhole cameras and the time 1D sample for
+        # shutter-stopped cameras — both are pure waste on those configs
+        # and the camera-ray kernel is Sobol-bound.  Effects flags come
+        # from the kernel arguments (computed CPU-side) so the GPU code
+        # path is just two uniform branches, not a getproperty chain.
+        pixel_sample = compute_pixel_sample(rng, Int32(x), Int32(y), sample_idx,
+                                            camera_needs_time, camera_needs_lens)
         wavelength_u = pixel_sample.wavelength_u
 
         # Sample the filter to get offset and weight (pbrt-v4 style)
@@ -503,12 +511,18 @@ function render!(
     end
     filter_sampler_data_gpu = vp.filter_sampler_gpu
 
+    # Compute camera effects flags CPU-side so the kernel doesn't have to
+    # walk getproperty chains into Camera.core.shutter_*.  These are uniform
+    # across all pixels of the render.
+    camera_needs_time = camera_uses_motion_blur(camera)
+    camera_needs_lens = camera_uses_lens(camera)
     kernel! = vp_generate_camera_rays_kernel!(backend)
     kernel!(
         current_ray_queue(state),  # WorkQueue passed via Adapt
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
         Int32(height),
-        camera, sample_idx, initial_medium, vp.filter_params,
+        camera, camera_needs_time, camera_needs_lens,
+        sample_idx, initial_medium, vp.filter_params,
         filter_sampler_data_gpu,
         sobol_rng;
         ndrange=Int(n_pixels)
