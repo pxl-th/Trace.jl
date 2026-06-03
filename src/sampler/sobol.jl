@@ -207,11 +207,19 @@ ensuring good sample distribution across pixels while maintaining low-discrepanc
     last_digit = pow2_flag
     pow2_adjust = pow2_flag
 
-    # Regular for loop — CUDA compiler selects optimal unroll factor.
-    # 32 iterations covers up to 64-bit Morton codes.
-    for iter0 in Int32(0):Int32(31)
-        i = n_base4_digits - Int32(1) - iter0
-
+    # Match pbrt-v4 (samplers.h:336 `for (int i = nBase4Digits - 1; i >= lastDigit; --i)`):
+    # iterate over EXACTLY the base-4 digits that exist for this scene, not
+    # the hard-coded 32 (= worst-case 64-bit Morton).  For our benchmark
+    # scenes nBase4Digits is ~14 (1368×1026 + 32 spp on killeroo:
+    # log2(1368)=11, log4(spp)=3, so 14).  The old loop did all 32 with the
+    # high-i iterations masked out via `apply_mask` — but the masked-out
+    # iterations still executed mix_bits + lookup_permutation, which is
+    # most of the per-iter cost.  Killing those drops the iteration count
+    # and the wasted compute by ~55 %.  Loop bound is uniform across the
+    # warp (kernel-wide `n_base4_digits`), so branch prediction is perfect
+    # and SPIR-V can still pipeline / partially unroll.
+    i = n_base4_digits - Int32(1)
+    @inbounds while i >= last_digit
         # Branchless max to ensure digit_shift >= 0
         raw_shift = Int32(2) * i - pow2_adjust
         digit_shift = branchless_max_i32(Int32(0), raw_shift)
@@ -224,13 +232,11 @@ ensuring good sample distribution across pixels while maintaining low-discrepanc
         hash_val = mix_bits(higher_digits ⊻ (UInt64(0x55555555) * u_uint64(dimension)))
         p = u_int32((hash_val >> 24) % UInt64(24)) + Int32(1)  # 1-indexed
 
-        # Branchless permutation lookup
+        # Permutation lookup
         permuted_digit = lookup_permutation(matrices, p, digit)
+        sample_index |= permuted_digit << digit_shift
 
-        # Branchless conditional: only apply if i >= last_digit
-        # Create mask: all 1s if i >= last_digit, all 0s otherwise
-        apply_mask = UInt64(u_int32(i >= last_digit)) * UInt64(0xffffffffffffffff)
-        sample_index |= (permuted_digit << digit_shift) & apply_mask
+        i -= Int32(1)
     end
 
     # Handle power-of-2 (but not power-of-4) sample count
