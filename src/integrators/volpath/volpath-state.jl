@@ -7,10 +7,29 @@ import KernelAbstractions as KA
 # SOA Override for VolPath Work Items
 # ============================================================================
 
-# Override should_use_soa for VolPath work items that benefit from SOA layout
+# Override should_use_soa for VolPath work items that benefit from SOA layout.
+#
+# pbrt-v4's wavefront integrator declares its work items in a .soa DSL
+# (wavefront/workitems.soa) that the build system expands into per-field
+# SOA<T> templates. The reason: every queue is large enough (≥ scene-pixel-
+# count entries) and each shading kernel reads many fields out of each work
+# item across many threads — the AOS stride wastes most of the memory
+# bandwidth on cache lines whose other fields the warp doesn't need this
+# pass. SOA fixes this by giving each field its own coalesced array.
+#
+# The big items (≥ 64 B) are the ones where the bandwidth difference shows
+# up at render scale. The defaults below cover every queue that's heavy
+# enough to matter: the two ray queues, surface-hit, material-eval, shadow,
+# escaped, and the two medium queues. Trait dispatch is read by
+# `WorkQueue{T}(backend, capacity)` which defaults `soa=should_use_soa(T)` —
+# so flagging a new work-item type here is sufficient to opt it in.
 should_use_soa(::Type{VPRayWorkItem}) = true
 should_use_soa(::Type{VPShadowRayWorkItem}) = true
 should_use_soa(::Type{VPEscapedRayWorkItem}) = true
+should_use_soa(::Type{VPHitSurfaceWorkItem}) = true
+should_use_soa(::Type{VPMaterialEvalWorkItem}) = true
+should_use_soa(::Type{VPMediumSampleWorkItem}) = true
+should_use_soa(::Type{VPMediumScatterWorkItem}) = true
 should_use_soa(::Type{VPRaySamples}) = true
 
 # ============================================================================

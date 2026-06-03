@@ -99,16 +99,20 @@ function free!(queue::WorkQueue)
 end
 
 """
-    WorkQueue{T}(backend, capacity; soa=false)
+    WorkQueue{T}(backend, capacity; soa=should_use_soa(T))
 
 Create a new work queue with the given capacity on the specified backend.
 
 # Arguments
 - `backend`: KernelAbstractions backend (e.g., `CPU()`, `CUDABackend()`, `ROCBackend()`)
 - `capacity`: Maximum number of items the queue can hold
-- `soa`: If true, use Structure-of-Arrays layout for better GPU memory coalescing
+- `soa`: If true, use Structure-of-Arrays layout for better GPU memory coalescing.
+  Defaults to `should_use_soa(T)` so flagged item types automatically get the
+  faster layout without every caller having to remember the kwarg. (Before
+  this default was wired up, the trait was set on `VPRayWorkItem` and friends
+  but never actually read — every queue was AOS regardless.)
 """
-function WorkQueue{T}(backend, capacity::Integer; soa::Bool=false) where T
+function WorkQueue{T}(backend, capacity::Integer; soa::Bool=should_use_soa(T)) where T
     items = allocate_array(backend, T, capacity; soa=soa)
     size = KA.allocate(backend, Int32, 1)
     KA.fill!(size, Int32(0))
