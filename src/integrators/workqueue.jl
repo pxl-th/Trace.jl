@@ -212,6 +212,90 @@ function Base.foreach(f, queue::WorkQueue, args...; workgroupsize=DEFAULT_WORKGR
 end
 
 # ============================================================================
+# MultiTypeWorkQueue — one WorkQueue per concrete item type
+# ============================================================================
+#
+# Mirrors pbrt-v4's per-material-type queue pattern (MaterialEvalQueue<T> in
+# wavefront/workitems.h). One `WorkQueue{ItemFor[T]}` per concrete type T in
+# the scene. The trace kernel routes each work item into the queue for its
+# concrete type via `with_index` dispatch; the consumer drains *all* of them
+# with `foreach_type`, which lowers to one indirect dispatch per type into
+# the active Lava command buffer.
+#
+# Each per-type kernel is fully monomorphised by Julia (no `with_index`
+# switch inside the kernel), so the resulting SPIR-V is small and the warps
+# never diverge on material-type branches.
+#
+# On Lava the N dispatches naturally serialise via the existing per-dispatch
+# barriers. Wrapping the loop in `Lava.concurrent_dispatch_group()` (see
+# Lava commit eefc75c) suppresses the inter-dispatch barriers so independent
+# per-type kernels run concurrently on idle SMs — verified to give up to
+# ~3× wall-clock speedup on small dispatches that don't saturate the GPU.
+
+"""
+    MultiTypeWorkQueue{Qs <: Tuple}
+
+Heterogeneous tuple of `WorkQueue`s, one per concrete item type. Iteration
+order matches the type-tuple order. Compile-time-known number of queues, so
+`foreach_type` unrolls cleanly via `Base.foreach(::Tuple)` (which lowers to
+`afoldl`) with full type stability per arm.
+
+# Fields
+- `queues::Qs`: NTuple of WorkQueue, one per concrete item type
+"""
+struct MultiTypeWorkQueue{Qs <: Tuple}
+    queues::Qs
+end
+
+"""
+    MultiTypeWorkQueue(item_types::Tuple, capacity, backend; soa=false)
+
+Build a MultiTypeWorkQueue with one `WorkQueue{T}(backend, capacity)` per `T`
+in `item_types`.
+
+```julia
+mtwq = MultiTypeWorkQueue((HitWorkA, HitWorkB, HitWorkC), 1024, backend)
+```
+"""
+function MultiTypeWorkQueue(item_types::Tuple, capacity::Integer, backend; soa::Bool=false)
+    qs = map(T -> WorkQueue{T}(backend, capacity; soa=soa), item_types)
+    return MultiTypeWorkQueue(qs)
+end
+
+function free!(mtwq::MultiTypeWorkQueue)
+    foreach(free!, mtwq.queues)
+    return nothing
+end
+
+Base.empty!(mtwq::MultiTypeWorkQueue) = (foreach(empty!, mtwq.queues); mtwq)
+
+# Adapt walks into the tuple so each per-queue Adapt.adapt_structure runs
+# and the kernel sees device-side arrays.
+function Adapt.adapt_structure(backend, mtwq::MultiTypeWorkQueue)
+    MultiTypeWorkQueue(map(q -> Adapt.adapt(backend, q), mtwq.queues))
+end
+
+"""
+    foreach_type(kernel!, mtwq::MultiTypeWorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
+
+Dispatch `kernel!` once per queue in `mtwq`, indirect-dispatched on each
+queue's GPU-resident size buffer. Julia unrolls the tuple loop at compile
+time (via `Base.foreach(::Tuple) → afoldl`) and the kernel is monomorphised
+per concrete item type, so each arm compiles to a separate small SPIR-V
+module with no `with_index` switch inside.
+
+Per-dispatch barriers between the per-type kernels serialise them on the
+GPU. Wrap the call in `Lava.concurrent_dispatch_group(...) do ... end` to
+let them overlap when they're independent (different output queues, or
+shared output via atomic-claimed slots).
+"""
+@inline function foreach_type(kernel!, mtwq::MultiTypeWorkQueue, args...;
+                              workgroupsize=DEFAULT_WORKGROUPSIZE)
+    foreach(q -> foreach(kernel!, q, args...; workgroupsize=workgroupsize), mtwq.queues)
+    return nothing
+end
+
+# ============================================================================
 # Convenience Aliases
 # ============================================================================
 
