@@ -607,8 +607,17 @@ function render!(
         vp_generate_ray_samples!(backend, state, sample_idx, Int32(depth), sobol_rng)
 
         reset_iteration_queues!(state)
-        vp_trace_rays!(state, accel, media_interfaces, materials,
-                       camera, Int32(vp.samples_per_pixel), vp)
+
+        # Trace + shade in one dispatch for non-medium rays. Medium rays still
+        # take the old path: the fused kernel pushes them to medium_sample_queue
+        # and the medium pipeline below drains it (and any medium-originated
+        # surface escapes onto `hit_surface_queue`, which `vp_shade_surface_hits!`
+        # handles after the medium kernels run). Surface-only scenes (the
+        # common case) bypass `hit_surface_queue` entirely — saves one dispatch
+        # + barrier per bounce plus ~170 MB of work-item materialization on a
+        # 1.4M-pixel render.
+        vp_trace_and_shade!(state, accel, media_interfaces, materials, lights,
+                            camera, Int32(vp.samples_per_pixel), vp.regularize)
 
         # Medium sampling — indirect dispatch handles empty queues (0 groups = no-op)
         if !isempty(media)
@@ -627,12 +636,11 @@ function render!(
             vp_handle_escaped_rays!(state, lights)
         end
 
-        # Surface hits + direct lighting + BSDF sample + RR — fused into one
-        # dispatch. `vp_shade_surface_hits!` was three kernels (process_hits,
-        # sample_direct_lighting, evaluate_materials) ping-ponged through the
-        # intermediate `material_queue`. Fusion bypasses that queue (≈170 MB
-        # less memory traffic on a 1.4M-pixel bounce 0) and saves two
-        # dispatch+barrier cycles per bounce.
+        # Surface hits originating from the medium delta-tracking path: when a
+        # ray inside a participating medium exits onto a surface, the medium
+        # kernels push a VPHitSurfaceWorkItem onto `hit_surface_queue` and
+        # this dispatch shades it. For surface-only scenes this kernel sees
+        # an empty queue (indirect dispatch → no-op).
         vp_shade_surface_hits!(state, materials, lights, camera,
                                Int32(vp.samples_per_pixel), vp.regularize)
 

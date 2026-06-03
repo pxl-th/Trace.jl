@@ -396,6 +396,173 @@ function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials,
     return nothing
 end
 
+# ============================================================================
+# Fused Trace+Shade Kernel
+# ============================================================================
+#
+# Collapses `vp_trace_rays_kernel!` + `vp_shade_surface_hits_kernel!` into a
+# single dispatch for non-medium rays. Each thread:
+#   1. If the ray is currently inside a medium, behave exactly like the old
+#      trace kernel — push to `medium_sample_queue` and let the medium
+#      pipeline handle it. (Medium-originated surface hits still flow
+#      through `hit_surface_queue` → `vp_shade_surface_hits!` after delta
+#      tracking; the medium half of the integrator is unchanged.)
+#   2. Otherwise, do the alpha-test ray-query loop, then drive the same
+#      `vp_shade_surface_hits_kernel!` body inline using a stack-local
+#      VPHitSurfaceWorkItem. This eliminates the `hit_surface_queue`
+#      materialise/re-read for the non-medium path — roughly 170 MB / bounce
+#      of memory traffic on a 1.4M-pixel render plus one dispatch + barrier
+#      per bounce.
+
+@propagate_inbounds function vp_trace_and_shade_kernel!(
+    work,
+    next_ray_queue, shadow_queue, escaped_queue, medium_sample_queue,
+    hit_surface_queue,                    # kept for max-alpha fallback (rare)
+    pixel_L,
+    accel, media_interfaces, materials, lights,
+    rgb2spec_table,
+    bvh_nodes, infinite_light_indices, light_to_bit_trail,
+    num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
+    max_depth::Int32, do_regularize::Bool,
+    pixel_samples_direct_uc, pixel_samples_direct_u,
+    pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+    camera,
+    samples_per_pixel::Int32,
+    rr_depth::Int32,
+)
+    # ─── Medium ray: trace and defer all shading to the medium pipeline ───
+    if has_medium(work.medium_idx)
+        hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, work.ray)
+
+        if hit
+            mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
+            mi = media_interfaces[mi_idx]
+            mat_idx = mi.material
+
+            geom = vp_compute_surface_geometry(primitive, barycentric, work.ray.o, work.ray.d, t_hit)
+
+            dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
+            dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+            tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
+            dndu, dndv = vp_compute_normal_derivatives(primitive)
+            ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
+                                                       geom.ns, geom.dpdus,
+                                                       geom.dpdu, geom.dpdv,
+                                                       dndu, dndv, geom.n, tfc_bump)
+            dpdvs_b = cross(ns_b, dpdus_b)
+
+            push!(medium_sample_queue, VPMediumSampleWorkItem(
+                work, t_hit,
+                geom.pi, geom.n, geom.dpdu, geom.dpdv,
+                ns_b, dpdus_b, dpdvs_b,
+                geom.uv, mat_idx, mi,
+                primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
+                primitive.metadata.arealight_flat_idx, Raycore.area(primitive)
+            ))
+        else
+            push!(medium_sample_queue, VPMediumSampleWorkItem(work))
+        end
+        return
+    end
+
+    # ─── Non-medium: trace + alpha-test + inline shade ───
+    ray = work.ray
+    for _ in 1:Int32(16)
+        hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, ray)
+
+        if !hit
+            push!(escaped_queue, VPEscapedRayWorkItem(work))
+            return
+        end
+
+        mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
+        mi = media_interfaces[mi_idx]
+        mat_idx = mi.material
+
+        uv = vp_compute_uv_barycentric(primitive, barycentric)
+        alpha = get_surface_alpha_dispatch(materials, mat_idx, uv)
+
+        if alpha < 1f0
+            rng = pcg32_init(pbrt_hash(ray.o), pbrt_hash(ray.d))
+            alpha_u, _ = pcg32_uniform_f32(rng)
+            if alpha_u > alpha
+                pi_pt = Point3f(ray.o + ray.d * t_hit)
+                n = vp_compute_geometric_normal(primitive)
+                offset = if dot(ray.d, n) > 0f0; n else; -n end
+                ray = Raycore.Ray(o=Point3f(pi_pt + offset * 1f-4), d=ray.d)
+                continue
+            end
+        end
+
+        # Valid surface hit — compute geometry + bump perturbation, then
+        # synthesize a stack-local VPHitSurfaceWorkItem and drive the
+        # shading kernel inline.
+        geom = vp_compute_surface_geometry(primitive, barycentric, ray.o, ray.d, t_hit)
+
+        tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
+        dndu, dndv = vp_compute_normal_derivatives(primitive)
+        ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
+                                                   geom.ns, geom.dpdus,
+                                                   geom.dpdu, geom.dpdv,
+                                                   dndu, dndv, geom.n, tfc_bump)
+        dpdvs_b = cross(ns_b, dpdus_b)
+
+        hit_work = VPHitSurfaceWorkItem(
+            work,
+            geom.pi, geom.n, geom.dpdu, geom.dpdv,
+            ns_b, dpdus_b, dpdvs_b,
+            geom.uv, mat_idx, mi,
+            primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
+            primitive.metadata.arealight_flat_idx, Raycore.area(primitive),
+            t_hit,
+        )
+
+        vp_shade_surface_hits_kernel!(
+            hit_work,
+            next_ray_queue, shadow_queue, pixel_L,
+            materials, lights, rgb2spec_table,
+            bvh_nodes, infinite_light_indices, light_to_bit_trail,
+            num_infinite_lights, num_bvh_lights, num_lights,
+            max_depth, do_regularize,
+            pixel_samples_direct_uc, pixel_samples_direct_u,
+            pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+            camera, samples_per_pixel, rr_depth,
+        )
+        return
+    end
+    # 16 alpha-bounces exhausted (extremely unlikely): ray absorbed
+    return
+end
+
+function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, materials, lights,
+                             camera, samples_per_pixel::Int32, regularize::Bool = true)
+    pixel_samples = state.pixel_samples
+    foreach(vp_trace_and_shade_kernel!,
+        current_ray_queue(state),
+        next_ray_queue(state),
+        state.shadow_queue,
+        state.escaped_queue,
+        state.medium_sample_queue,
+        state.hit_surface_queue,
+        state.pixel_L,
+        accel, media_interfaces, materials, lights,
+        state.rgb2spec_table,
+        state.bvh_nodes,
+        state.infinite_light_indices,
+        state.light_to_bit_trail,
+        state.num_infinite_lights,
+        state.num_bvh_lights,
+        state.num_lights,
+        state.max_depth,
+        regularize,
+        pixel_samples.direct_uc, pixel_samples.direct_u,
+        pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
+        camera, samples_per_pixel,
+        state.rr_depth,
+    )
+    return nothing
+end
+
 
 # ============================================================================
 # Shadow Ray Tracing Kernel (with medium transmittance)
