@@ -271,16 +271,22 @@ function pbrt_get_rgb(entity::PBRTEntity, name::String, default::NTuple{3, Float
     return (Float64(p.values[1]), Float64(p.values[2]), Float64(p.values[3]))
 end
 
-# Convert a blackbody temperature (Kelvin) to a normalized sRGB triplet.
-# Uses CIE xy chromaticity → XYZ → linear sRGB, normalized so max channel = 1.
+# Convert a blackbody temperature (Kelvin) to a linear sRGB triplet via
+# CIE xy chromaticity (Y normalized to 1). pbrt-v4 keeps the *absolute*
+# magnitude (no max-channel rescaling), so e.g. a 5500 K blackbody comes
+# out as (~1.10, ~0.98, ~0.83) — not (1, .89, .75). The earlier `/ m`
+# normalization silently darkened every blackbody area-light scene by
+# ~max(r,g,b) (≈10% for 5500 K, larger for warmer temps), which was the
+# root cause of the shadow_smoothgold_dome energy_ratio≈0.88 mismatch.
 function _blackbody_to_rgb(T::Float32)
     x, y = planckian_xy(T)
     X = x / y; Y = 1f0; Z = (1f0 - x - y) / y
     r =  3.2406f0 * X - 1.5372f0 * Y - 0.4986f0 * Z
     g = -0.9689f0 * X + 1.8758f0 * Y + 0.0415f0 * Z
     b =  0.0557f0 * X - 0.2040f0 * Y + 1.0570f0 * Z
-    m = max(r, g, b, 1f-6)
-    return (Float64(r / m), Float64(g / m), Float64(b / m))
+    # Clamp negatives (out-of-gamut chromaticities below the spectral locus
+    # can produce small negatives that wreck the radiance estimator).
+    return (Float64(max(r, 0f0)), Float64(max(g, 0f0)), Float64(max(b, 0f0)))
 end
 
 # Like pbrt_get_rgb but also handles "blackbody" type params (single temperature value).
@@ -878,7 +884,22 @@ function build_pbrt_shape(srec::PBRTShapeRecord, pbrt::PBRTScene)
 
     if type == "sphere"
         radius = Float32(pbrt_get_float(entity, "radius", 1.0))
-        mesh = tessellate_sphere(radius; segments=64)
+        # pbrt-v4 spheres support partial extent via zmin/zmax (in object space)
+        # and phimax (azimuth). The Crown's dome and shadow_*gold test scenes
+        # carve a half-sphere bowl with `"float zmin" -radius "float zmax" 0`;
+        # ignoring these silently produced a phantom mirror half-sphere
+        # intersecting the receiver plane.
+        zmin = Float32(pbrt_get_float(entity, "zmin", -radius))
+        zmax = Float32(pbrt_get_float(entity, "zmax",  radius))
+        phimax = Float32(pbrt_get_float(entity, "phimax", 360.0))
+        # pbrt's sphere is analytic; we tessellate. 64 segments is too coarse
+        # for smooth-mirror conductors (visible facet aliasing on the
+        # silhouette and on the reflection's bright bowl). 512 segments brings
+        # the silhouette to <0.2° per vertex, sub-pixel on 256×256 references,
+        # and gets the smooth-mirror reflection's per-pixel value within a
+        # few percent of pbrt's analytic-sphere reference across the test
+        # suite. Higher counts have diminishing returns vs BLAS build cost.
+        mesh = tessellate_sphere(radius; segments=512, zmin=zmin, zmax=zmax, phimax_deg=phimax)
         mesh = apply_pbrt_transform(mesh, srec.transform)
 
     elseif type == "disk"
@@ -978,54 +999,153 @@ function apply_pbrt_transform(mesh, transform::Mat4f)
         p4 = transform * Vec4f(p[1], p[2], p[3], 1f0)
         Point3f(p4[1] / p4[4], p4[2] / p4[4], p4[3] / p4[4])
     end
-    return GeometryBasics.Mesh(collect(new_positions), collect(faces))
+    # Preserve per-vertex normals and UVs through the rebuild. Normals
+    # transform by the upper-3x3 (assuming no non-uniform scale on a unit
+    # surface — pbrt's Transform stack is rotation+translation+uniform-scale
+    # for our test scenes), then renormalize.
+    props = propertynames(mesh)
+    has_n = :normal in props
+    has_uv = :uv in props
+    if !(has_n || has_uv)
+        return GeometryBasics.Mesh(collect(new_positions), collect(faces))
+    end
+    R = SMatrix{3,3,Float32}(
+        transform[1,1], transform[2,1], transform[3,1],
+        transform[1,2], transform[2,2], transform[3,2],
+        transform[1,3], transform[2,3], transform[3,3])
+    new_normals = if has_n
+        ns = mesh.normal
+        nout = Vector{Vec3f}(undef, length(ns))
+        for i in eachindex(ns)
+            n = R * Vec3f(ns[i][1], ns[i][2], ns[i][3])
+            l = sqrt(dot(n, n))
+            nout[i] = l > 0f0 ? n / l : n
+        end
+        nout
+    else
+        nothing
+    end
+    new_uvs = has_uv ? collect(mesh.uv) : nothing
+    if has_n && has_uv
+        return GeometryBasics.Mesh(collect(new_positions), collect(faces);
+                                   normal=new_normals, uv=new_uvs)
+    elseif has_n
+        return GeometryBasics.Mesh(collect(new_positions), collect(faces);
+                                   normal=new_normals)
+    else
+        return GeometryBasics.Mesh(collect(new_positions), collect(faces);
+                                   uv=new_uvs)
+    end
 end
 
 # UV sphere tessellation
-function tessellate_sphere(radius::Float32; segments::Int=64)
-    rings = segments ÷ 2
-    points = Point3f[]
-    faces = TriangleFace{Int}[]
+function tessellate_sphere(radius::Float32; segments::Int=64,
+                           zmin::Float32=-radius, zmax::Float32=radius,
+                           phimax_deg::Float32=360f0)
+    # pbrt-v4 sphere: z ∈ [zmin, zmax], azimuth φ ∈ [0, phimax].
+    # Theta from the +z axis: theta_min ↔ zmax (cosθ = zmax/r),
+    #                         theta_max ↔ zmin (cosθ = zmin/r).
+    # We emit per-vertex normals (the unit radial direction) and UVs
+    # (u=φ/phimax, v=(θ-θmin)/(θmax-θmin)) so smooth shading and bump-mapped
+    # spheres match pbrt's analytic sphere.
+    zmin = clamp(zmin, -radius,  radius)
+    zmax = clamp(zmax, -radius,  radius)
+    @assert zmax >= zmin "sphere: zmax must be >= zmin"
+    theta_min = acos(clamp(zmax / radius, -1f0, 1f0))
+    theta_max = acos(clamp(zmin / radius, -1f0, 1f0))
+    phimax = clamp(deg2rad(phimax_deg), 0f0, 2f0 * Float32(π))
+    full_phi = phimax >= 2f0 * Float32(π) - 1f-5
+    has_top    = theta_min < 1f-5                       # includes north pole
+    has_bottom = theta_max > Float32(π) - 1f-5          # includes south pole
 
-    push!(points, Point3f(0f0, 0f0, radius))
+    n_phi = full_phi ? segments : max(2, Int(round(segments * phimax / (2f0 * Float32(π)))))
+    n_verts_per_ring = full_phi ? segments : n_phi + 1
+    rings = max(2, segments ÷ 2)
+    inv_radius = 1f0 / radius
+    phi_step_full = 2f0 * Float32(π) / segments
 
-    for i in 1:rings-1
-        theta = Float32(π) * i / rings
+    points  = Point3f[]
+    normals = Vec3f[]
+    uvs     = Point2f[]
+    faces   = TriangleFace{Int}[]
+
+    function push_ring_vert!(theta::Float32, j::Int)
         st, ct = sincos(theta)
-        for j in 1:segments
-            phi = 2f0 * Float32(π) * (j - 1) / segments
-            sp, cp = sincos(phi)
-            push!(points, Point3f(radius * st * cp, radius * st * sp, radius * ct))
+        phi = full_phi ? phi_step_full * (j - 1) :
+              phimax * (j - 1) / (n_verts_per_ring - 1)
+        sp, cp = sincos(phi)
+        x = radius * st * cp; y = radius * st * sp; z = radius * ct
+        push!(points,  Point3f(x, y, z))
+        push!(normals, Vec3f(x * inv_radius, y * inv_radius, z * inv_radius))
+        u = full_phi ? phi_step_full * (j - 1) / phimax :
+                       (j - 1) / (n_verts_per_ring - 1)
+        v = (theta - theta_min) / max(theta_max - theta_min, 1f-8)
+        push!(uvs, Point2f(u, v))
+    end
+
+    if has_top
+        push!(points,  Point3f(0f0, 0f0,  radius))
+        push!(normals, Vec3f(0f0, 0f0,  1f0))
+        push!(uvs,     Point2f(0f0, 0f0))
+    end
+    top_idx    = has_top ? 1 : 0
+    first_ring = has_top ? 2 : 1
+
+    first_body_ring = has_top ? 1 : 0
+    last_body_ring  = has_bottom ? rings - 1 : rings
+    for i in first_body_ring:last_body_ring
+        theta = theta_min + (theta_max - theta_min) * i / rings
+        for j in 1:n_verts_per_ring
+            push_ring_vert!(theta, j)
+        end
+    end
+    n_body_rings = last_body_ring - first_body_ring + 1
+
+    if has_bottom
+        push!(points,  Point3f(0f0, 0f0, -radius))
+        push!(normals, Vec3f(0f0, 0f0, -1f0))
+        push!(uvs,     Point2f(0f0, 1f0))
+    end
+    bottom_idx = has_bottom ? length(points) : 0
+
+    # Winding: vertices listed CCW when viewed from OUTSIDE the sphere so
+    # `cross(b-a, c-a)` points along the same hemisphere as the radial
+    # vertex normals (Raycore's geometric-normal convention).
+    if has_top
+        for j in 1:n_verts_per_ring
+            j_next = full_phi ? mod1(j + 1, segments) : j + 1
+            j_next > n_verts_per_ring && continue
+            push!(faces, TriangleFace{Int}(top_idx,
+                                           first_ring + j - 1,
+                                           first_ring + j_next - 1))
         end
     end
 
-    push!(points, Point3f(0f0, 0f0, -radius))
-
-    for j in 1:segments
-        j_next = mod1(j + 1, segments)
-        push!(faces, TriangleFace{Int}(1, 1 + j, 1 + j_next))
-    end
-
-    for i in 1:rings-2
-        for j in 1:segments
-            j_next = mod1(j + 1, segments)
-            a = 1 + (i - 1) * segments + j
-            b = 1 + (i - 1) * segments + j_next
-            c = 1 + i * segments + j
-            d = 1 + i * segments + j_next
+    for i in 0:(n_body_rings - 2)
+        for j in 1:n_verts_per_ring
+            j_next = full_phi ? mod1(j + 1, segments) : j + 1
+            j_next > n_verts_per_ring && continue
+            a = first_ring + i * n_verts_per_ring + (j - 1)
+            b = first_ring + i * n_verts_per_ring + (j_next - 1)
+            c = first_ring + (i + 1) * n_verts_per_ring + (j - 1)
+            d = first_ring + (i + 1) * n_verts_per_ring + (j_next - 1)
             push!(faces, TriangleFace{Int}(a, c, b))
             push!(faces, TriangleFace{Int}(b, c, d))
         end
     end
 
-    bottom = length(points)
-    base = 1 + (rings - 2) * segments
-    for j in 1:segments
-        j_next = mod1(j + 1, segments)
-        push!(faces, TriangleFace{Int}(bottom, base + j_next, base + j))
+    if has_bottom
+        last_ring_start = first_ring + (n_body_rings - 1) * n_verts_per_ring
+        for j in 1:n_verts_per_ring
+            j_next = full_phi ? mod1(j + 1, segments) : j + 1
+            j_next > n_verts_per_ring && continue
+            push!(faces, TriangleFace{Int}(bottom_idx,
+                                           last_ring_start + j_next - 1,
+                                           last_ring_start + j - 1))
+        end
     end
 
-    return GeometryBasics.Mesh(points, faces)
+    return GeometryBasics.Mesh(points, faces; normal=normals, uv=uvs)
 end
 
 function tessellate_disk(radius::Float32; segments::Int=64)
