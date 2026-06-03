@@ -416,10 +416,10 @@ end
 
 @propagate_inbounds function vp_trace_and_shade_kernel!(
     work,
-    next_ray_queue, shadow_queue, escaped_queue, medium_sample_queue,
+    next_ray_queue, escaped_queue, medium_sample_queue,
     hit_surface_queue,                    # kept for max-alpha fallback (rare)
     pixel_L,
-    accel, media_interfaces, materials, lights,
+    accel, media_interfaces, media, materials, lights,
     rgb2spec_table,
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
@@ -519,7 +519,8 @@ end
 
         vp_shade_surface_hits_kernel!(
             hit_work,
-            next_ray_queue, shadow_queue, pixel_L,
+            next_ray_queue, pixel_L,
+            accel, media_interfaces, media,
             materials, lights, rgb2spec_table,
             bvh_nodes, infinite_light_indices, light_to_bit_trail,
             num_infinite_lights, num_bvh_lights, num_lights,
@@ -534,18 +535,18 @@ end
     return
 end
 
-function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, materials, lights,
+function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, media,
+                             materials, lights,
                              camera, samples_per_pixel::Int32, regularize::Bool = true)
     pixel_samples = state.pixel_samples
     foreach(vp_trace_and_shade_kernel!,
         current_ray_queue(state),
         next_ray_queue(state),
-        state.shadow_queue,
         state.escaped_queue,
         state.medium_sample_queue,
         state.hit_surface_queue,
         state.pixel_L,
-        accel, media_interfaces, materials, lights,
+        accel, media_interfaces, media, materials, lights,
         state.rgb2spec_table,
         state.bvh_nodes,
         state.infinite_light_indices,

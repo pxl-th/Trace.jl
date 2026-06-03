@@ -264,7 +264,10 @@ Nearby lights get higher probability than distant ones (pbrt-v4's BVHLightSample
 Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
 """
 @propagate_inbounds function surface_direct_lighting_inner!(
-    shadow_queue,
+    pixel_L,
+    accel,
+    media_interfaces,
+    media,
     work::VPMaterialEvalWorkItem,
     materials,
     lights,
@@ -344,13 +347,6 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
                 # So we multiply by light_pmf to get the full light PDF in r_l
                 scaled_r_l = result.r_l * light_pmf
 
-                # Create shadow ray
-                shadow_ray = Raycore.Ray(
-                    o = result.ray_origin,
-                    d = result.ray_direction,
-                    t_max = result.t_max
-                )
-
                 # Determine medium for shadow ray based on direction at medium transitions
                 # (mirrors pbrt-v4 SurfaceInteraction::GetMedium(w))
                 shadow_medium = if is_medium_transition(work.interface)
@@ -359,70 +355,43 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
                     work.current_medium
                 end
 
-                shadow_item = VPShadowRayWorkItem(
-                    shadow_ray,
-                    result.t_max,
-                    work.lambda,
-                    result.Ld,  # NOT divided by light_pmf - MIS handles this
-                    result.r_u,
-                    scaled_r_l,
-                    work.pixel_index,
-                    shadow_medium
+                # ── Inline shadow trace + accumulate (was: push to shadow_queue, run
+                # vp_trace_shadow_rays! as a separate dispatch). Body mirrors
+                # vp_trace_shadow_rays_kernel! exactly: trace transmittance, combine
+                # path MIS weights with transmittance MIS weights, accumulate to
+                # pixel_L. Eliminates the queue write + read + per-bounce shadow
+                # dispatch + barrier for every surface direct-lighting contribution.
+                T_ray, tr_r_u, tr_r_l, visible = trace_shadow_transmittance(
+                    accel, media_interfaces, media, materials, rgb2spec_table,
+                    result.ray_origin, result.ray_direction, result.t_max,
+                    work.lambda, shadow_medium,
                 )
 
-                push!(shadow_queue, shadow_item)
+                if visible && !is_black(T_ray)
+                    mis_weight = result.r_u * tr_r_u + scaled_r_l * tr_r_l
+                    mis_denom = average(mis_weight)
+                    if mis_denom > 1f-10
+                        final_L = result.Ld * T_ray / mis_denom
+                        if !is_black(final_L)
+                            base_idx = (work.pixel_index - Int32(1)) * Int32(4)
+                            accumulate_spectrum!(pixel_L, base_idx, final_L)
+                        end
+                    end
+                end
             end
         end
     end
     return
 end
 
-# ============================================================================
-# Direct Lighting at Surface Hits
-# ============================================================================
-
-@propagate_inbounds function vp_sample_surface_direct_lighting_kernel!(
-    work,
-    shadow_queue,
-    materials,
-    lights,
-    rgb2spec_table,
-    bvh_nodes, infinite_light_indices,
-    num_infinite_lights::Int32, num_bvh_lights::Int32,
-    num_lights::Int32,
-    pixel_samples_direct_uc, pixel_samples_direct_u,
-    camera, samples_per_pixel::Int32,
-    do_regularize::Bool
-)
-    surface_direct_lighting_inner!(
-        shadow_queue,
-        work, materials, lights, rgb2spec_table,
-        bvh_nodes, infinite_light_indices,
-        num_infinite_lights, num_bvh_lights,
-        num_lights,
-        pixel_samples_direct_uc, pixel_samples_direct_u,
-        camera, samples_per_pixel,
-        do_regularize
-    )
-end
-
-function vp_sample_surface_direct_lighting!(state::VolPathState, materials, lights, camera, samples_per_pixel::Int32, regularize::Bool = true)
-    pixel_samples = state.pixel_samples
-    foreach(vp_sample_surface_direct_lighting_kernel!,
-        state.material_queue,
-        state.shadow_queue,
-        materials,
-        lights,
-        state.rgb2spec_table,
-        state.bvh_nodes, state.infinite_light_indices,
-        state.num_infinite_lights, state.num_bvh_lights,
-        state.num_lights,
-        pixel_samples.direct_uc, pixel_samples.direct_u,
-        camera, samples_per_pixel,
-        regularize,
-    )
-    return nothing
-end
+# `vp_sample_surface_direct_lighting!` was deleted by commit cb3d08f's
+# fusion (process_hits + direct_light + evaluate_materials → one kernel),
+# and the inline-shadow-trace optimisation in this commit folded the shadow
+# tracing into the same kernel too, so there's no longer any standalone
+# direct-lighting dispatch on the surface path. Light sampling + BSDF eval
+# for direct lighting + shadow trace + pixel_L accumulation all happen
+# inside `vp_shade_surface_hits_kernel!`'s call to
+# `surface_direct_lighting_inner!`.
 
 # ============================================================================
 # BSDF Sampling Inner Function
@@ -645,8 +614,10 @@ end
 @propagate_inbounds function vp_shade_surface_hits_kernel!(
     work,
     next_ray_queue,
-    shadow_queue,
     pixel_L,
+    accel,
+    media_interfaces,
+    media,
     materials,
     lights,
     rgb2spec_table,
@@ -714,9 +685,9 @@ end
     # that used to be pushed into `material_queue` and re-read by both kernels.
     mat_work = VPMaterialEvalWorkItem(work, wo, material_idx)
 
-    # ── Direct lighting (was vp_sample_surface_direct_lighting) ──
+    # ── Direct lighting + inline shadow trace + accumulate
     surface_direct_lighting_inner!(
-        shadow_queue,
+        pixel_L, accel, media_interfaces, media,
         mat_work, materials, lights, rgb2spec_table,
         bvh_nodes, infinite_light_indices,
         num_infinite_lights, num_bvh_lights, num_lights,
@@ -737,15 +708,18 @@ end
     return
 end
 
-function vp_shade_surface_hits!(state::VolPathState, materials, lights,
+function vp_shade_surface_hits!(state::VolPathState, accel, media_interfaces, media,
+                                materials, lights,
                                 camera, samples_per_pixel::Int32,
                                 regularize::Bool = true)
     pixel_samples = state.pixel_samples
     foreach(vp_shade_surface_hits_kernel!,
         state.hit_surface_queue,
         next_ray_queue(state),
-        state.shadow_queue,
         state.pixel_L,
+        accel,
+        media_interfaces,
+        media,
         materials,
         lights,
         state.rgb2spec_table,

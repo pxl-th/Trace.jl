@@ -616,7 +616,7 @@ function render!(
         # common case) bypass `hit_surface_queue` entirely — saves one dispatch
         # + barrier per bounce plus ~170 MB of work-item materialization on a
         # 1.4M-pixel render.
-        vp_trace_and_shade!(state, accel, media_interfaces, materials, lights,
+        vp_trace_and_shade!(state, accel, media_interfaces, media, materials, lights,
                             camera, Int32(vp.samples_per_pixel), vp.regularize)
 
         # Medium sampling — indirect dispatch handles empty queues (0 groups = no-op)
@@ -641,7 +641,8 @@ function render!(
         # kernels push a VPHitSurfaceWorkItem onto `hit_surface_queue` and
         # this dispatch shades it. For surface-only scenes this kernel sees
         # an empty queue (indirect dispatch → no-op).
-        vp_shade_surface_hits!(state, materials, lights, camera,
+        vp_shade_surface_hits!(state, accel, media_interfaces, media,
+                               materials, lights, camera,
                                Int32(vp.samples_per_pixel), vp.regularize)
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
