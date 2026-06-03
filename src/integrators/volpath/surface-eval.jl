@@ -261,7 +261,11 @@ end
 Uses BVH light sampler for spatially-aware importance sampling.
 Nearby lights get higher probability than distant ones (pbrt-v4's BVHLightSampler).
 
-Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
+Sobol samples are generated inline from `(px, py, sample_idx, base_dim+dim)`
+rather than read from a pre-populated per-pixel buffer. Eliminates the
+separate `vp_generate_ray_samples_kernel!` dispatch + barrier, plus the
+SOA write/read of two `pixel_samples_direct_*` arrays per bounce — measured
+as 58 % of GPU time on killeroo before this refactor.
 """
 @propagate_inbounds function surface_direct_lighting_inner!(
     pixel_L,
@@ -277,9 +281,8 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     num_infinite_lights::Int32,
     num_bvh_lights::Int32,
     num_lights::Int32,
-    # Pre-computed Sobol samples (SOA layout)
-    pixel_samples_direct_uc,
-    pixel_samples_direct_u,
+    sobol_rng,           # SobolRNG — samples are generated on demand inline
+    sample_idx::Int32,   # which sample of samples_per_pixel we're on
     # Camera for texture filtering (pbrt-v4 style)
     camera,
     samples_per_pixel::Int32,
@@ -295,10 +298,18 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         return
     end
 
-    # Use pre-computed Sobol samples for light sampling (pbrt-v4 RaySamples.direct)
+    # Inline Sobol sample generation.  Dimension allocation matches the
+    # original `vp_generate_ray_samples_kernel!`: 6 (camera) + 7 * depth +
+    # dim-offset.  Direct lighting uses dim+1 (1D light select) and dim+3
+    # (2D light position).
     pixel_idx = work.pixel_index
-    u_light = pixel_samples_direct_u[pixel_idx]
-    light_select = pixel_samples_direct_uc[pixel_idx]
+    pixel_idx_0 = pixel_idx - Int32(1)
+    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    base_dim = Int32(6) + Int32(7) * work.depth
+    light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
+    u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
+    u_light = Point2f(u_light_x, u_light_y)
 
     # Select light using BVH importance-weighted sampling
     # Returns (1-based flat index, PMF for that light)
@@ -399,7 +410,9 @@ end
 
 """Inner function for material evaluation - can use return statements.
 
-Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
+Sobol samples are generated inline from `(px, py, sample_idx, base_dim+dim)`
+rather than read from a pre-populated per-pixel buffer.  See
+`surface_direct_lighting_inner!` for the same change on the direct path.
 """
 @propagate_inbounds function evaluate_material_inner!(
     next_ray_queue,
@@ -408,10 +421,8 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     rgb2spec_table,
     max_depth::Int32,
     do_regularize::Bool,
-    # Pre-computed Sobol samples (SOA layout)
-    pixel_samples_indirect_uc,
-    pixel_samples_indirect_u,
-    pixel_samples_indirect_rr,
+    sobol_rng,           # SobolRNG — samples generated on demand inline
+    sample_idx::Int32,
     # Camera for texture filtering (pbrt-v4 style)
     camera,
     samples_per_pixel::Int32,
@@ -444,11 +455,17 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         return
     end
 
-    # Use pre-computed Sobol samples for BSDF sampling (pbrt-v4 RaySamples.indirect)
+    # Inline Sobol sample generation.  Indirect uses dim+4 (BSDF component
+    # select), dim+6 (2D direction), dim+7 (RR).
     pixel_idx = work.pixel_index
-    u = pixel_samples_indirect_u[pixel_idx]
-    rng = pixel_samples_indirect_uc[pixel_idx]
-    rr_sample = pixel_samples_indirect_rr[pixel_idx]
+    pixel_idx_0 = pixel_idx - Int32(1)
+    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    base_dim = Int32(6) + Int32(7) * work.depth
+    rng = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(4))
+    u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))
+    u = Point2f(u_x, u_y)
+    rr_sample = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(7))
 
     # Apply regularization if enabled and we've had a non-specular bounce
     # (pbrt-v4: regularize && anyNonSpecularBounces)
@@ -568,7 +585,7 @@ end
     rgb2spec_table,
     max_depth::Int32,
     do_regularize::Bool,
-    pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+    sobol_rng, sample_idx::Int32,
     camera, samples_per_pixel::Int32,
     rr_depth::Int32
 )
@@ -576,15 +593,16 @@ end
         next_ray_queue,
         work, materials, rgb2spec_table, max_depth,
         do_regularize,
-        pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+        sobol_rng, sample_idx,
         camera, samples_per_pixel,
         rr_depth
     )
 end
 
-function vp_evaluate_materials!(state::VolPathState, materials, camera, samples_per_pixel::Int32, regularize::Bool = true)
+function vp_evaluate_materials!(state::VolPathState, materials,
+                                sample_idx::Int32,
+                                camera, samples_per_pixel::Int32, regularize::Bool = true)
     output_queue = next_ray_queue(state)
-    pixel_samples = state.pixel_samples
     foreach(vp_evaluate_materials_kernel!,
         state.material_queue,
         output_queue,
@@ -592,7 +610,7 @@ function vp_evaluate_materials!(state::VolPathState, materials, camera, samples_
         state.rgb2spec_table,
         state.max_depth,
         regularize,
-        pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
+        state.sobol_rng, sample_idx,
         camera, samples_per_pixel,
         state.rr_depth,
     )
@@ -629,8 +647,7 @@ end
     num_lights::Int32,
     max_depth::Int32,
     do_regularize::Bool,
-    pixel_samples_direct_uc, pixel_samples_direct_u,
-    pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+    sobol_rng, sample_idx::Int32,
     camera,
     samples_per_pixel::Int32,
     rr_depth::Int32,
@@ -691,7 +708,7 @@ end
         mat_work, materials, lights, rgb2spec_table,
         bvh_nodes, infinite_light_indices,
         num_infinite_lights, num_bvh_lights, num_lights,
-        pixel_samples_direct_uc, pixel_samples_direct_u,
+        sobol_rng, sample_idx,
         camera, samples_per_pixel,
         do_regularize,
     )
@@ -701,7 +718,7 @@ end
         next_ray_queue,
         mat_work, materials, rgb2spec_table, max_depth,
         do_regularize,
-        pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+        sobol_rng, sample_idx,
         camera, samples_per_pixel,
         rr_depth,
     )
@@ -710,9 +727,9 @@ end
 
 function vp_shade_surface_hits!(state::VolPathState, accel, media_interfaces, media,
                                 materials, lights,
+                                sample_idx::Int32,
                                 camera, samples_per_pixel::Int32,
                                 regularize::Bool = true)
-    pixel_samples = state.pixel_samples
     foreach(vp_shade_surface_hits_kernel!,
         state.hit_surface_queue,
         next_ray_queue(state),
@@ -731,8 +748,7 @@ function vp_shade_surface_hits!(state::VolPathState, accel, media_interfaces, me
         state.num_lights,
         state.max_depth,
         regularize,
-        pixel_samples.direct_uc, pixel_samples.direct_u,
-        pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
+        state.sobol_rng, sample_idx,
         camera, samples_per_pixel,
         state.rr_depth,
     )

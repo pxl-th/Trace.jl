@@ -2,28 +2,20 @@
 # Extends PhysicalWavefront work items with medium support
 
 # ============================================================================
-# Ray Samples (pre-computed low-discrepancy samples per bounce)
+# Ray Samples (formerly pre-computed; now generated inline in each consumer)
 # ============================================================================
 
-"""
-    VPRaySamples
-
-Pre-computed Sobol samples for a single bounce, matching pbrt-v4's RaySamples.
-These are generated once per bounce and stored in PixelSampleState.
-"""
-struct VPRaySamples
-    # Direct lighting samples
-    direct_uc::Float32      # Light source selection [0,1)
-    direct_u::Point2f       # Light position sample
-
-    # Indirect ray samples
-    indirect_uc::Float32    # BSDF component selection [0,1)
-    indirect_u::Point2f     # BSDF direction sample
-    indirect_rr::Float32    # Russian roulette decision [0,1)
-end
-
-# Default constructor with zero samples
-VPRaySamples() = VPRaySamples(0f0, Point2f(0f0), 0f0, Point2f(0f0), 0f0)
+# pbrt-v4 caches Sobol samples in a per-pixel `PixelSampleState.RaySamples`
+# buffer filled by `WavefrontPathIntegrator::GenerateRaySamples` once per
+# bounce.  We used to mirror that with `VPRaySamples` + a per-pixel SOA
+# buffer + a `vp_generate_ray_samples_kernel!` dispatch — but per-kernel
+# GPU timing on RTX 4000 Ada showed that approach was 58 % of total GPU
+# time on killeroo and only ~0.1 % of GPU time was in the actual path
+# tracing kernels.  We now generate the dimensions inline in each consumer
+# (`surface_direct_lighting_inner!`, `evaluate_material_inner!`,
+# `medium_direct_lighting_inner!`, `medium_scatter_inner!`).  The struct
+# and its constructor are removed; nothing in the integrator references
+# them after this commit.
 
 # ============================================================================
 # Ray Work Item with Medium

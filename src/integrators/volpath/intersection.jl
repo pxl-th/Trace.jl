@@ -424,8 +424,7 @@ end
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
     max_depth::Int32, do_regularize::Bool,
-    pixel_samples_direct_uc, pixel_samples_direct_u,
-    pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+    sobol_rng, sample_idx::Int32,
     camera,
     samples_per_pixel::Int32,
     rr_depth::Int32,
@@ -525,8 +524,7 @@ end
             bvh_nodes, infinite_light_indices, light_to_bit_trail,
             num_infinite_lights, num_bvh_lights, num_lights,
             max_depth, do_regularize,
-            pixel_samples_direct_uc, pixel_samples_direct_u,
-            pixel_samples_indirect_uc, pixel_samples_indirect_u, pixel_samples_indirect_rr,
+            sobol_rng, sample_idx,
             camera, samples_per_pixel, rr_depth,
         )
         return
@@ -537,8 +535,8 @@ end
 
 function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, media,
                              materials, lights,
+                             sample_idx::Int32,
                              camera, samples_per_pixel::Int32, regularize::Bool = true)
-    pixel_samples = state.pixel_samples
     foreach(vp_trace_and_shade_kernel!,
         current_ray_queue(state),
         next_ray_queue(state),
@@ -556,8 +554,7 @@ function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, media
         state.num_lights,
         state.max_depth,
         regularize,
-        pixel_samples.direct_uc, pixel_samples.direct_u,
-        pixel_samples.indirect_uc, pixel_samples.indirect_u, pixel_samples.indirect_rr,
+        state.sobol_rng, sample_idx,
         camera, samples_per_pixel,
         state.rr_depth,
     )

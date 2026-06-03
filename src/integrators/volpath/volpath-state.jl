@@ -30,7 +30,10 @@ should_use_soa(::Type{VPHitSurfaceWorkItem}) = true
 should_use_soa(::Type{VPMaterialEvalWorkItem}) = true
 should_use_soa(::Type{VPMediumSampleWorkItem}) = true
 should_use_soa(::Type{VPMediumScatterWorkItem}) = true
-should_use_soa(::Type{VPRaySamples}) = true
+# VPRaySamples used to be a per-pixel Sobol cache filled by
+# vp_generate_ray_samples_kernel!; that kernel and its buffer are gone now
+# (samples are computed inline in each consumer), so the SOA hint is no
+# longer needed.
 
 # ============================================================================
 # VolPath State Container
@@ -78,10 +81,6 @@ mutable struct VolPathState{Backend}
     wavelengths_per_pixel::AbstractVector{Float32}  # n_pixels * 4 (wavelength samples)
     pdf_per_pixel::AbstractVector{Float32}  # n_pixels * 4 (wavelength PDFs)
     filter_weight_per_pixel::AbstractVector{Float32}  # n_pixels (filter weight per sample)
-
-    # Pre-computed Sobol samples per pixel (pbrt-v4 RaySamples / PixelSampleState)
-    # Updated each bounce via vp_generate_ray_samples_kernel!
-    pixel_samples::Any  # StructArray{VPRaySamples} - SOA layout for GPU coalescing
 
     # RGB to spectrum table
     rgb2spec_table::RGBToSpectrumTable
@@ -152,17 +151,6 @@ function free!(state::VolPathState)
     finalize(state.light_to_bit_trail)
     finalize(state.infinite_light_indices)
 
-    # Pixel samples (StructArray — finalize component arrays)
-    if state.pixel_samples !== nothing
-        sa = state.pixel_samples
-        for name in propertynames(sa)
-            arr = getproperty(sa, name)
-            if arr isa AbstractArray
-                finalize(arr)
-            end
-        end
-    end
-
     # Sobol RNG state
     if state.sobol_rng !== nothing
         rng = state.sobol_rng
@@ -219,9 +207,6 @@ function VolPathState(
     filter_weight_per_pixel = KA.allocate(backend, Float32, n_pixels)
     KA.fill!(filter_weight_per_pixel, 0f0)
 
-    # Pre-computed samples per pixel (SOA layout)
-    pixel_samples = allocate_array(backend, VPRaySamples, n_pixels; soa=true)
-
     # Load lookup tables to GPU (sensor determines response curves)
     rgb2spec_table = to_gpu(backend, get_srgb_table())
     cie_table = to_gpu(backend, sensor_response_table(sensor.sensor_name))
@@ -254,7 +239,6 @@ function VolPathState(
         hit_surface_queue, material_queue, shadow_queue, escaped_queue,
         pixel_L, pixel_rgb, pixel_weight_sum,
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
-        pixel_samples,
         rgb2spec_table, cie_table,
         sensor.output_from_sensor, sensor.imaging_ratio,
         bvh_nodes, light_to_bit_trail, infinite_light_indices,

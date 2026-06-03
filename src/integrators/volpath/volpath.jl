@@ -268,102 +268,22 @@ Following pbrt-v4's GetCameraSample: samples the filter, computes offset and wei
 end
 
 # ============================================================================
-# Ray Sample Generation (pbrt-v4 RaySamples / PixelSampleState)
+# Inline Sobol samples
 # ============================================================================
+#
+# Previously, a separate `vp_generate_ray_samples_kernel!` ran once per bounce
+# to pre-fill five `pixel_samples_*` SOA buffers (direct_uc, direct_u,
+# indirect_uc, indirect_u, indirect_rr) from Sobol.  Per-kernel GPU timing
+# (Lava.with_dispatch_timing, 2026-06-03) showed that kernel was 58 % of GPU
+# time on killeroo native HW RT — the actual path-tracing kernels were
+# 0.1 %.  The fix: each consumer (surface_direct_lighting_inner!,
+# evaluate_material_inner!, medium_direct_lighting_inner!,
+# medium_scatter_inner!) now generates only the Sobol dimensions it needs,
+# inline from `(work.pixel_index, sample_idx, work.depth)`.  Eliminates the
+# kernel dispatch + barrier per bounce, plus the SOA write of ~13 floats per
+# pixel and the SOA read of those floats in the next dispatch (~150 MB of
+# memory traffic per bounce on a 1.4 Mpx scene).
 
-"""
-    vp_generate_ray_samples_kernel!(...)
-
-Generate pre-computed Sobol samples for the current bounce.
-Following pbrt-v4's WavefrontPathIntegrator::GenerateRaySamples:
-- For each active ray in the queue, generate 7 samples for this bounce
-- Samples are stored in pixel_samples indexed by pixel_index
-- Dimension allocation: 6 (camera) + 7 * depth
-
-This replaces rand() calls with correlated low-discrepancy samples.
-"""
-@kernel inbounds=true function vp_generate_ray_samples_kernel!(
-    # Output: pixel samples (SOA layout)
-    pixel_samples_direct_uc,
-    pixel_samples_direct_u,
-    pixel_samples_indirect_uc,
-    pixel_samples_indirect_u,
-    pixel_samples_indirect_rr,
-    # Input: ray queue (AOS - read pixel_index from each work item)
-    @Const(ray_queue_items),
-    @Const(ray_queue_size),
-    # Sampler parameters
-    @Const(sample_idx::Int32),
-    @Const(depth::Int32),
-    # SobolRNG (passed via Adapt)
-    rng
-)
-    i = @index(Global)
-    n_rays = ray_queue_size[1]
-
-    @inbounds if i <= n_rays
-        # Read pixel_index from work item (AOS layout)
-        work = ray_queue_items[i]
-        pixel_index = work.pixel_index
-
-        # Recover pixel coordinates from pixel_index
-        # pixel_index is 1-based, formula: pixel_index = (y-1) * width + x
-        pixel_idx_0 = pixel_index - Int32(1)
-        px = u_int32(mod(pixel_idx_0, rng.width)) + Int32(1)
-        py = u_int32(div(pixel_idx_0, rng.width)) + Int32(1)
-
-        # Base dimension: 6 (camera) + 7 * depth
-        base_dim = Int32(6) + Int32(7) * depth
-        # Generate 7 samples for this bounce using SobolRNG
-        # Direct lighting: light selection (1D) + light position (2D)
-        direct_uc = sample_1d(rng, px, py, sample_idx, base_dim + Int32(1))    # dim 7
-        direct_u = sample_2d(rng, px, py, sample_idx, base_dim + Int32(3))     # dim 9
-
-        # Indirect: BSDF component (1D) + direction (2D) + Russian roulette (1D)
-        indirect_uc = sample_1d(rng, px, py, sample_idx, base_dim + Int32(4))  # dim 10
-        indirect_u = sample_2d(rng, px, py, sample_idx, base_dim + Int32(6))   # dim 12
-        indirect_rr = sample_1d(rng, px, py, sample_idx, base_dim + Int32(7))  # dim 13
-
-        # Store in pixel samples buffer (SOA layout)
-        pixel_samples_direct_uc[pixel_index] = direct_uc
-        pixel_samples_direct_u[pixel_index] = Point2f(direct_u[1], direct_u[2])
-        pixel_samples_indirect_uc[pixel_index] = indirect_uc
-        pixel_samples_indirect_u[pixel_index] = Point2f(indirect_u[1], indirect_u[2])
-        pixel_samples_indirect_rr[pixel_index] = indirect_rr
-    end
-end
-
-"""
-    vp_generate_ray_samples!(backend, state, sample_idx, depth, sobol_rng)
-
-Generate pre-computed Sobol samples for all active rays at the current depth.
-"""
-function vp_generate_ray_samples!(
-    backend,
-    state::VolPathState,
-    sample_idx::Int32,
-    depth::Int32,
-    sobol_rng::SobolRNG
-)
-    # Access SOA components of pixel_samples
-    ray_queue = current_ray_queue(state)
-    pixel_samples = state.pixel_samples
-
-    kernel! = vp_generate_ray_samples_kernel!(backend)
-    kernel!(
-        pixel_samples.direct_uc,
-        pixel_samples.direct_u,
-        pixel_samples.indirect_uc,
-        pixel_samples.indirect_u,
-        pixel_samples.indirect_rr,
-        ray_queue.items,
-        ray_queue.size,
-        sample_idx,
-        depth,
-        sobol_rng;  # Pass whole SobolRNG, Adapt handles conversion
-        ndrange=gpu_ndrange(backend, ray_queue.size)
-    )
-end
 
 # ============================================================================
 # Film Accumulation
@@ -601,11 +521,10 @@ function render!(
     # Instead, we run all bounces and rely on CB auto-split (cb_split_threshold)
     # to prevent NVIDIA CTX SWITCH TIMEOUT on large command buffers.
     for depth in 0:(vp.max_depth - 1)
-
-        # Generate pre-computed Sobol samples for this bounce (pbrt-v4 RaySamples pattern)
-        # Must be called BEFORE any kernel that uses pixel_samples
-        vp_generate_ray_samples!(backend, state, sample_idx, Int32(depth), sobol_rng)
-
+        # Sobol samples are generated inline inside each consumer kernel —
+        # see the "Inline Sobol samples" block earlier in this file.  The
+        # consumers compute their dimensions from (work.depth, sample_idx)
+        # so we just thread `sample_idx` through the dispatchers.
         reset_iteration_queues!(state)
 
         # Trace + shade in one dispatch for non-medium rays. Medium rays still
@@ -617,6 +536,7 @@ function render!(
         # + barrier per bounce plus ~170 MB of work-item materialization on a
         # 1.4M-pixel render.
         vp_trace_and_shade!(state, accel, media_interfaces, media, materials, lights,
+                            sample_idx,
                             camera, Int32(vp.samples_per_pixel), vp.regularize)
 
         # Medium sampling — indirect dispatch handles empty queues (0 groups = no-op)
@@ -626,9 +546,9 @@ function render!(
 
         if !isempty(media)
             if length(lights) > 0
-                vp_sample_medium_direct_lighting!(state, lights)
+                vp_sample_medium_direct_lighting!(state, lights, sample_idx)
             end
-            vp_sample_medium_scatter!(state)
+            vp_sample_medium_scatter!(state, sample_idx)
         end
 
         # Escaped rays — lights check is CPU-side static scene data
@@ -642,7 +562,9 @@ function render!(
         # this dispatch shades it. For surface-only scenes this kernel sees
         # an empty queue (indirect dispatch → no-op).
         vp_shade_surface_hits!(state, accel, media_interfaces, media,
-                               materials, lights, camera,
+                               materials, lights,
+                               sample_idx,
+                               camera,
                                Int32(vp.samples_per_pixel), vp.regularize)
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
