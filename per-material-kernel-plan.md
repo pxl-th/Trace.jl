@@ -1,6 +1,15 @@
 # Per-Material Kernel Split — Plan
 
-Status: planning. Author: 2026-06-03.
+Status: **on hold pending data showing this is actually the bottleneck**.
+Per-kernel GPU timing on killeroo (see `profiling-and-orthogonal-mwes.md`
+Phase 5 results, 2026-06-03) shows shading kernels collectively run for
+0.1 ms / sample (0.1 % of GPU time). 94 % of GPU is in
+`vp_generate_ray_samples` + `vp_generate_camera_rays`. This plan can
+only matter for scenes whose shading is actually expensive, which
+remains to be demonstrated — current evidence says killeroo is NOT
+such a scene.
+
+Author: 2026-06-03.
 
 ## Goal
 
