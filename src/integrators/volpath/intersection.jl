@@ -767,7 +767,7 @@ Iterates over per-voxel majorant bounds, doing ratio tracking within each segmen
             if t_sample >= t_max_seg
                 # Past segment end — apply remaining transmittance
                 dt_remain = t_max_seg - t
-                T_maj = exp(-dt_remain * σ_maj)
+                T_maj = fast_exp(-dt_remain * σ_maj)
                 T_maj_0 = T_maj[1]
                 if T_maj_0 > 1f-10
                     T_ray = T_ray * T_maj / T_maj_0
@@ -785,7 +785,7 @@ Iterates over per-voxel majorant bounds, doing ratio tracking within each segmen
             σ_n = σ_maj - mp.σ_a - mp.σ_s
             σ_n = SpectralRadiance(max(σ_n[1], 0f0), max(σ_n[2], 0f0), max(σ_n[3], 0f0), max(σ_n[4], 0f0))
 
-            T_maj = exp(-dt * σ_maj)
+            T_maj = fast_exp(-dt * σ_maj)
 
             # Ratio tracking update (null-scattering only for transmittance)
             pr = T_maj[1] * σ_maj_0

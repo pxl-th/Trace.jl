@@ -347,7 +347,7 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
             # Passed end of segment without interaction
             # Apply transmittance for remaining distance
             dt_remain = t_max_seg - t
-            T_maj = exp(-dt_remain * σ_maj)
+            T_maj = fast_exp(-dt_remain * σ_maj)
             T_maj_0 = T_maj[1]
             if T_maj_0 > 1f-10
                 beta = beta * T_maj / T_maj_0
@@ -359,7 +359,7 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
         end
 
         # Compute transmittance for this step
-        T_maj = exp(-dt * σ_maj)
+        T_maj = fast_exp(-dt * σ_maj)
 
         # Sample medium properties at interaction point (incremental position)
         p = Point3f(ray_o + ray_d * dt)
