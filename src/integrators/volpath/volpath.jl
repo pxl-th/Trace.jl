@@ -483,6 +483,14 @@ function render!(
     # Allocate or validate state
     # Note: Rebuild state if lights changed (num_lights mismatch) to update light sampler
     n_lights = length(lights)
+    # `hit_area_light_queue` and the per-material typed queues are vestigial
+    # ONLY when the HW per-material chit fully owns the surface shading.  On
+    # medium-bearing scenes the wavefront medium-survives-to-surface path
+    # (`delta-tracking.jl`'s `vp_sample_medium_kernel!`) still uses
+    # `enqueue_after_intersection!` to push hits into both queues, so they
+    # must be full-capacity even on HW.
+    chit_owns_surface = (accel isa Lava.HWAdaptedAccel) && isempty(media)
+
     if vp.state === nothing ||
        vp.state.width != width ||
        vp.state.height != height ||
@@ -501,7 +509,7 @@ function render!(
                                 sampler_seed=UInt32(0),
                                 accumulation_eltype=vp.accumulation_eltype,
                                 sensor=vp.sensor,
-                                hw_accel=vp.hw_accel)
+                                hw_accel=chit_owns_surface)
     end
     state = vp.state
 
@@ -510,9 +518,9 @@ function render!(
     # Build (or refresh) the per-material typed queues from the adapted
     # materials set.  On the HW per-material chit path the chit shaders fully
     # shade hits inline and the typed queues are never drained, so we use a
-    # capacity=1 placeholder.  SW BVH still routes surface hits through these
-    # to avoid the monolithic with_index BSDF switch.
-    pmq_capacity = (accel isa Lava.HWAdaptedAccel) ? 1 : n_pixels
+    # capacity=1 placeholder.  SW BVH and HW-with-media still route surface
+    # hits through these to avoid the monolithic with_index BSDF switch.
+    pmq_capacity = chit_owns_surface ? 1 : n_pixels
     ensure_per_material_queue!(state, materials, pmq_capacity)
 
     # Get current iteration index and increment
@@ -621,8 +629,11 @@ function render!(
         # `per_material_queue` are unused on this path, so we skip both
         # `vp_handle_emitters!` and `vp_shade_typed!`. The SW BVH path
         # still drains them — the post-hoc kernels are the only place
-        # surface shading runs there.
-        if !(accel isa Lava.HWAdaptedAccel)
+        # surface shading runs there. Medium-bearing HW scenes also still
+        # need them: the medium-survives-to-surface path
+        # (`vp_sample_medium_kernel!` in delta-tracking.jl) populates the
+        # same queues via `enqueue_after_intersection!`.
+        if !chit_owns_surface
             # Emission MIS — drains hit_area_light_queue. Direct port of
             # pbrt-v4's "Handle emitters hit by indirect rays" kernel
             # (wavefront/integrator.cpp:540). Runs after trace (queue has been
