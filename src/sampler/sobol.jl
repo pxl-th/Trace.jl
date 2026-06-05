@@ -127,6 +127,39 @@ Arguments:
 end
 
 """
+    sobol_sample_2(a::Int64, dim0::Int32, dim1::Int32, scramble0::UInt32, scramble1::UInt32, matrices) -> (Float32, Float32)
+
+Generate two Sobol samples at the same index but different dimensions, fused
+into one 52-iteration loop.  Both samples share the bit-by-bit scan of `a`;
+only the matrix table base and the scrambling seed differ.
+
+Used by `sample_2d` so the jitter (2D) sample pays for one loop's worth of
+induction/branch overhead instead of two.  Bit-identical output to two
+separate `sobol_sample` calls.
+"""
+@inline function sobol_sample_2(
+    a::Int64, dim0::Int32, dim1::Int32,
+    scramble0::UInt32, scramble1::UInt32, matrices,
+)::Tuple{Float32, Float32}
+    v0 = UInt32(0)
+    v1 = UInt32(0)
+    base0 = dim0 * SOBOL_MATRIX_SIZE + Int32(1)
+    base1 = dim1 * SOBOL_MATRIX_SIZE + Int32(1)
+    for bit0 in Int32(0):Int32(SOBOL_MATRIX_SIZE - 1)
+        bit_val = UInt32((a >> bit0) & Int64(1))
+        mask = bit_val * UInt32(0xffffffff)
+        @inbounds v0 ⊻= matrices[base0 + bit0] & mask
+        @inbounds v1 ⊻= matrices[base1 + bit0] & mask
+    end
+    v0 = fast_owen_scramble(v0, scramble0)
+    v1 = fast_owen_scramble(v1, scramble1)
+    return (
+        min(Float32(v0) * FLOAT32_SCALE, ONE_MINUS_EPSILON),
+        min(Float32(v1) * FLOAT32_SCALE, ONE_MINUS_EPSILON),
+    )
+end
+
+"""
     sobol_sample_unscrambled(a::Int64, dimension::Int32) -> Float32
 
 Generate an unscrambled Sobol sample (for debugging/comparison).
@@ -295,9 +328,12 @@ Uses two consecutive Sobol dimensions with independent scrambling seeds.
     hash1 = u_uint32(bits)
     hash2 = u_uint32(bits >> 32)
 
-    u1 = sobol_sample(Int64(sobol_index), Int32(0), hash1, sobol_matrices)
-    u2 = sobol_sample(Int64(sobol_index), Int32(1), hash2, sobol_matrices)
-    return (u1, u2)
+    # Fuse the two 52-iter sobol_sample loops into one — same input bit
+    # pattern (`sobol_index`), different matrix bases (dim 0 vs dim 1) and
+    # different scrambling seeds.  Halves the per-jitter-sample loop control
+    # overhead in vp_generate_camera_rays_kernel!.
+    return sobol_sample_2(Int64(sobol_index), Int32(0), Int32(1),
+                          hash1, hash2, sobol_matrices)
 end
 
 """
