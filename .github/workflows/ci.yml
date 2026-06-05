@@ -29,6 +29,13 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          # pbrt reference suite is the slowest part of runtests by far —
+          # 256 spp on lavapipe (Mesa LLVMpipe, no HW accel) blows past
+          # the 60-minute job timeout. 32 spp still catches the noise /
+          # MIS regressions the suite is designed to surface; per-scene
+          # convergence tolerances in test/pbrt/test_pbrt_all_materials.jl
+          # are set generously enough to clear at 32 spp.
+          HIKARI_PBRT_SPP: "32"
 
   pbrt-comparison:
     name: pbrt-v4 Comparison
