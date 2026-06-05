@@ -183,52 +183,13 @@ end
         work.pi, wo, work.uv
     )
 
-    # HandleEmissiveIntersection — following pbrt-v4
-    # Check if we hit a triangle with a DiffuseAreaLight
-    if work.arealight_flat_idx > UInt32(0)
-        # Evaluate emission from the DiffuseAreaLight
-        light_idx = flat_to_light_index(lights, Int32(work.arealight_flat_idx))
-        Le = with_index(arealight_Le, lights, light_idx,
-            lights, rgb2spec_table, wo, Vec3f(work.n), work.uv, work.lambda
-        )
+    # HandleEmissiveIntersection moved to `vp_handle_emitters_kernel!`
+    # (matches pbrt-v4 hitAreaLightQueue). This kernel is now dead in the
+    # live volpath loop — the fused trace-and-shade path bypasses it. The
+    # stripped emission-MIS block here previously read
+    # `work.arealight_flat_idx`, `work.triangle_area`, `work.t_hit` which
+    # are no longer fields on VPHitSurfaceWorkItem.
 
-        if !is_black(Le)
-            contribution = work.beta * Le
-
-            # MIS weight following pbrt-v4 HandleEmissiveIntersection
-            final_contrib = if work.depth == Int32(0) || work.specular_bounce
-                contribution / average(work.r_u)
-            else
-                # lightChoicePDF = PMF from BVH light sampler (spatially-aware)
-                lightChoicePDF = bvh_pmf(
-                    bvh_nodes, light_to_bit_trail,
-                    num_infinite_lights, num_bvh_lights,
-                    work.prev_intr_p, work.prev_intr_n, Int32(work.arealight_flat_idx)
-                )
-                # PDF_Li: solid angle PDF for uniform triangle sampling
-                # pdf_area = 1/area, convert to solid angle: pdf = dist^2 / (cos_theta * area)
-                cos_theta = abs(dot(work.n, normalize(work.ray.d)))
-                lightPDF = if cos_theta > 0f0 && work.triangle_area > 0f0
-                    pdf_li = (work.t_hit * work.t_hit) / (cos_theta * work.triangle_area)
-                    lightChoicePDF * pdf_li
-                else
-                    0f0
-                end
-                r_l = work.r_l * lightPDF
-                mis_denom = average(work.r_u + r_l)
-                if mis_denom > 1f-10
-                    contribution / mis_denom
-                else
-                    contribution / average(work.r_u)
-                end
-            end
-
-            # Add to pixel
-            pixel_idx = work.pixel_index
-            base_idx = (pixel_idx - Int32(1)) * Int32(4)
-            accumulate_spectrum!(pixel_L, base_idx, final_contrib)
-        end
-    end
 
     # Create material evaluation work item for BSDF evaluation
     # All materials have BSDF (EmissiveMaterial is removed)
@@ -659,44 +620,9 @@ end
         work.pi, wo, work.uv
     )
 
-    # ── HandleEmissiveIntersection (was vp_process_surface_hits) ──
-    if work.arealight_flat_idx > UInt32(0)
-        light_idx = flat_to_light_index(lights, Int32(work.arealight_flat_idx))
-        Le = with_index(arealight_Le, lights, light_idx,
-            lights, rgb2spec_table, wo, Vec3f(work.n), work.uv, work.lambda
-        )
-
-        if !is_black(Le)
-            contribution = work.beta * Le
-            final_contrib = if work.depth == Int32(0) || work.specular_bounce
-                contribution / average(work.r_u)
-            else
-                lightChoicePDF = bvh_pmf(
-                    bvh_nodes, light_to_bit_trail,
-                    num_infinite_lights, num_bvh_lights,
-                    work.prev_intr_p, work.prev_intr_n, Int32(work.arealight_flat_idx)
-                )
-                cos_theta = abs(dot(work.n, normalize(work.ray.d)))
-                lightPDF = if cos_theta > 0f0 && work.triangle_area > 0f0
-                    pdf_li = (work.t_hit * work.t_hit) / (cos_theta * work.triangle_area)
-                    lightChoicePDF * pdf_li
-                else
-                    0f0
-                end
-                r_l = work.r_l * lightPDF
-                mis_denom = average(work.r_u + r_l)
-                if mis_denom > 1f-10
-                    contribution / mis_denom
-                else
-                    contribution / average(work.r_u)
-                end
-            end
-
-            pixel_idx = work.pixel_index
-            base_idx = (pixel_idx - Int32(1)) * Int32(4)
-            accumulate_spectrum!(pixel_L, base_idx, final_contrib)
-        end
-    end
+    # HandleEmissiveIntersection moved to `vp_handle_emitters_kernel!`
+    # (matches pbrt-v4 hitAreaLightQueue). This kernel is now dead in the
+    # live volpath loop — the fused trace-and-shade path bypasses it.
 
     # Synthesize stack-local material eval work item. This is the same shape
     # that used to be pushed into `material_queue` and re-read by both kernels.
@@ -752,5 +678,426 @@ function vp_shade_surface_hits!(state::VolPathState, accel, media_interfaces, me
         camera, samples_per_pixel,
         state.rr_depth,
     )
+    return nothing
+end
+
+
+# ============================================================================
+# Per-material-type Shading (pbrt-v4 wavefront/surfscatter.cpp:41 pattern)
+# ============================================================================
+#
+# `vp_shade_surface_hits_kernel!` above includes every concrete material's
+# BSDF code (via `with_index(materials, ...)`) inside a single monolithic
+# SPIR-V module.  Driver-reported register count was 128 on RTX 4000 Ada —
+# right at the occupancy cliff (above 128 the per-SM thread count drops
+# from 512 to 256).  pbrt-v4 sidesteps this by splitting shading into one
+# kernel per concrete material type via `ForEachType`; each kernel is
+# monomorphised on a single `ConcreteMaterial`, so its SPIR-V only contains
+# that one material's BSDF.
+#
+# Pieces:
+#   * `surface_direct_lighting_inner_typed!` / `evaluate_material_inner_typed!`
+#     — same logic as the `_inner!` variants above but take the concrete
+#     material `mat::M` and call `evaluate_bsdf_spectral(mat, ...)` /
+#     `sample_bsdf_spectral(mat, ...)` directly.  No `with_index` for the
+#     material axis.  Sobol inlined + shadow trace inlined, just like the
+#     non-typed versions.
+#   * `vp_shade_material_kernel!` — reads `TypedHit{T}`, looks up the
+#     concrete instance via `material_of_type(materials, T, vec_idx)` (one
+#     array load resolved at compile time), accumulates emission, runs DL
+#     + indirect path.
+#   * `vp_shade_typed!` — `foreach_type` over the `MultiTypeMaterialQueue`,
+#     wrapped in `Lava.concurrent_dispatch_group` so per-type kernels can
+#     overlap on idle SMs (otherwise serialized by the per-dispatch
+#     barriers — each per-type kernel writes to disjoint slots of the
+#     shared `next_ray_queue` + atomic `pixel_L`).
+
+"""Typed counterpart to `surface_direct_lighting_inner!`.  Same body but
+calls `evaluate_bsdf_spectral(mat, ...)` directly instead of going through
+`with_index`.  Caller passes the concrete material instance picked up via
+`material_of_type` in the per-type kernel."""
+@propagate_inbounds function surface_direct_lighting_inner_typed!(
+    mat::M,
+    pixel_L,
+    accel,
+    media_interfaces,
+    media,
+    work::VPMaterialEvalWorkItem,
+    materials,
+    lights,
+    rgb2spec_table,
+    bvh_nodes,
+    infinite_light_indices,
+    num_infinite_lights::Int32,
+    num_bvh_lights::Int32,
+    num_lights::Int32,
+    sobol_rng,
+    sample_idx::Int32,
+    camera,
+    samples_per_pixel::Int32,
+    do_regularize::Bool,
+) where M
+    num_lights < Int32(1) && return
+
+    # Null-material boundaries are routed away from the typed queues at the
+    # push site (`vp_trace_kernel!` handles the medium swap inline).  A
+    # concrete `mat::M` here is always a real BSDF.
+
+    # Inline Sobol (matches `surface_direct_lighting_inner!` dim allocation).
+    pixel_idx = work.pixel_index
+    pixel_idx_0 = pixel_idx - Int32(1)
+    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    base_dim = Int32(6) + Int32(7) * work.depth
+    light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
+    u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
+    u_light = Point2f(u_light_x, u_light_y)
+
+    light_idx, light_pmf = bvh_sample_light(
+        bvh_nodes, infinite_light_indices,
+        num_infinite_lights, num_bvh_lights,
+        work.pi, work.ns, light_select,
+    )
+    if light_idx < Int32(1) || light_idx > num_lights || light_pmf <= 0f0
+        return
+    end
+
+    light_sample = sample_light_spectral(
+        rgb2spec_table, lights, light_idx, work.pi, work.lambda, u_light,
+    )
+
+    if light_sample.pdf > 0f0 && !is_black(light_sample.Li)
+        tfc = compute_texture_filter_context(work, camera, samples_per_pixel)
+        regularize = do_regularize && work.any_non_specular_bounces
+
+        # Direct call into the concrete material — Julia inlines.
+        bsdf_f, bsdf_pdf = evaluate_bsdf_spectral(
+            mat, rgb2spec_table, materials,
+            work.wo, light_sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize,
+        )
+
+        if !is_black(bsdf_f)
+            result = compute_direct_lighting_spectral(
+                work.pi, work.n, work.ns, work.wo, work.beta, work.r_u, work.lambda,
+                light_sample, bsdf_f, bsdf_pdf,
+            )
+            if result.valid
+                scaled_r_l = result.r_l * light_pmf
+
+                shadow_medium = if is_medium_transition(work.interface)
+                    get_medium_index(work.interface, result.ray_direction, work.n)
+                else
+                    work.current_medium
+                end
+
+                # Inline shadow trace + accumulate (opt4 pattern).
+                T_ray, tr_r_u, tr_r_l, visible = trace_shadow_transmittance(
+                    accel, media_interfaces, media, materials, rgb2spec_table,
+                    result.ray_origin, result.ray_direction, result.t_max,
+                    work.lambda, shadow_medium,
+                )
+
+                if visible && !is_black(T_ray)
+                    mis_weight = result.r_u * tr_r_u + scaled_r_l * tr_r_l
+                    mis_denom = average(mis_weight)
+                    if mis_denom > 1f-10
+                        final_L = result.Ld * T_ray / mis_denom
+                        if !is_black(final_L)
+                            base_idx = (work.pixel_index - Int32(1)) * Int32(4)
+                            accumulate_spectrum!(pixel_L, base_idx, final_L)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return
+end
+
+"""Typed counterpart to `evaluate_material_inner!`.  Uses
+`sample_bsdf_spectral(mat, ...)` and `evaluate_bsdf_spectral(mat, ...)`
+directly; no `with_index` for materials."""
+@propagate_inbounds function evaluate_material_inner_typed!(
+    mat::M,
+    next_ray_queue,
+    work::VPMaterialEvalWorkItem,
+    materials,
+    rgb2spec_table,
+    max_depth::Int32,
+    do_regularize::Bool,
+    sobol_rng,
+    sample_idx::Int32,
+    camera,
+    samples_per_pixel::Int32,
+    rr_depth::Int32,
+) where M
+    # Null material → never sees a typed kernel (routed at push site).
+    new_depth = work.depth + Int32(1)
+    if new_depth >= max_depth
+        return
+    end
+
+    pixel_idx = work.pixel_index
+    pixel_idx_0 = pixel_idx - Int32(1)
+    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    base_dim = Int32(6) + Int32(7) * work.depth
+    rng = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(4))
+    u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))
+    u = Point2f(u_x, u_y)
+    rr_sample = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(7))
+
+    regularize = do_regularize && work.any_non_specular_bounces
+    tfc = compute_texture_filter_context(work, camera, samples_per_pixel)
+
+    sample = sample_bsdf_spectral(
+        mat, rgb2spec_table, materials,
+        work.wo, work.ns, work.dpdus, tfc, work.lambda, u, rng, regularize,
+    )
+
+    if sample.pdf > 0f0 && !is_black(sample.f)
+        cos_theta = abs(dot(sample.wi, work.ns))
+        new_beta = work.beta * sample.f * cos_theta / sample.pdf
+
+        new_eta_scale = if is_transmissive(sample.flags)
+            work.eta_scale * sample.eta * sample.eta
+        else
+            work.eta_scale
+        end
+
+        r_l_pdf = if sample.pdf_is_proportional
+            _, p = evaluate_bsdf_spectral(
+                mat, rgb2spec_table, materials,
+                work.wo, sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize,
+            )
+            max(p, 1f-10)
+        else
+            sample.pdf
+        end
+        new_r_l = work.r_u / r_l_pdf
+
+        should_continue, final_beta = russian_roulette_spectral(
+            new_beta, work.r_u, new_eta_scale, new_depth, rr_sample, rr_depth,
+        )
+
+        if should_continue
+            new_medium = if is_medium_transition(work.interface)
+                get_medium_index(work.interface, sample.wi, work.n)
+            else
+                work.current_medium
+            end
+            offset_dir = if dot(sample.wi, work.n) > 0f0; work.n; else; -work.n; end
+            ray_origin = Point3f(work.pi + offset_dir * 1f-4)
+            new_ray = Raycore.Ray(o=ray_origin, d=sample.wi, t_max=Inf32, time=0f0)
+            new_lambda = if sample.secondary_terminated
+                terminate_secondary_wavelengths(work.lambda)
+            else
+                work.lambda
+            end
+            ray_item = VPRayWorkItem(
+                new_ray, new_depth, new_lambda, work.pixel_index,
+                final_beta, work.r_u, new_r_l,
+                work.pi, work.ns,
+                new_eta_scale,
+                is_specular(sample.flags),
+                work.any_non_specular_bounces || !is_specular(sample.flags),
+                new_medium,
+            )
+            push!(next_ray_queue, ray_item)
+        end
+    end
+    return
+end
+
+"""Per-material-type shading kernel — drains one slot of the
+`MultiTypeMaterialQueue`.  Julia specialises this function separately for
+each concrete `T`, so each per-type dispatch's SPIR-V contains exactly one
+material's BSDF code — no `with_index` switching on the material axis.
+
+Emission MIS still uses `with_index` on `lights` (light-type axis, separate
+concern from materials)."""
+@propagate_inbounds function vp_shade_material_kernel!(
+    typed::TypedHit{T},
+    next_ray_queue,
+    pixel_L,
+    accel,
+    media_interfaces,
+    media,
+    materials,
+    lights,
+    rgb2spec_table,
+    bvh_nodes,
+    infinite_light_indices,
+    light_to_bit_trail,
+    num_infinite_lights::Int32,
+    num_bvh_lights::Int32,
+    num_lights::Int32,
+    max_depth::Int32,
+    do_regularize::Bool,
+    sobol_rng,
+    sample_idx::Int32,
+    camera,
+    samples_per_pixel::Int32,
+    rr_depth::Int32,
+) where T
+    work = typed.hit
+    wo = -work.ray.d
+
+    # Concrete material instance — compile-time slot lookup + indexed array
+    # load.  No `with_index` switch in this kernel's SPIR-V.
+    mat = material_of_type(materials, T, work.material_idx.vec_idx)
+
+    # Emission MIS for indirect rays hitting area lights now runs in its own
+    # kernel (`vp_handle_emitters_kernel!` draining `hit_area_light_queue`),
+    # matching pbrt-v4 wavefront. The per-material kernels stay focused on
+    # BSDF sampling + direct lighting.
+
+    # Stack-local material-eval work item.
+    mat_work = VPMaterialEvalWorkItem(work, wo, work.material_idx)
+
+    # pbrt-v4 wavefront `EvaluateMaterialAndBSDF<ConcreteMaterial>` builds the
+    # BxDF once per surface hit via `Material::GetBxDF` so the subsequent
+    # `Sample_f` and `f` calls operate on a small struct with already-resolved
+    # spectra / textures.  Default `get_bxdf` is identity, so materials whose
+    # BSDF state is already small (Diffuse: 16 B) pay nothing; Conductor's
+    # 900-byte `PiecewiseLinearSpectrum{56}`-bearing struct collapses to a
+    # 40-byte `ConductorEvaluated`, eliminating 8-16 redundant
+    # `eval_ior_spectral` binary searches per surface hit.
+    tfc_for_bxdf = compute_texture_filter_context(mat_work, camera, samples_per_pixel)
+    regularize_for_bxdf = do_regularize && work.any_non_specular_bounces
+    bxdf = get_bxdf(mat, rgb2spec_table, materials, tfc_for_bxdf, work.lambda, regularize_for_bxdf)
+
+    # Direct lighting + inline shadow + accumulate (typed BSDF eval).
+    surface_direct_lighting_inner_typed!(
+        bxdf,
+        pixel_L, accel, media_interfaces, media,
+        mat_work, materials, lights, rgb2spec_table,
+        bvh_nodes, infinite_light_indices,
+        num_infinite_lights, num_bvh_lights, num_lights,
+        sobol_rng, sample_idx,
+        camera, samples_per_pixel,
+        do_regularize,
+    )
+
+    # BSDF sample + RR + push continuation (typed BSDF sample).
+    evaluate_material_inner_typed!(
+        bxdf,
+        next_ray_queue,
+        mat_work, materials, rgb2spec_table, max_depth,
+        do_regularize,
+        sobol_rng, sample_idx,
+        camera, samples_per_pixel,
+        rr_depth,
+    )
+    return
+end
+
+"""Drain `hit_area_light_queue`: applies emission-MIS to each surface hit
+that landed on an area-light triangle. Direct port of pbrt-v4's
+"Handle emitters hit by indirect rays" kernel
+(wavefront/integrator.cpp:540-572). Runs in parallel with `vp_shade_typed!`
+because both write only to per-pixel atomic `pixel_L` accumulators (the
+emitter kernel writes only `pixel_L`; the material kernels also write
+`next_ray_queue` but that's disjoint from `pixel_L`)."""
+@propagate_inbounds function vp_handle_emitters_kernel!(
+    work,                            # VPHitAreaLightWorkItem (per-thread)
+    pixel_L,
+    lights, rgb2spec_table,
+    bvh_nodes, light_to_bit_trail,
+    num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
+)
+    # Le(p, n, uv, wo)
+    light_idx = flat_to_light_index(lights, Int32(work.arealight_flat_idx))
+    Le = with_index(arealight_Le, lights, light_idx,
+        lights, rgb2spec_table, work.wo, Vec3f(work.n), work.uv, work.lambda,
+    )
+    is_black(Le) && return
+
+    contribution = work.beta * Le
+    final_contrib = if work.depth == Int32(0) || work.specular_bounce
+        contribution / average(work.r_u)
+    else
+        lightChoicePDF = bvh_pmf(
+            bvh_nodes, light_to_bit_trail,
+            num_infinite_lights, num_bvh_lights,
+            work.prev_intr_p, work.prev_intr_n, Int32(work.arealight_flat_idx),
+        )
+        cos_theta = abs(dot(work.n, work.wo))   # wo = -ray.d → abs(dot(n, -ray.d)) = abs(dot(n, ray.d))
+        lightPDF = if cos_theta > 0f0 && work.triangle_area > 0f0
+            pdf_li = (work.t_hit * work.t_hit) / (cos_theta * work.triangle_area)
+            lightChoicePDF * pdf_li
+        else
+            0f0
+        end
+        r_l = work.r_l * lightPDF
+        mis_denom = average(work.r_u + r_l)
+        if mis_denom > 1f-10
+            contribution / mis_denom
+        else
+            contribution / average(work.r_u)
+        end
+    end
+
+    base_idx = (work.pixel_index - Int32(1)) * Int32(4)
+    accumulate_spectrum!(pixel_L, base_idx, final_contrib)
+    return
+end
+
+"""Drain the per-bounce `hit_area_light_queue` produced by
+`enqueue_after_intersection!`. Matches pbrt-v4's split between
+`hitAreaLightQueue` (this kernel) and `MaterialEvalQueue` (the
+per-material `vp_shade_typed!` kernels)."""
+function vp_handle_emitters!(state::VolPathState, lights)
+    num_lights = state.num_lights
+    num_lights < Int32(1) && return nothing
+    foreach(vp_handle_emitters_kernel!,
+        state.hit_area_light_queue,
+        state.pixel_L,
+        lights, state.rgb2spec_table,
+        state.bvh_nodes, state.light_to_bit_trail,
+        state.num_infinite_lights, state.num_bvh_lights, state.num_lights,
+    )
+    return nothing
+end
+
+"""Drain the per-material typed queues — one indirect dispatch per concrete
+material type, each kernel monomorphised on a single `TypedHit{T}`.
+
+Wrapped in `Lava.concurrent_dispatch_group` so the per-type dispatches can
+overlap on idle SMs instead of serializing on per-dispatch barriers.  The
+per-type kernels write to atomically-claimed slots in the shared
+`next_ray_queue` and to per-pixel atomic `pixel_L` accumulators, so
+overlap is safe."""
+function vp_shade_typed!(
+    state::VolPathState, accel, media_interfaces, media,
+    materials, lights,
+    sample_idx::Int32,
+    camera, samples_per_pixel::Int32,
+    regularize::Bool = true,
+)
+    concurrent_dispatch_group() do
+        foreach_type(vp_shade_material_kernel!,
+            state.per_material_queue,
+            next_ray_queue(state),
+            state.pixel_L,
+            accel,
+            media_interfaces,
+            media,
+            materials,
+            lights,
+            state.rgb2spec_table,
+            state.bvh_nodes,
+            state.infinite_light_indices,
+            state.light_to_bit_trail,
+            state.num_infinite_lights,
+            state.num_bvh_lights,
+            state.num_lights,
+            state.max_depth,
+            regularize,
+            state.sobol_rng, sample_idx,
+            camera, samples_per_pixel,
+            state.rr_depth,
+        )
+    end
     return nothing
 end

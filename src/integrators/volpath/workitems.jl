@@ -261,6 +261,45 @@ struct VPShadowRayWorkItem
 end
 
 # ============================================================================
+# Hit Area Light Work Item — pbrt-v4 HitAreaLightWorkItem (wavefront/workitems.h:147)
+# ============================================================================
+
+"""
+    VPHitAreaLightWorkItem
+
+Surface hit on a triangle that's part of an area light. Pushed (in parallel
+with the per-material queue push) at intersection time so that emission MIS
+can run in its own kernel — see pbrt-v4 `EnqueueWorkAfterIntersection`
+(wavefront/intersect.h:113) and the drain kernel "Handle emitters hit by
+indirect rays" in wavefront/integrator.cpp:540.
+
+Keeping emission MIS in a separate kernel means the material kernels no
+longer carry `arealight_flat_idx`, `triangle_area`, `t_hit`, `prev_intr_p`,
+`prev_intr_n` along the per-material queue path — those fields only matter
+for emission MIS, which now reads them from this dedicated queue instead.
+"""
+struct VPHitAreaLightWorkItem
+    arealight_flat_idx::UInt32      # 1-based index into scene.lights (>0 sentinel)
+    pi::Point3f                     # Intersection point
+    n::Vec3f                        # Geometric normal
+    uv::Point2f                     # Texture coordinates
+    wo::Vec3f                       # Outgoing direction (= -ray.d)
+    lambda::Wavelengths
+    depth::Int32
+    beta::SpectralRadiance
+    r_u::SpectralRadiance
+    r_l::SpectralRadiance
+    prev_intr_p::Point3f            # LightSampleContext analogue
+    prev_intr_n::Vec3f
+    specular_bounce::Bool
+    pixel_index::Int32
+    # Hikari computes pdf_li inline from triangle_area + t_hit (pbrt-v4 calls
+    # `areaLight.PDF_Li(ctx, wi)` which hides these inside the Light handle).
+    triangle_area::Float32
+    t_hit::Float32
+end
+
+# ============================================================================
 # Escaped Ray Work Item
 # ============================================================================
 
@@ -336,10 +375,6 @@ struct VPHitSurfaceWorkItem
     face_idx::UInt32                # Triangle face index (for vertex colors)
     bary::SVector{3, Float32}       # Barycentric coordinates (for vertex colors)
 
-    # Area light info (for HandleEmissiveIntersection MIS)
-    arealight_flat_idx::UInt32      # Flat index into scene.lights (0 = no area light)
-    triangle_area::Float32          # Triangle area (for PDF_Li computation)
-
     # Path state
     lambda::Wavelengths
     pixel_index::Int32
@@ -350,17 +385,30 @@ struct VPHitSurfaceWorkItem
     eta_scale::Float32
     specular_bounce::Bool
     any_non_specular_bounces::Bool
+    # `prev_intr_p`/`prev_intr_n` are kept (vs pbrt-v4 which doesn't carry
+    # them in MaterialEvalWorkItem) because Hikari's null-material handling
+    # lives inside `vp_shade_material_kernel!`, not the intersection kernel.
+    # pbrt-v4 dispatches null-material continuation rays from
+    # `EnqueueWorkAfterIntersection` itself with `r.prevIntrCtx`, so its
+    # MaterialEvalQueue never needs prev_intr. A future refactor moving
+    # null-material handling to `enqueue_after_intersection!` would let us
+    # drop these two fields too.
     prev_intr_p::Point3f
     prev_intr_n::Vec3f
 
     # Medium info
     current_medium::SetKey
 
-    # Distance traveled through medium (for transmittance)
-    t_hit::Float32
+    # ── Fields removed by the pbrt-v4 HitAreaLightQueue split (2026-06-04) ──
+    # Previously stored here: `arealight_flat_idx`, `triangle_area`, `t_hit`.
+    # Those are emission-MIS-only fields; pbrt-v4 `MaterialEvalWorkItem`
+    # doesn't carry them either. Their data still exists at intersection time
+    # and gets forwarded to `VPHitAreaLightWorkItem` by
+    # `enqueue_after_intersection!` when the hit is on an area light. Saves
+    # 12 B per queued item.
 end
 
-# Constructor from VPRayWorkItem with hit geometry
+# Constructor from VPRayWorkItem with hit geometry.
 function VPHitSurfaceWorkItem(
     work::VPRayWorkItem,
     pi::Point3f, n::Vec3f, dpdu::Vec3f, dpdv::Vec3f,
@@ -368,20 +416,17 @@ function VPHitSurfaceWorkItem(
     uv::Point2f, mat_idx::SetKey,
     interface::MediumInterfaceIdx,
     face_idx::UInt32, bary::SVector{3, Float32},
-    arealight_flat_idx::UInt32, triangle_area::Float32,
-    t_hit::Float32
 )
     VPHitSurfaceWorkItem(
         work.ray,
         pi, n, dpdu, dpdv, ns, dpdus, dpdvs, uv, mat_idx, interface,
         face_idx, bary,
-        arealight_flat_idx, triangle_area,
         work.lambda, work.pixel_index,
         work.beta, work.r_u, work.r_l,
         work.depth, work.eta_scale,
         work.specular_bounce, work.any_non_specular_bounces,
         work.prev_intr_p, work.prev_intr_n,
-        work.medium_idx, t_hit
+        work.medium_idx,
     )
 end
 
@@ -396,18 +441,17 @@ function VPHitSurfaceWorkItem(
         work.hit_ns, work.hit_dpdus, work.hit_dpdvs,
         work.hit_uv, work.hit_material_idx, work.hit_interface,
         work.hit_face_idx, work.hit_bary,
-        work.hit_arealight_flat_idx, work.hit_triangle_area,
         work.lambda, work.pixel_index,
         beta, r_u, r_l,
         work.depth, work.eta_scale,
         work.specular_bounce, work.any_non_specular_bounces,
         work.prev_intr_p, work.prev_intr_n,
-        work.medium_idx, work.t_max
+        work.medium_idx,
     )
 end
 
 # Constructor for VPMaterialEvalWorkItem from VPHitSurfaceWorkItem
-# (wo and material_idx are computed externally, e.g. after Mix resolution)
+# (wo and material_idx are computed externally, e.g. after Mix resolution).
 function VPMaterialEvalWorkItem(work::VPHitSurfaceWorkItem, wo::Vec3f, material_idx::SetKey)
     VPMaterialEvalWorkItem(
         work.pi, work.n, work.dpdu, work.dpdv, work.ray.time,

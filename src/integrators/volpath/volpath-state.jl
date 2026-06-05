@@ -70,6 +70,16 @@ mutable struct VolPathState{Backend}
     # Escaped ray queue
     escaped_queue::WorkQueue{VPEscapedRayWorkItem}
 
+    # Hit area-light queue — pbrt-v4 hitAreaLightQueue (wavefront/integrator.h).
+    # Surface hits on emissive triangles are pushed here in PARALLEL to the
+    # per-material queue push (see `enqueue_after_intersection!`); a dedicated
+    # emitter kernel (`vp_handle_emitters!`) drains it between trace and
+    # shade. Keeps the per-material kernels free of emission-MIS code +
+    # eliminates the corresponding fields (`arealight_flat_idx`,
+    # `triangle_area`, `t_hit`, `prev_intr_p`, `prev_intr_n`) from the path
+    # that surface BSDF eval traverses.
+    hit_area_light_queue::WorkQueue{VPHitAreaLightWorkItem}
+
     # Film buffer (spectral radiance per pixel, 4 wavelengths)
     pixel_L::AbstractVector{Float32}
 
@@ -115,6 +125,15 @@ mutable struct VolPathState{Backend}
     hw_shadow_states::Any        # ShadowIterState buffer
     hw_shadow_ray_buf::Any       # RTRay buffer for shadow rays
     hw_shadow_result_buf::Any    # RTHitResult buffer for shadow rays
+
+    # Per-material-type shading queues (one `WorkQueue{TypedHit{T}}` per
+    # concrete material type `T` in the scene).  Built lazily on first render
+    # from the scene's adapted `StaticMultiTypeSet` of materials; rebuilt
+    # when the type tuple changes (different scene).  Type is left `Any`
+    # because the concrete `MultiTypeMaterialQueue{Qs}` signature depends on
+    # which materials are present.
+    per_material_queue::Any              # MultiTypeMaterialQueue{...} | nothing
+    per_material_queue_signature::Any    # type tuple, used as freshness check
 end
 
 """
@@ -137,6 +156,8 @@ function free!(state::VolPathState)
     free!(state.material_queue)
     free!(state.shadow_queue)
     free!(state.escaped_queue)
+    free!(state.hit_area_light_queue)
+    state.per_material_queue !== nothing && free!(state.per_material_queue)
 
     # Pixel buffers
     finalize(state.pixel_L)
@@ -177,9 +198,18 @@ function VolPathState(
     samples_per_pixel::Integer = 1,  # For SobolRNG parameter computation
     sampler_seed::UInt32 = UInt32(0),  # Scrambling seed for Sobol
     accumulation_eltype::DataType = Float32,  # Element type for accumulators (Float32 for OpenCL)
-    sensor::PixelSensor = PixelSensor()  # Pixel sensor for spectral → RGB conversion
+    sensor::PixelSensor = PixelSensor(),  # Pixel sensor for spectral → RGB conversion
+    # When HW per-material chit slots own the shading, the post-hoc
+    # `vp_handle_emitters!` and `vp_shade_typed!` kernels never run, so the
+    # `hit_area_light_queue` and the typed per-material queues are unused.
+    # `hw_accel=true` allocates them with capacity=1 (placeholder slots that
+    # the chit body never touches) so the SoA queue allocations don't blow
+    # past GPU memory on scenes with many material types (e.g. `materials`
+    # scene at 12 types × 2 MP pixels was ~6 GB of vestigial buffers).
+    hw_accel::Bool = false,
 )
     n_pixels = width * height
+    vestigial_capacity = hw_accel ? 1 : queue_capacity
 
     # Create work queues
     ray_queue_a = WorkQueue{VPRayWorkItem}(backend, queue_capacity)
@@ -190,6 +220,7 @@ function VolPathState(
     material_queue = WorkQueue{VPMaterialEvalWorkItem}(backend, queue_capacity)
     shadow_queue = WorkQueue{VPShadowRayWorkItem}(backend, queue_capacity)
     escaped_queue = WorkQueue{VPEscapedRayWorkItem}(backend, queue_capacity)
+    hit_area_light_queue = WorkQueue{VPHitAreaLightWorkItem}(backend, vestigial_capacity)
 
     # Film buffer (4 wavelengths per pixel)
     pixel_L = KA.allocate(backend, Float32, n_pixels * 4)
@@ -237,6 +268,7 @@ function VolPathState(
         ray_queue_a, ray_queue_b, :a,
         medium_sample_queue, medium_scatter_queue,
         hit_surface_queue, material_queue, shadow_queue, escaped_queue,
+        hit_area_light_queue,
         pixel_L, pixel_rgb, pixel_weight_sum,
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
         rgb2spec_table, cie_table,
@@ -247,7 +279,28 @@ function VolPathState(
         sobol_rng,
         # HW RT buffers (lazily allocated)
         nothing, nothing, nothing, nothing, nothing,
+        # Per-material typed queues (built lazily once we see the scene's
+        # adapted materials).
+        nothing, nothing,
     )
+end
+
+"""
+    ensure_per_material_queue!(state, materials_static, capacity)
+
+Lazily build the per-material typed queue from the scene's adapted
+`StaticMultiTypeSet` of materials.  Rebuilt when the type signature
+changes (different scene); a no-op cache hit otherwise.  Called once at
+the start of each `render!` after scene adaptation.
+"""
+function ensure_per_material_queue!(state::VolPathState, materials_static, capacity::Integer)
+    sig = typeof(materials_static).parameters[1]   # Data tuple of StaticMultiTypeSet
+    if state.per_material_queue === nothing || state.per_material_queue_signature !== sig
+        state.per_material_queue !== nothing && free!(state.per_material_queue)
+        state.per_material_queue = build_per_material_queues(materials_static, capacity, state.backend)
+        state.per_material_queue_signature = sig
+    end
+    return state.per_material_queue
 end
 
 # ============================================================================
@@ -269,26 +322,42 @@ function swap_ray_queues!(state::VolPathState)
     state.current_ray_queue = state.current_ray_queue == :a ? :b : :a
 end
 
-"""Reset all processing queues for a new bounce."""
+"""Reset all processing queues for a new bounce.
+
+The empties are tiny 1-element `fill!`s, but the GPU normally inserts a
+full pipeline barrier between each dispatch.  On a typical render that's
+~50 fills/sample, each costing ~600 µs of barrier-wait — a measured
+~1 s/render of pure between-dispatch idle on killeroo.  The empties
+write to disjoint queue size counters and have no inter-dependencies, so
+`concurrent_dispatch_group` lets them all overlap on the GPU with just
+one pre-barrier against the prior bounce's reads."""
 function reset_processing_queues!(state::VolPathState)
-    empty!(state.medium_sample_queue)
-    empty!(state.medium_scatter_queue)
-    empty!(state.hit_surface_queue)
-    empty!(state.material_queue)
-    empty!(state.shadow_queue)
-    empty!(state.escaped_queue)
-    empty!(next_ray_queue(state))
+    concurrent_dispatch_group() do
+        empty!(state.medium_sample_queue)
+        empty!(state.medium_scatter_queue)
+        empty!(state.hit_surface_queue)
+        empty!(state.material_queue)
+        empty!(state.shadow_queue)
+        empty!(state.escaped_queue)
+        empty!(state.hit_area_light_queue)
+        empty!(next_ray_queue(state))
+    end
 end
 
-"""Reset iteration queues before ray tracing."""
+"""Reset iteration queues before ray tracing.  Same barrier-collapsing
+trick as `reset_processing_queues!`."""
 function reset_iteration_queues!(state::VolPathState)
-    empty!(next_ray_queue(state))
-    empty!(state.medium_sample_queue)
-    empty!(state.medium_scatter_queue)
-    empty!(state.hit_surface_queue)
-    empty!(state.material_queue)
-    empty!(state.shadow_queue)
-    empty!(state.escaped_queue)
+    concurrent_dispatch_group() do
+        empty!(next_ray_queue(state))
+        empty!(state.medium_sample_queue)
+        empty!(state.medium_scatter_queue)
+        empty!(state.hit_surface_queue)
+        empty!(state.material_queue)
+        empty!(state.shadow_queue)
+        empty!(state.escaped_queue)
+        empty!(state.hit_area_light_queue)
+        state.per_material_queue !== nothing && empty!(state.per_material_queue)
+    end
 end
 
 """Reset film buffer for a new sample."""

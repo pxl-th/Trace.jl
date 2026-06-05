@@ -303,6 +303,7 @@ end
                                                        geom.ns, geom.dpdus,
                                                        geom.dpdu, geom.dpdv,
                                                        dndu, dndv, geom.n, tfc_bump)
+
             dpdvs_b = cross(ns_b, dpdus_b)
 
             push!(medium_sample_queue, VPMediumSampleWorkItem(
@@ -361,6 +362,7 @@ end
                                                        geom.ns, geom.dpdus,
                                                        geom.dpdu, geom.dpdv,
                                                        dndu, dndv, geom.n, tfc_bump)
+
             dpdvs_b = cross(ns_b, dpdus_b)
 
             push!(hit_surface_queue, VPHitSurfaceWorkItem(
@@ -369,8 +371,6 @@ end
                 ns_b, dpdus_b, dpdvs_b,
                 geom.uv, mat_idx, mi,
                 primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
-                primitive.metadata.arealight_flat_idx, Raycore.area(primitive),
-                t_hit
             ))
             return
         end
@@ -417,7 +417,8 @@ end
 @propagate_inbounds function vp_trace_and_shade_kernel!(
     work,
     next_ray_queue, escaped_queue, medium_sample_queue,
-    hit_surface_queue,                    # kept for max-alpha fallback (rare)
+    per_material_queue,                   # MultiTypeMaterialQueue — routed by material type
+    hit_area_light_queue,                 # parallel push for emission-MIS (pbrt-v4 hitAreaLightQueue)
     pixel_L,
     accel, media_interfaces, media, materials, lights,
     rgb2spec_table,
@@ -448,6 +449,7 @@ end
                                                        geom.ns, geom.dpdus,
                                                        geom.dpdu, geom.dpdv,
                                                        dndu, dndv, geom.n, tfc_bump)
+
             dpdvs_b = cross(ns_b, dpdus_b)
 
             push!(medium_sample_queue, VPMediumSampleWorkItem(
@@ -493,40 +495,61 @@ end
             end
         end
 
-        # Valid surface hit — compute geometry + bump perturbation, then
-        # synthesize a stack-local VPHitSurfaceWorkItem and drive the
-        # shading kernel inline.
+        # Valid surface hit — compute geometry + bump perturbation, resolve
+        # MixMaterial (must happen at the push site, not in the shading
+        # kernel, so the per-material queue routes to the right concrete
+        # type), and either push to the typed shading queue or handle the
+        # null-material boundary inline.
         geom = vp_compute_surface_geometry(primitive, barycentric, ray.o, ray.d, t_hit)
+        wo = -ray.d
+        resolved_mat_idx = resolve_mix_material(materials, mat_idx, geom.pi, wo, geom.uv)
+
+        # Null-material boundary (pbrt `Material "interface"` / nullptr): no
+        # BSDF, no direct lighting, no emission.  Push a continuation ray
+        # with the medium swap inline — depth NOT incremented (same as
+        # `evaluate_material_inner!`'s null-material skip).
+        if !Raycore.is_valid(resolved_mat_idx) && is_medium_transition(mi)
+            ray_d = -wo
+            new_medium = get_medium_index(mi, ray_d, geom.n)
+            offset_dir = if dot(ray_d, geom.n) > 0f0; geom.n; else; -geom.n; end
+            ray_origin = Point3f(geom.pi + offset_dir * 1f-4)
+            new_ray = Raycore.Ray(o=ray_origin, d=ray_d, t_max=Inf32, time=0f0)
+            push!(next_ray_queue, VPRayWorkItem(
+                new_ray, work.depth,
+                work.lambda, work.pixel_index,
+                work.beta, work.r_u, work.r_l,
+                work.prev_intr_p, work.prev_intr_n,
+                work.eta_scale,
+                work.specular_bounce, work.any_non_specular_bounces,
+                new_medium))
+            return
+        end
 
         tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
         dndu, dndv = vp_compute_normal_derivatives(primitive)
-        ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
+        ns_b, dpdus_b = get_perturbed_shading_frame(materials, resolved_mat_idx,
                                                    geom.ns, geom.dpdus,
                                                    geom.dpdu, geom.dpdv,
                                                    dndu, dndv, geom.n, tfc_bump)
+
         dpdvs_b = cross(ns_b, dpdus_b)
 
         hit_work = VPHitSurfaceWorkItem(
             work,
             geom.pi, geom.n, geom.dpdu, geom.dpdv,
             ns_b, dpdus_b, dpdvs_b,
-            geom.uv, mat_idx, mi,
+            geom.uv, resolved_mat_idx, mi,
             primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
-            primitive.metadata.arealight_flat_idx, Raycore.area(primitive),
-            t_hit,
         )
 
-        vp_shade_surface_hits_kernel!(
-            hit_work,
-            next_ray_queue, pixel_L,
-            accel, media_interfaces, media,
-            materials, lights, rgb2spec_table,
-            bvh_nodes, infinite_light_indices, light_to_bit_trail,
-            num_infinite_lights, num_bvh_lights, num_lights,
-            max_depth, do_regularize,
-            sobol_rng, sample_idx,
-            camera, samples_per_pixel, rr_depth,
-        )
+        # Route into the matching per-material queue + emission queue.  The
+        # push site uses `with_index(materials, ...)` ONCE per hit to pick
+        # the concrete type; the per-type shading kernels never touch
+        # `with_index` on the material axis (vp_shade_material_kernel uses
+        # `material_of_type` — a compile-time slot lookup). Emission MIS
+        # runs in its own kernel via `hit_area_light_queue`.
+        enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials, hit_work,
+            primitive.metadata.arealight_flat_idx, Raycore.area(primitive), t_hit)
         return
     end
     # 16 alpha-bounces exhausted (extremely unlikely): ray absorbed
@@ -542,7 +565,8 @@ function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, media
         next_ray_queue(state),
         state.escaped_queue,
         state.medium_sample_queue,
-        state.hit_surface_queue,
+        state.per_material_queue,
+        state.hit_area_light_queue,
         state.pixel_L,
         accel, media_interfaces, media, materials, lights,
         state.rgb2spec_table,
@@ -579,7 +603,15 @@ Following pbrt-v4's TraceTransmittance: transmissive surfaces (MediumInterface) 
 while opaque surfaces block it. The final contribution is computed as:
     Ld * T_ray / average(path_r_u * r_u + path_r_l * r_l)
 """
-@propagate_inbounds function trace_shadow_transmittance(
+# @noinline: this is a self-contained ray-query lifecycle (init+proceed+get
+# all internal via Raycore.closest_hit). Keeping it as a separate OpFunction
+# in SPIR-V gives the call site its own register frame so the surrounding
+# shading kernel (vp_shade_material_kernel!) doesn't drag the shadow trace's
+# state through its own register budget — this is what kept Conductor
+# specializations pinned at 255 regs / ~1 KB spill on RTX 4000 Ada.
+# Lava's refined `incomplete_rayquery` rule (compilation.jl, 2026-06-04)
+# recognises this function's complete lifecycle and lets the @noinline stand.
+@noinline function trace_shadow_transmittance(
     accel, media_interfaces, media, materials, rgb2spec_table,
     origin::Point3f, dir::Vec3f, t_max::Float32, lambda::Wavelengths, medium_idx::SetKey
 )
@@ -618,7 +650,7 @@ while opaque surfaces block it. The final contribution is computed as:
 
         # Hit a surface - look up MediumInterfaceIdx (per-instance override takes priority)
         mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
-        mi = media_interfaces[mi_idx]
+        mi = @inbounds media_interfaces[mi_idx]
         n = vp_compute_geometric_normal(primitive)
         entering = dot(dir, n) < 0f0
 

@@ -91,6 +91,13 @@ Base.push!(scene::Scene, ::Nothing) = SetKey()
 
 function Base.push!(scene::Scene, medium::MediumInterface)
     mat_idx = push!(scene.materials, medium.material)
+    # Record the materials-set SetKey of the inner material from this push so
+    # `push!(scene, mesh, ::Material)` can read it back without doing a GPU
+    # scalar readback on `scene.media_interfaces`. The materials are converted
+    # by `maybe_convert_field` inside the MultiTypeSet push (texture wrappers
+    # collapse to bare scalars), so this is the only place that knows the
+    # canonical type_idx for SBT routing.
+    _LAST_MAT_SETKEY[] = mat_idx
     inside_idx = push!(scene, medium.inside)
     outside_idx = push!(scene, medium.outside)
     mi = MediumInterfaceIdx(mat_idx, inside_idx, outside_idx)
@@ -101,6 +108,11 @@ function Base.push!(scene::Scene, medium::MediumInterface)
     end
     return UInt32(idx)
 end
+
+# Side-channel for `push!(scene, mesh, ::Material)` to read the materials-set
+# SetKey produced by the last `push!(scene, ::MediumInterface)` — needed to
+# compute the HWTLAS instance's `sbt_offset` in the per-material chit path.
+const _LAST_MAT_SETKEY = Ref(SetKey(UInt32(0), UInt32(0)))
 
 """
     update_material!(scene, idx::UInt32, new_medium::Medium)

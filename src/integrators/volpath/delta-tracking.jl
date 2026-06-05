@@ -79,20 +79,25 @@ end
 @propagate_inbounds function vp_sample_medium_kernel!(
     work,
     scatter_queue,
-    hit_surface_queue,
+    per_material_queue,
+    hit_area_light_queue,
+    next_ray_queue,
     escaped_queue,
     pixel_L,
     media,
+    materials,
     rgb2spec_table,
     max_depth::Int32
 )
     # Run delta tracking for this ray
     sample_medium_interaction!(
         scatter_queue,
-        hit_surface_queue,
+        per_material_queue,
+        hit_area_light_queue,
+        next_ray_queue,
         escaped_queue,
         pixel_L,
-        work, media, rgb2spec_table, max_depth
+        work, media, materials, rgb2spec_table, max_depth
     )
 end
 
@@ -141,12 +146,15 @@ end
 @propagate_inbounds function sample_medium_interaction!(
     # Output queues
     scatter_queue,
-    hit_surface_queue,
+    per_material_queue,
+    hit_area_light_queue,
+    next_ray_queue,
     escaped_queue,
     pixel_L,
     # Input
     work::VPMediumSampleWorkItem,
     media,
+    materials,
     rgb2spec_table,
     max_depth::Int32
 )
@@ -209,8 +217,58 @@ end
         )
         push!(escaped_queue, escaped)
     else
-        # Ray reached surface - push to hit_surface_queue for material eval
-        push!(hit_surface_queue, VPHitSurfaceWorkItem(work, beta, r_u, r_l))
+        # Ray reached surface — resolve MixMaterial and route into the
+        # matching per-material typed queue.  This must happen at the push
+        # site (not inside the shading kernel), so the typed queue picks
+        # the concrete material type.  Mirrors the non-medium path in
+        # `vp_trace_and_shade_kernel!`.
+        wo = -work.ray.d
+        resolved_mat_idx = resolve_mix_material(
+            materials, work.hit_material_idx, work.hit_pi, wo, work.hit_uv,
+        )
+
+        # Null-material boundary (pbrt `Material "interface"` / nullptr):
+        # no BSDF, no DL, no emission.  Push a continuation ray with the
+        # medium swap inline (depth NOT incremented), same as the
+        # non-medium trace kernel's null-material handling.
+        if !Raycore.is_valid(resolved_mat_idx) && is_medium_transition(work.hit_interface)
+            ray_d = -wo
+            new_medium = get_medium_index(work.hit_interface, ray_d, work.hit_n)
+            offset_dir = if dot(ray_d, work.hit_n) > 0f0; work.hit_n; else; -work.hit_n; end
+            ray_origin = Point3f(work.hit_pi + offset_dir * 1f-4)
+            new_ray = Raycore.Ray(o=ray_origin, d=ray_d, t_max=Inf32, time=0f0)
+            push!(next_ray_queue, VPRayWorkItem(
+                new_ray, work.depth,
+                work.lambda, work.pixel_index,
+                beta, r_u, r_l,
+                work.prev_intr_p, work.prev_intr_n,
+                work.eta_scale,
+                work.specular_bounce, work.any_non_specular_bounces,
+                new_medium))
+            return
+        end
+
+        # Build VPHitSurfaceWorkItem manually so we can stamp the RESOLVED
+        # material index (the VPMediumSampleWorkItem constructor would keep
+        # the unresolved one, which would mis-route a MixMaterial hit).
+        # Bump-perturbed shading frame is kept as computed in
+        # `vp_trace_and_shade_kernel!` (using the unresolved material's bump
+        # map) — same behaviour as before the per-material split.
+        hit_work = VPHitSurfaceWorkItem(
+            work.ray,
+            work.hit_pi, work.hit_n, work.hit_dpdu, work.hit_dpdv,
+            work.hit_ns, work.hit_dpdus, work.hit_dpdvs,
+            work.hit_uv, resolved_mat_idx, work.hit_interface,
+            work.hit_face_idx, work.hit_bary,
+            work.lambda, work.pixel_index,
+            beta, r_u, r_l,
+            work.depth, work.eta_scale,
+            work.specular_bounce, work.any_non_specular_bounces,
+            work.prev_intr_p, work.prev_intr_n,
+            work.medium_idx,
+        )
+        enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials, hit_work,
+            work.hit_arealight_flat_idx, work.hit_triangle_area, work.t_max)
     end
     return
 end
@@ -453,14 +511,17 @@ end
 # High-Level Medium Sampling Function
 # ============================================================================
 
-function vp_sample_medium_interaction!(state::VolPathState, media)
+function vp_sample_medium_interaction!(state::VolPathState, media, materials)
     foreach(vp_sample_medium_kernel!,
         state.medium_sample_queue,
         state.medium_scatter_queue,
-        state.hit_surface_queue,
+        state.per_material_queue,
+        state.hit_area_light_queue,
+        next_ray_queue(state),
         state.escaped_queue,
         state.pixel_L,
         media,
+        materials,
         state.rgb2spec_table,
         state.max_depth,
     )

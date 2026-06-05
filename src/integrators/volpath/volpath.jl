@@ -413,6 +413,30 @@ end
 # ============================================================================
 
 """
+    finalize_film!(vp::VolPath, film::Film)
+
+Run the per-pixel `pixel_rgb / pixel_weight_sum` divide and write the result
+to `film.framebuffer`.  Called automatically at the end of `render!` unless
+`finalize_framebuffer=false` is passed (used by batched callers that finalize
+once after all samples).
+"""
+function finalize_film!(vp::VolPath, film::Film)
+    state = vp.state
+    state === nothing && return nothing
+    img = film.framebuffer
+    height, width = size(img)
+    backend = KA.get_backend(img)
+    n_pixels = width * height
+    kernel! = vp_finalize_film_kernel!(backend)
+    kernel!(
+        img, state.pixel_rgb, state.pixel_weight_sum,
+        Int32(width), Int32(height);
+        ndrange=Int(n_pixels),
+    )
+    return nothing
+end
+
+"""
     render!(vp::VolPath, scene, film, camera)
 
 Render one iteration/sample using volumetric spectral wavefront path tracing.
@@ -429,7 +453,17 @@ function render!(
     vp::VolPath,
     scene::AbstractScene,
     film::Film,
-    camera::Camera
+    camera::Camera;
+    # When `false`, skip the per-sample `vp_finalize_film_kernel!` dispatch
+    # (which divides accumulated RGB by weight and writes the framebuffer).
+    # The caller must run `finalize_film!(vp, film)` itself after the last
+    # sample.  For batched offline rendering (RayMakie's `colorbuffer` loop)
+    # the intermediate framebuffers are never observed, so skipping all but
+    # the last call saves one full-resolution dispatch per sample —
+    # measured ~17 % of captured GPU time on killeroo 32 spp.  Defaults to
+    # `true` so live-preview callers (Makie's renderloop) keep getting
+    # per-sample updates.
+    finalize_framebuffer::Bool = true,
 )
     img = film.framebuffer
     height, width = size(img)
@@ -466,11 +500,20 @@ function render!(
                                 samples_per_pixel=sobol_spp,
                                 sampler_seed=UInt32(0),
                                 accumulation_eltype=vp.accumulation_eltype,
-                                sensor=vp.sensor)
+                                sensor=vp.sensor,
+                                hw_accel=vp.hw_accel)
     end
     state = vp.state
 
     n_pixels = width * height
+
+    # Build (or refresh) the per-material typed queues from the adapted
+    # materials set.  On the HW per-material chit path the chit shaders fully
+    # shade hits inline and the typed queues are never drained, so we use a
+    # capacity=1 placeholder.  SW BVH still routes surface hits through these
+    # to avoid the monolithic with_index BSDF switch.
+    pmq_capacity = (accel isa Lava.HWAdaptedAccel) ? 1 : n_pixels
+    ensure_per_material_queue!(state, materials, pmq_capacity)
 
     # Get current iteration index and increment
     sample_idx = film.iteration_index[] + Int32(1)
@@ -497,12 +540,14 @@ function render!(
         vp.initial_medium_key = initial_medium
     end
 
-    # Clear spectral buffer (pixel_L) for this sample iteration
-    # This is per-sample, not per-render - pixel_rgb accumulates across all samples
-    reset_film!(state)
-
-    # Reset ray queue
-    empty!(current_ray_queue(state))
+    # Clear spectral buffer (pixel_L) for this sample iteration + reset the
+    # ray queue.  Both are fills; the GPU's per-dispatch barrier between
+    # them is wasted (they touch disjoint memory).  Wrap in a
+    # `concurrent_dispatch_group` so they overlap.
+    concurrent_dispatch_group() do
+        reset_film!(state)
+        empty!(current_ray_queue(state))
+    end
 
     # Generate camera rays with filter sampling (pbrt-v4 style) and ZSobol sampler
     # Adapt filter sampler data to GPU — cache on struct to avoid re-uploading every sample
@@ -555,7 +600,7 @@ function render!(
 
         # Medium sampling — indirect dispatch handles empty queues (0 groups = no-op)
         if !isempty(media)
-            vp_sample_medium_interaction!(state, media)
+            vp_sample_medium_interaction!(state, media, materials)
         end
 
         if !isempty(media)
@@ -570,16 +615,35 @@ function render!(
             vp_handle_escaped_rays!(state, lights)
         end
 
-        # Surface hits originating from the medium delta-tracking path: when a
-        # ray inside a participating medium exits onto a surface, the medium
-        # kernels push a VPHitSurfaceWorkItem onto `hit_surface_queue` and
-        # this dispatch shades it. For surface-only scenes this kernel sees
-        # an empty queue (indirect dispatch → no-op).
-        vp_shade_surface_hits!(state, accel, media_interfaces, media,
-                               materials, lights,
-                               sample_idx,
-                               camera,
-                               Int32(vp.samples_per_pixel), vp.regularize)
+        # HW per-material chit path: emission MIS and per-material BSDF /
+        # DL / RR / continuation already ran INSIDE each material's chit
+        # shader during `vp_trace_and_shade!`. `hit_area_light_queue` and
+        # `per_material_queue` are unused on this path, so we skip both
+        # `vp_handle_emitters!` and `vp_shade_typed!`. The SW BVH path
+        # still drains them — the post-hoc kernels are the only place
+        # surface shading runs there.
+        if !(accel isa Lava.HWAdaptedAccel)
+            # Emission MIS — drains hit_area_light_queue. Direct port of
+            # pbrt-v4's "Handle emitters hit by indirect rays" kernel
+            # (wavefront/integrator.cpp:540). Runs after trace (queue has been
+            # populated by `enqueue_after_intersection!`) and before the
+            # material kernels (which no longer carry the emission-MIS code).
+            if length(lights) > 0
+                vp_handle_emitters!(state, lights)
+            end
+
+            # Per-material shading — drains the typed queues populated by both
+            # the surface trace (non-medium) AND the medium delta-tracking
+            # surface-survive path.  One dispatch per concrete material type;
+            # each kernel contains only one material's BSDF, so SPIR-V is small
+            # and the register cliff (128 regs/thread) is avoided.  Per-type
+            # dispatches overlap via `concurrent_dispatch_group` (Lava).
+            vp_shade_typed!(state, accel, media_interfaces, media,
+                            materials, lights,
+                            sample_idx,
+                            camera,
+                            Int32(vp.samples_per_pixel), vp.regularize)
+        end
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
 
@@ -600,13 +664,13 @@ function render!(
         ndrange=Int(n_pixels)
     )
 
-    # Update film: divide weighted sum by weight sum (pbrt-v4 style)
-    kernel! = vp_finalize_film_kernel!(backend)
-    kernel!(
-        img, pixel_rgb, pixel_weight_sum,
-        Int32(width), Int32(height);
-        ndrange=Int(n_pixels)
-    )
+    # Update film: divide weighted sum by weight sum (pbrt-v4 style).
+    # The kwarg lets batched callers (RayMakie's colorbuffer loop) skip the
+    # intermediate framebuffer writes between samples and only finalize once
+    # at the end — saves a 1.4 Mpx dispatch per sample on killeroo.
+    if finalize_framebuffer
+        finalize_film!(vp, film)
+    end
 
     return nothing
 end

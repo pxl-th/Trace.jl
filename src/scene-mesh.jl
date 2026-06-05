@@ -14,13 +14,26 @@ function Base.push!(scene::Scene, mix::MixMaterial)
     return push!(scene, interface)
 end
 
+# SBT slot for the most recently pushed material. The materials set converts
+# texture wrappers to bare scalars at push! time (e.g. `Diffuse{Texture{RGB,
+# 0, Array{RGB, 0}}, ...}` → `Diffuse{RGB, Float32}`), so the type that ends
+# up in the chit-tuple slot order is the *converted* type — not the type the
+# user pushed. `push!(::MediumInterface)` stashes the SetKey it got back from
+# `MultiTypeSet.push!`, and we read the `type_idx` from that here.
+function _last_pushed_sbt_offset()
+    setkey = _LAST_MAT_SETKEY[]
+    setkey.type_idx == UInt32(0) && return UInt32(0)
+    return UInt32(setkey.type_idx - 1)
+end
+
 # Single material for entire mesh
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, material::Material;
                     transform::Mat4f=Mat4f(I))
     mat_idx = push!(scene, material)
     face_meta = build_face_meta(scene, mesh, mat_idx, material)
     mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
-    handle = push!(scene.accel, mesh_with_meta, transform)
+    sbt_offset = _last_pushed_sbt_offset()
+    handle = push!(scene.accel, mesh_with_meta, transform; sbt_offset=sbt_offset)
     return SceneHandle(scene, mat_idx, handle)
 end
 
@@ -40,9 +53,26 @@ function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, mat_idx::UInt32,
                     material::Material; transform::Mat4f=Mat4f(I))
     face_meta = build_face_meta(scene, mesh, mat_idx, material)
     mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
-    handle = push!(scene.accel, mesh_with_meta, transform)
+    # Reuse path: the material is being update!'d into an existing slot,
+    # so update! returns its SetKey. We don't have a side channel for
+    # update! (would mutate the global state unnecessarily); we still need
+    # the slot index, so we look it up by checking the materials set's
+    # stored representation. Concrete materials only — texture wrappers
+    # collapse to bare scalars during conversion.
+    sbt_offset = UInt32(0)
+    mats = scene.materials
+    if mats isa Raycore.MultiTypeSet
+        converted = Raycore.maybe_convert_field(mats, _unwrap_inner(material))
+        for (i, T) in enumerate(mats.data_order)
+            T === typeof(converted) && (sbt_offset = UInt32(i - 1); break)
+        end
+    end
+    handle = push!(scene.accel, mesh_with_meta, transform; sbt_offset=sbt_offset)
     return SceneHandle(scene, mat_idx, handle)
 end
+
+_unwrap_inner(m::Material) = m
+_unwrap_inner(m::MediumInterface) = _unwrap_inner(m.material)
 
 """
     push!(scene::Scene, mesh::GeometryBasics.Mesh,
