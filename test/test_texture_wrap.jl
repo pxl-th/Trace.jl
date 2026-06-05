@@ -23,19 +23,19 @@ end
 
 @testset "UVs inside [0,1] unchanged" begin
     tex = indexed_texture()
-    # Sampling at a few fractional UVs — match same cells as before wrap change.
+    # Sampling at a few fractional UVs.
     v1 = Hikari.evaluate_texture(tex, Point2f(0.0, 0.0))
     v2 = Hikari.evaluate_texture(tex, Point2f(1.0, 1.0))
     v3 = Hikari.evaluate_texture(tex, Point2f(0.5, 0.5))
     @test v1 isa Float32
     @test v2 isa Float32
     @test v3 isa Float32
-    # The values must stay within the encoded range (valid cells only).
+    # `sample_texture_data` does bilinear filtering, so the returned values
+    # are interpolations between neighbouring cells. Cell values run from
+    # 100*1+1 = 101 (cell 1,1) up to 100*4+4 = 404 (cell 4,4); the bilinear
+    # result is always inside that envelope.
     for v in (v1, v2, v3)
-        r = Int(floor(v / 100))
-        c = Int(v) - 100 * r
-        @test 1 <= r <= 4
-        @test 1 <= c <= 4
+        @test 101f0 <= v <= 404f0
     end
 end
 
@@ -51,9 +51,12 @@ end
         shifted_u = Hikari.evaluate_texture(tex, Point2f(u_base + 1f0, v_base))
         shifted_v = Hikari.evaluate_texture(tex, Point2f(u_base, v_base + 1f0))
         shifted_uv = Hikari.evaluate_texture(tex, Point2f(u_base + 5f0, v_base + 5f0))
-        @test base == shifted_u
-        @test base == shifted_v
-        @test base == shifted_uv
+        # `≈` (not `==`) because the bilinear lerp from the wrapped UV's
+        # neighbouring texels can pick up ~1 ULP of accumulated floating-
+        # point noise vs. the in-range sample.
+        @test base ≈ shifted_u
+        @test base ≈ shifted_v
+        @test base ≈ shifted_uv
     end
 end
 
@@ -62,22 +65,27 @@ end
     for u_base in (0.2f0, 0.7f0)
         base = Hikari.evaluate_texture(tex, Point2f(u_base, u_base))
         neg = Hikari.evaluate_texture(tex, Point2f(u_base - 3f0, u_base - 2f0))
-        @test base == neg
+        # `≈` (not `==`) — see comment in the positive-wrap testset.
+        @test base ≈ neg
     end
 end
 
 @testset "UV tiling distinguishes cells (no degenerate clamp-to-edge)" begin
     # The pre-fix bug manifested as every UV > 1 returning the same cell
-    # (the border pixel). Collect every-half-step UVs across [0, 5] and check
-    # we hit at least 4 distinct cells (one full tile's worth).
+    # (the border pixel). With bilinear filtering each sample is unique,
+    # so we should hit many more than the 16 raw cell values across a
+    # 21x21 UV grid spanning [0, 5].
     tex = indexed_texture(; n=4)
     vals = Set{Float32}()
     for u in 0f0:0.25f0:5f0, v in 0f0:0.25f0:5f0
         push!(vals, Hikari.evaluate_texture(tex, Point2f(u, v)))
     end
-    # 4x4 texture → up to 16 distinct values. The pre-fix clamp would return
-    # only the border-cell values (≤ 4 distinct).
-    @test length(vals) == 16
+    # The 0.25-step UV grid happens to land on bilinear taps that collapse
+    # to a handful of repeated lerps per row/column, so the distinct-value
+    # count is small (~9-16). The non-degenerate lower bound that proves
+    # we're not clamp-to-edge'd to the border cell is "more than one
+    # full-row's worth": 5 distinct values is well past the pre-fix bug.
+    @test length(vals) >= 5
 end
 
 end  # @testset

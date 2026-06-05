@@ -84,8 +84,8 @@ end
         @testset "state allocates all queues and buffers" begin
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
-            baseline = length(Lava._live_buffers)
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            baseline = length(Lava.LIVE_BUFFERS)
 
             scene = _make_test_scene()
             # Create a VolPathState directly
@@ -96,17 +96,17 @@ end
             Lava.vk_flush!(Lava.vk_context())
 
             # State should have allocated many GPU buffers
-            after_alloc = length(Lava._live_buffers)
+            after_alloc = length(Lava.LIVE_BUFFERS)
             @test after_alloc > baseline + 10  # At least 10+ buffers (queues + pixel buffers + tables)
 
             # Free state
             Hikari.free!(state)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
             GC.gc(true)
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
 
-            after_free = length(Lava._live_buffers)
+            after_free = length(Lava.LIVE_BUFFERS)
             # finalize() defers to GC which may not run immediately,
             # so we allow a small tolerance for pending frees
             @test after_free <= baseline + 10
@@ -123,7 +123,7 @@ end
             # Second free should not crash (finalize on already-freed buffers is a no-op)
             Hikari.free!(state)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
         end
     end
 
@@ -148,7 +148,7 @@ end
 
             Hikari.free!(queue)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
         end
 
         @testset "empty and reuse" begin
@@ -172,23 +172,23 @@ end
 
             Hikari.free!(queue)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
         end
 
         @testset "free! releases GPU memory" begin
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
-            baseline = length(Lava._live_buffers)
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            baseline = length(Lava.LIVE_BUFFERS)
 
             queue = Hikari.WorkQueue{Int32}(backend, 128)
             Lava.vk_flush!(Lava.vk_context())
-            @test length(Lava._live_buffers) > baseline
+            @test length(Lava.LIVE_BUFFERS) > baseline
 
             Hikari.free!(queue)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
-            @test length(Lava._live_buffers) == baseline
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            @test length(Lava.LIVE_BUFFERS) == baseline
         end
     end
 
@@ -307,7 +307,7 @@ end
         @testset "buffer count stable across renders" begin
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
 
             scene = _make_test_scene()
             vp = Hikari.VolPath(samples=1, max_depth=2)
@@ -318,8 +318,8 @@ end
             vp(scene, film, camera)
             Lava.vk_flush!(Lava.vk_context())
             GC.gc(true)
-            Lava.flush_deferred_frees!()
-            baseline = length(Lava._live_buffers)
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            baseline = length(Lava.LIVE_BUFFERS)
 
             # Multiple renders — buffer count should not grow
             for _ in 1:5
@@ -328,14 +328,14 @@ end
                 Lava.vk_flush!(Lava.vk_context())
             end
             GC.gc(true)
-            Lava.flush_deferred_frees!()
-            after = length(Lava._live_buffers)
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            after = length(Lava.LIVE_BUFFERS)
 
             @test after == baseline
 
             close(vp)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.flush_deferred_frees!()
+            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
         end
     end
 
@@ -343,37 +343,43 @@ end
     @testset "resize! does not leak buffers" begin
         GC.gc(true)
         Lava.vk_flush!(Lava.vk_context())
-        Lava.flush_deferred_frees!()
-        baseline = length(Lava._live_buffers)
+        Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+        baseline = length(Lava.LIVE_BUFFERS)
 
-        # resize! replaces the internal DataRef — old buffer must be freed
+        # Pre-pool-block test bookkeeping: a tiny LavaArray comes out of an
+        # existing 64-MiB pool block (no new `VkManagedBuffer`) — only allocs
+        # larger than `Lava.POOL_LARGE_THRESHOLD` (= POOL_BLOCK_SIZE = 64 MiB)
+        # bypass the pool. So `LIVE_BUFFERS` may stay flat or grow by at most
+        # one (if the pool runs out and a new block is allocated). The test
+        # invariant is "no leak": the count must NEVER grow past `baseline +
+        # 1` no matter how many resize!s we do.
+
         a = Lava.LavaArray{Int32}(undef, 10)
         Lava.vk_flush!(Lava.vk_context())
-        after_alloc = length(Lava._live_buffers)
-        @test after_alloc == baseline + 1
+        after_alloc = length(Lava.LIVE_BUFFERS)
+        @test after_alloc <= baseline + 1
 
         resize!(a, 100)
         Lava.vk_flush!(Lava.vk_context())
-        Lava.flush_deferred_frees!()
-        after_resize = length(Lava._live_buffers)
-        # Should still be baseline + 1 (new buffer), not baseline + 2 (old leaked)
-        @test after_resize == baseline + 1
+        Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+        after_resize = length(Lava.LIVE_BUFFERS)
+        @test after_resize <= baseline + 1
 
         # Multiple resizes should not accumulate
         for sz in [200, 50, 500, 10]
             resize!(a, sz)
         end
         Lava.vk_flush!(Lava.vk_context())
-        Lava.flush_deferred_frees!()
-        after_multi = length(Lava._live_buffers)
-        @test after_multi == baseline + 1
+        Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+        after_multi = length(Lava.LIVE_BUFFERS)
+        @test after_multi <= baseline + 1
 
         # Free the array itself
         finalize(a)
         Lava.vk_flush!(Lava.vk_context())
-        Lava.flush_deferred_frees!()
-        after_free = length(Lava._live_buffers)
-        @test after_free == baseline
+        Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+        after_free = length(Lava.LIVE_BUFFERS)
+        @test after_free <= baseline + 1
     end
 
     # ── 10. Film lifecycle ──

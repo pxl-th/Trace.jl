@@ -163,13 +163,15 @@ else
     mhw = _channel_means(img_hw)
     @info "HW vs SW parity" per_pixel_mean=pix.mean per_pixel_max=pix.max sw_means=msw hw_means=mhw
 
-    # Tight per-channel parity (broken today on curved tesselated
-    # geometry — see bisect above).  @test_broken keeps the contract
-    # visible; when the curved-geometry issue is fixed, Test.jl reports
-    # `Expected to fail but passed` and we upgrade to `@test`.
+    # Tight per-channel parity. Used to be `@test_broken` while the HW RT
+    # path on curved tesselated geometry was noisy — the per-material chit
+    # work (sd/vk-hw-accel: emission MIS inline, ConductorEvaluated, SBT
+    # slot routing) tightened HW↔SW agreement to ≤ 0.02 + 10% of channel
+    # mean and `@test_broken` started reporting `Expected to fail but
+    # passed`. Promoted back to `@test`.
     for ch in (:r, :g, :b)
         v_sw, v_hw = getfield(msw, ch), getfield(mhw, ch)
-        @test_broken abs(v_hw - v_sw) < 0.02 + 0.1 * max(v_sw, v_hw)
+        @test abs(v_hw - v_sw) < 0.02 + 0.1 * max(v_sw, v_hw)
     end
 end
 

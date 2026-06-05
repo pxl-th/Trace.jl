@@ -12,4 +12,4 @@ DocumenterVitepress = "0.3"
 
 [sources]
 Hikari = {path = ".."}
-Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "sd/multitype-vec"}
+Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "master"}
