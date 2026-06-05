@@ -19,7 +19,11 @@ include(joinpath(@__DIR__, "suite.jl"))
 
 const RECORDED_DIR = joinpath(@__DIR__, "recorded")
 const DISPLAY_DIR  = joinpath(@__DIR__, "display")
-const SPP          = 256
+# 256 spp produces the cleanest gallery thumbnails locally; on CI
+# (lavapipe, no HW accel) it eats the 120-minute job timeout across 142
+# scenes, so we default to a lower spp there. Override with
+# `HIKARI_PBRT_SPP=256` to get the full gallery on capable hardware.
+const SPP          = parse(Int, get(ENV, "HIKARI_PBRT_SPP", "32"))
 const HW_ACCEL     = get(ENV, "HIKARI_HW_ACCEL", "false") == "true"
 
 mkpath(RECORDED_DIR)
