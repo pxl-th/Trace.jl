@@ -429,3 +429,162 @@ Matches pbrt-v4's ConductorBxDF::f and ConductorBxDF::PDF exactly.
 
     return (f, pdf)
 end
+
+# ============================================================================
+# ConductorEvaluated — pbrt-v4 ConductorBxDF analogue
+# ============================================================================
+#
+# pbrt-v4's wavefront `EvaluateMaterialAndBSDF<ConductorMaterial>` calls
+# `Material::GetBxDF(texEval, ctx, lambda)` ONCE per surface hit; that's where
+# `mat.eta` / `mat.k` (SpectrumTexture handles, e.g. `PiecewiseLinearSpectrum`)
+# get evaluated at the 4 sampled wavelengths into the 4-float `SampledSpectrum
+# eta, k` that `ConductorBxDF` carries.  After that the BxDF is a 40-byte
+# struct {mfDistrib, eta, k}; `Sample_f`, `f`, `PDF` all operate on the
+# already-resolved spectra — no further binary search through the 56-element
+# table per call.
+#
+# Hikari's `Conductor{PiecewiseLinearSpectrum{56}, …}` is ~900 bytes and the
+# previous `sample_bsdf_spectral(::Conductor)` / `evaluate_bsdf_spectral
+# (::Conductor)` methods each re-did `eval_ior_spectral(mat.eta, lambda)` and
+# `eval_ior_spectral(mat.k, lambda)` — i.e. 8 binary searches per call, and
+# both BSDF calls happen on every surface hit (sample + MIS eval), giving
+# 16-24 binary searches per surface hit AND inflating live state with the
+# full 900-byte Conductor struct.
+#
+# `ConductorEvaluated` matches pbrt-v4's `ConductorBxDF`: alpha_x/y resolved
+# (and pre-regularized + pre-clamped), eta/k resolved to a 4-element
+# SpectralRadiance.  `get_bxdf(::Conductor, ...)` constructs it once per hit;
+# subsequent `sample_bsdf_spectral(::ConductorEvaluated, ...)` and
+# `evaluate_bsdf_spectral(::ConductorEvaluated, ...)` calls only see this
+# small struct, so the kernel's register pressure on the Conductor path drops
+# closer to the Diffuse baseline.
+struct ConductorEvaluated
+    alpha_x::Float32
+    alpha_y::Float32
+    eta::SpectralRadiance       # already sampled at the 4 wavelengths
+    k::SpectralRadiance         # already sampled at the 4 wavelengths
+end
+
+"""
+    get_bxdf(mat, table, textures, tfc, lambda, regularize) -> bxdf
+
+Hikari's analogue of pbrt-v4's `Material::GetBxDF`. Resolves any per-hit
+spectral / textured material state into a small per-hit BSDF carrier whose
+methods don't repeat that work. Default falls back to identity — most
+materials are already small (Diffuse is RGB+Float = 16 bytes), so the
+overhead of an intermediate struct is unjustified for them.
+"""
+@inline get_bxdf(mat, table, textures, tfc, lambda, regularize::Bool) = mat
+
+@propagate_inbounds function get_bxdf(
+    mat::Conductor, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+)
+    roughness = eval_tex(textures, mat.roughness, tfc)
+    alpha_x = mat.remap_roughness ? roughness_to_α(roughness) : roughness
+    alpha_y = alpha_x  # isotropic
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
+    if !trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+        alpha_x = max(alpha_x, 1f-4)
+        alpha_y = max(alpha_y, 1f-4)
+    end
+    eta = eval_ior_spectral(table, textures, mat.eta, tfc, lambda)
+    k   = eval_ior_spectral(table, textures, mat.k,   tfc, lambda)
+    return ConductorEvaluated(alpha_x, alpha_y, eta, k)
+end
+
+# ----------------------------------------------------------------------------
+# sample_bsdf_spectral(::ConductorEvaluated, …) — pbrt-v4 ConductorBxDF::Sample_f
+# ----------------------------------------------------------------------------
+# Mirrors `bxdfs.h` ConductorBxDF::Sample_f exactly (lines 296-328).
+# Ignores the trailing `tfc` / `regularize` — both were folded into the
+# pre-built bxdf at `get_bxdf` time.
+function sample_bsdf_spectral(
+    bxdf::ConductorEvaluated, ::RGBToSpectrumTable, textures,
+    wo_world::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, ::Float32,
+    ::Bool = false,
+)
+    tangent, bitangent = shading_frame(n, dpdus)
+    wo = world_to_local(wo_world, n, tangent, bitangent)
+    if wo[3] == 0f0
+        return SpectralBSDFSample()
+    end
+
+    alpha_x = bxdf.alpha_x
+    alpha_y = bxdf.alpha_y
+
+    if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+        wi = Vec3f(-wo[1], -wo[2], wo[3])
+        cos_theta_i = abs_cos_theta(wi)
+        F = fr_complex_spectral(cos_theta_i, bxdf.eta, bxdf.k)
+        f = F / cos_theta_i
+        wi_world = local_to_world(wi, n, tangent, bitangent)
+        return SpectralBSDFSample(f, wi_world, 1f0, BXDF_SPECULAR_REFLECTION, 1f0)
+    end
+
+    wm = trowbridge_reitz_sample_wm(wo, sample_u, alpha_x, alpha_y)
+    wi = -wo + 2f0 * dot(wo, wm) * wm
+    if !same_hemisphere(wo, wi)
+        return SpectralBSDFSample()
+    end
+    pdf = trowbridge_reitz_pdf(wo, wm, alpha_x, alpha_y) / (4f0 * abs(dot(wo, wm)))
+    cos_theta_o = abs_cos_theta(wo)
+    cos_theta_i = abs_cos_theta(wi)
+    if cos_theta_i == 0f0 || cos_theta_o == 0f0
+        return SpectralBSDFSample()
+    end
+    F = fr_complex_spectral(abs(dot(wo, wm)), bxdf.eta, bxdf.k)
+    D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+    G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
+    f = D * F * G / (4f0 * cos_theta_i * cos_theta_o)
+    wi_world = local_to_world(wi, n, tangent, bitangent)
+    return SpectralBSDFSample(f, wi_world, pdf, BXDF_GLOSSY_REFLECTION, 1f0)
+end
+
+# ----------------------------------------------------------------------------
+# evaluate_bsdf_spectral(::ConductorEvaluated, …) — pbrt-v4 ConductorBxDF::f / PDF
+# ----------------------------------------------------------------------------
+function evaluate_bsdf_spectral(
+    bxdf::ConductorEvaluated, ::RGBToSpectrumTable, textures,
+    wo_world::Vec3f, wi_world::Vec3f, n::Vec3f, dpdus::Vec3f,
+    ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
+)
+    tangent, bitangent = shading_frame(n, dpdus)
+    wo = world_to_local(wo_world, n, tangent, bitangent)
+    wi = world_to_local(wi_world, n, tangent, bitangent)
+    if !same_hemisphere(wo, wi)
+        return (SpectralRadiance(), 0f0)
+    end
+
+    alpha_x = bxdf.alpha_x
+    alpha_y = bxdf.alpha_y
+
+    # Perfectly smooth → delta distribution; non-delta directions have zero
+    # density (matches pbrt-v4 ConductorBxDF::f line 334-335).
+    if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
+        return (SpectralRadiance(), 0f0)
+    end
+
+    cos_theta_o = abs_cos_theta(wo)
+    cos_theta_i = abs_cos_theta(wi)
+    if cos_theta_i == 0f0 || cos_theta_o == 0f0
+        return (SpectralRadiance(), 0f0)
+    end
+    wm = wi + wo
+    if dot(wm, wm) == 0f0
+        return (SpectralRadiance(), 0f0)
+    end
+    wm = normalize(wm)
+    F = fr_complex_spectral(abs(dot(wo, wm)), bxdf.eta, bxdf.k)
+    D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
+    G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
+    f = D * F * G / (4f0 * cos_theta_i * cos_theta_o)
+    wm_pdf = face_forward(wm, Vec3f(0f0, 0f0, 1f0))
+    pdf = trowbridge_reitz_pdf(wo, wm_pdf, alpha_x, alpha_y) / (4f0 * abs(dot(wo, wm_pdf)))
+    return (f, pdf)
+end
