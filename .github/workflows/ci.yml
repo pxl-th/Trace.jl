@@ -29,14 +29,21 @@ jobs:
           # `VK_ICD_FILENAMES` accepts an absolute path so we resolve it
           # once and export to the workflow env. If both exist we take
           # whichever is found first.
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-                   /usr/share/vulkan/icd.d/lavapipe_icd.x86_64.json \
-                   2>/dev/null | head -1)
+          # Locate the lavapipe ICD JSON. Different mesa-vulkan-drivers
+          # versions ship it under different names (`lvp_icd.x86_64.json`
+          # on 22.04, `lavapipe_icd.x86_64.json` on later releases) and
+          # some ship a `dzn_icd.x86_64.json` for Direct3D-on-Vulkan that
+          # we DON'T want. Match by case-insensitive "lvp" or "lavapipe"
+          # in the filename anywhere under the standard ICD search dirs.
+          icd=$(ls /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json 2>/dev/null \
+                 | grep -iE "(lvp|lavapipe)" | head -1)
           if [ -z "$icd" ]; then
-            echo "::error::No lavapipe ICD found under /usr/share/vulkan/icd.d/"
-            ls /usr/share/vulkan/icd.d/ || true
+            echo "::error::No lavapipe ICD found"
+            ls -la /usr/share/vulkan/icd.d/ || true
+            ls -la /etc/vulkan/icd.d/ 2>/dev/null || true
             exit 1
           fi
+          echo "Using lavapipe ICD: $icd"
           echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
           # Start Xvfb on display :99 so GLFW's __init__ succeeds even
           # though the suite is fully headless.
@@ -70,10 +77,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-                   /usr/share/vulkan/icd.d/lavapipe_icd.x86_64.json \
-                   2>/dev/null | head -1)
-          [ -n "$icd" ] && echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
+          icd=$(ls /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json 2>/dev/null \
+                 | grep -iE "(lvp|lavapipe)" | head -1)
+          if [ -z "$icd" ]; then
+            echo "::error::No lavapipe ICD found"
+            ls -la /usr/share/vulkan/icd.d/ || true
+            ls -la /etc/vulkan/icd.d/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "Using lavapipe ICD: $icd"
+          echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
           Xvfb :99 -screen 0 1280x720x24 &
           echo "DISPLAY=:99" >> $GITHUB_ENV
       - uses: julia-actions/setup-julia@v2
@@ -108,10 +121,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-                   /usr/share/vulkan/icd.d/lavapipe_icd.x86_64.json \
-                   2>/dev/null | head -1)
-          [ -n "$icd" ] && echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
+          icd=$(ls /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json 2>/dev/null \
+                 | grep -iE "(lvp|lavapipe)" | head -1)
+          if [ -z "$icd" ]; then
+            echo "::error::No lavapipe ICD found"
+            ls -la /usr/share/vulkan/icd.d/ || true
+            ls -la /etc/vulkan/icd.d/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "Using lavapipe ICD: $icd"
+          echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
           Xvfb :99 -screen 0 1280x720x24 &
           echo "DISPLAY=:99" >> $GITHUB_ENV
       - uses: julia-actions/setup-julia@v2
