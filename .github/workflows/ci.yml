@@ -17,10 +17,31 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install Vulkan (lavapipe)
+      - name: Install Vulkan (lavapipe) + Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          # mesa-vulkan-drivers ships lavapipe. xvfb is for the GLFW init
+          # path Lava + Hikari both invoke at __init__ (windowing scaffold,
+          # even though the headless tests never open a window).
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb
+          # Detect the lavapipe ICD JSON: Ubuntu 22.04 named it
+          # `lvp_icd.x86_64.json`, 24.04 ships `lavapipe_icd.x86_64.json`.
+          # `VK_ICD_FILENAMES` accepts an absolute path so we resolve it
+          # once and export to the workflow env. If both exist we take
+          # whichever is found first.
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+                   /usr/share/vulkan/icd.d/lavapipe_icd.x86_64.json \
+                   2>/dev/null | head -1)
+          if [ -z "$icd" ]; then
+            echo "::error::No lavapipe ICD found under /usr/share/vulkan/icd.d/"
+            ls /usr/share/vulkan/icd.d/ || true
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
+          # Start Xvfb on display :99 so GLFW's __init__ succeeds even
+          # though the suite is fully headless.
+          Xvfb :99 -screen 0 1280x720x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
@@ -28,7 +49,6 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           # pbrt reference suite is the slowest part of runtests by far —
           # 256 spp on lavapipe (Mesa LLVMpipe, no HW accel) blows past
           # the 60-minute job timeout. 32 spp still catches the noise /
@@ -43,6 +63,19 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Install Vulkan (lavapipe) + Xvfb
+        # Same lavapipe ICD detection + Xvfb setup as the Tests job —
+        # `using Hikari` triggers Lava's GLFW __init__, which dies without a
+        # DISPLAY, and the Vulkan loader needs the lavapipe JSON path.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+                   /usr/share/vulkan/icd.d/lavapipe_icd.x86_64.json \
+                   2>/dev/null | head -1)
+          [ -n "$icd" ] && echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
+          Xvfb :99 -screen 0 1280x720x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
@@ -50,6 +83,12 @@ jobs:
       - name: Install comparison dependencies
         run: julia --project=test/pbrt -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
       - name: Render and compare
+        env:
+          # 256 spp on lavapipe across 142 scenes blows past the 120-min
+          # job budget; 32 spp is enough to populate a representative
+          # gallery on CI. Local devs can bump it back to 256 for a
+          # higher-fidelity build.
+          HIKARI_PBRT_SPP: "32"
         run: julia --project=test/pbrt test/pbrt/run_comparison.jl
       - uses: actions/upload-artifact@v4
         with:
@@ -62,6 +101,19 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Install Vulkan (lavapipe) + Xvfb
+        # Lava's GLFW __init__ runs at `using Hikari` even on the docs
+        # build (Documenter loads Hikari for docstring extraction), so we
+        # need a DISPLAY + a Vulkan ICD on this job too.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+                   /usr/share/vulkan/icd.d/lavapipe_icd.x86_64.json \
+                   2>/dev/null | head -1)
+          [ -n "$icd" ] && echo "VK_ICD_FILENAMES=$icd" >> $GITHUB_ENV
+          Xvfb :99 -screen 0 1280x720x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
       - uses: julia-actions/setup-julia@v2
       - uses: julia-actions/cache@v2
       - name: Install dependencies
