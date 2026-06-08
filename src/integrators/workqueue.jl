@@ -93,9 +93,19 @@ Does **not** synchronize — caller must ensure the GPU is idle (see the
 sync!/free! contract in Raycore and Hikari).
 """
 function free!(queue::WorkQueue)
-    finalize(queue.items)
+    # SOA queues store `items` as a `StructArray{T}` whose components are
+    # LavaArrays; `finalize(::StructArray)` is a no-op and leaves the
+    # component LavaArrays alive until Julia GC runs.  AOS queues store
+    # `items` as a single LavaArray directly.  Walk in either case.
+    _finalize_items!(queue.items)
     finalize(queue.size)
     return nothing
+end
+_finalize_items!(items) = finalize(items)
+function _finalize_items!(items::StructArray)
+    for c in StructArrays.components(items)
+        _finalize_items!(c)
+    end
 end
 
 """
