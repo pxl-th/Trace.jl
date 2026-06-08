@@ -137,6 +137,14 @@ end
 Release all GPU memory held by the integrator's cached render state and adapted scene.
 """
 function Base.close(vp::VolPath)
+    # Proactively free the GPU buffers backing vp.state — bare `vp.state = nothing`
+    # relies on Julia GC to run finalizers, which races the next render's
+    # allocation (peak memory becomes 2× state and can OOM on big scenes).
+    # Symmetric with the integrator-change branch in RayMakie's
+    # apply_screen_config!.  Same precondition: caller ensures GPU is idle.
+    if vp.state !== nothing
+        free!(vp.state)
+    end
     vp.filter_sampler_gpu = nothing
     vp.state = nothing
     vp.initial_medium_camera_pos = nothing
