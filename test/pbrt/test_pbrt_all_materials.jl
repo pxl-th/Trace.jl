@@ -20,8 +20,11 @@ const DEFAULT_SPP = 256
 
 # Tile p95 (log-space): correct renders < 0.05, spatial bugs > 0.10
 const TILE_THRESHOLD = 0.07
-const ENERGY_LOW     = 0.90
-const ENERGY_HIGH    = 1.10
+# Uniform ±5 % energy band across every scene class — no per-category
+# relaxation. If a scene legitimately can't hit it, the bug lives in the
+# rendering code, not in this threshold.
+const ENERGY_LOW     = 0.95
+const ENERGY_HIGH    = 1.05
 
 const BASE_MATERIALS = [
     "diffuse", "diffuse_colored",
@@ -35,34 +38,6 @@ const BASE_MATERIALS = [
 ]
 const BASE_LIGHTS = ["point", "distant", "spot", "area", "ambient"]
 
-# Per-scene relaxations for scenes where Hikari's reference comparison
-# legitimately can't hit the default 0.07 / [0.90, 1.10] gates without a
-# bigger feature being added. The relaxations describe the *root cause* so
-# each can be tightened (or the scene retired) once the gap is closed.
-const SCENE_THRESHOLD_OVERRIDES = Dict{String, NamedTuple{(:tile, :energy_low, :energy_high), Tuple{Float64, Float64, Float64}}}(
-    # Image-map bump textures: pbrt-v4 trilinear-MIPMAPs the displacement so
-    # the bump's UV-derivative filter footprint matches the screen-space
-    # footprint at any sub-pixel cell scale. Hikari currently samples 8-bit
-    # bump PNGs bilinear at top mip level, which leaves a faint 1-2 px
-    # boundary slip at the bright reflection's rim. Energy is within ±2%;
-    # the leftover diff is purely the rim shape. Owner: future MIPMap work
-    # in src/textures.
-    "tex_conductor_bumpmap_arealight"     => (tile=0.10, energy_low=0.90, energy_high=1.10),
-    "tex_conductor_bumpmap_light_point"   => (tile=0.12, energy_low=0.90, energy_high=1.10),
-    # Procedural `checkerboard` displacement on a curved (sphere) surface.
-    # The bump-perturbed normals on the dome scatter light at high frequencies
-    # that pbrt-v4 evaluates analytically; Hikari rasterises checkerboard
-    # into a 256² LUT and bilinear-samples, smoothing the height-field
-    # gradients and dropping ~21% of the body energy. Tracked alongside
-    # MIPMap above.
-    "shadow_bumpgold_dome_over_velvet"    => (tile=0.55, energy_low=0.75, energy_high=1.10),
-    # Medium boundary with `Material "interface"`. Hikari accumulates a
-    # slight extra null-scatter contribution at the boundary; visually
-    # matches at the energy threshold given here. Suite-wide media tests
-    # already widen energy to [0.80, 1.20] elsewhere.
-    "medium_null_interface_homog"         => (tile=0.10, energy_low=0.80, energy_high=1.20),
-)
-
 # ── Test helpers (parametrized) ─────────────────────────────────────────────
 
 function _test_scene(scene_name; backend, samples, hw_accel,
@@ -71,15 +46,6 @@ function _test_scene(scene_name; backend, samples, hw_accel,
                      ref_spp=samples)
     scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
     isfile(scene_file) || return nothing
-
-    # Per-scene relaxation overrides any caller-supplied thresholds — the
-    # override lives where the scene's known-limitation comment does.
-    if haskey(SCENE_THRESHOLD_OVERRIDES, scene_name)
-        ov = SCENE_THRESHOLD_OVERRIDES[scene_name]
-        tile_thresh = ov.tile
-        energy_low  = ov.energy_low
-        energy_high = ov.energy_high
-    end
 
     ref = ensure_reference(scene_name; spp=ref_spp)
     fb  = render_scene(scene_name; backend, samples, hw_accel)
@@ -112,8 +78,7 @@ hw_accel flag. Skips scenes whose `.pbrt` is missing.
 """
 function run_pbrt_suite(; backend=Lava.LavaBackend(),
                           samples::Int=DEFAULT_SPP,
-                          hw_accel::Bool=false,
-                          media_energy::Tuple{Float64,Float64}=(0.80, 1.20))
+                          hw_accel::Bool=false)
     label = hw_accel ? "HW RT" : "SW BVH"
     @testset "pbrt reference ($label, $samples spp)" begin
         @testset "Materials × Lights" begin
@@ -137,10 +102,7 @@ function run_pbrt_suite(; backend=Lava.LavaBackend(),
         @testset "Light variants" _test_scenes_matching("light_";  backend, samples, hw_accel)
         @testset "Filters"        _test_scenes_matching("filter_"; backend, samples, hw_accel)
         @testset "Sensors"        _test_scenes_matching("sensor_"; backend, samples, hw_accel)
-        @testset "Media" begin
-            _test_scenes_matching("medium_"; backend, samples, hw_accel,
-                                  energy_low=media_energy[1], energy_high=media_energy[2])
-        end
+        @testset "Media"          _test_scenes_matching("medium_"; backend, samples, hw_accel)
     end
 end
 
