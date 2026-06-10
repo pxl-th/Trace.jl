@@ -175,7 +175,12 @@ end
         return nothing
     end
 
-    tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
+    # Camera-approximated differentials for every hit, matching pbrt-v4
+    # ComputeDifferentials — same fix as the compute path's
+    # vp_trace_and_shade_kernel! (see intersection.jl).
+    dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
+    dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+    tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
     dndu, dndv = vp_compute_normal_derivatives(primitive)
     ns_b, dpdus_b = get_perturbed_shading_frame(materials, resolved_mat_idx,
                                                geom.ns, geom.dpdus,
@@ -335,7 +340,11 @@ struct VPClosesthitTyped{T} end
         return nothing
     end
 
-    tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
+    # Camera-approximated differentials for every hit, matching pbrt-v4
+    # ComputeDifferentials (see the chit-shade comment above).
+    dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
+    dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+    tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
     dndu, dndv = vp_compute_normal_derivatives(primitive)
     ns_b, dpdus_b = get_perturbed_shading_frame(materials, resolved_mat_idx,
                                                geom.ns, geom.dpdus,
@@ -389,10 +398,52 @@ struct VPClosesthitTyped{T} end
         end
     end
 
-    # Per-material shading: the SBT routed us here because the hit's mesh
-    # uses material type T, so we read the concrete instance directly with
-    # `material_of_type` (compile-time slot lookup, one indexed array load).
-    mat = material_of_type(materials, T, resolved_mat_idx.vec_idx)
+    # Per-material shading. The SBT routes by the MESH's material type T.
+    # For concrete materials, `resolved_mat_idx` still points into T's slot
+    # and `material_of_type` is a compile-time slot lookup. For MixMaterial
+    # meshes the SBT slot is Mix but `resolve_mix_material` above re-pointed
+    # `resolved_mat_idx` at one of the two SUB-materials — reading that index
+    # through T would fetch a MixMaterial at the sub-material's vec_idx
+    # (wrong material entirely; mat_mix_light_point pinned tile=0.75). Those
+    # hits dispatch dynamically on the resolved key via `with_index`, the
+    # same routing `enqueue_after_intersection!` does for the compute path.
+    if T <: MixMaterial
+        Raycore.with_index(vp_shade_resolved_hit!, materials, resolved_mat_idx,
+            hit_work, wo, resolved_mat_idx,
+            next_ray_queue, pixel_L, accel, media_interfaces, media,
+            materials, lights, rgb2spec_table,
+            bvh_nodes, infinite_light_indices,
+            num_infinite_lights, num_bvh_lights, num_lights,
+            max_depth, do_regularize, sobol_rng, sample_idx,
+            camera, samples_per_pixel, rr_depth)
+    else
+        mat = material_of_type(materials, T, resolved_mat_idx.vec_idx)
+        vp_shade_resolved_hit!(mat,
+            hit_work, wo, resolved_mat_idx,
+            next_ray_queue, pixel_L, accel, media_interfaces, media,
+            materials, lights, rgb2spec_table,
+            bvh_nodes, infinite_light_indices,
+            num_infinite_lights, num_bvh_lights, num_lights,
+            max_depth, do_regularize, sobol_rng, sample_idx,
+            camera, samples_per_pixel, rr_depth)
+    end
+    return nothing
+end
+
+# Shade one surface hit with the RESOLVED concrete material instance: build
+# the typed BxDF, run direct lighting (inline shadow trace) and BSDF sample +
+# RR + continuation push. Shared by the compile-time path (SBT slot == hit
+# material type) and the MixMaterial chit's runtime `with_index` dispatch.
+@propagate_inbounds function vp_shade_resolved_hit!(
+    mat,
+    hit_work, wo::Vec3f, resolved_mat_idx::SetKey,
+    next_ray_queue, pixel_L, accel, media_interfaces, media,
+    materials, lights, rgb2spec_table,
+    bvh_nodes, infinite_light_indices,
+    num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
+    max_depth::Int32, do_regularize::Bool, sobol_rng, sample_idx::Int32,
+    camera, samples_per_pixel::Int32, rr_depth::Int32,
+)
     mat_work = VPMaterialEvalWorkItem(hit_work, wo, resolved_mat_idx)
 
     tfc_for_bxdf = compute_texture_filter_context(mat_work, camera, samples_per_pixel)
