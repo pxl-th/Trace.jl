@@ -80,6 +80,7 @@ end
     work,
     scatter_queue,
     per_material_queue,
+    hit_surface_queue,
     hit_area_light_queue,
     next_ray_queue,
     escaped_queue,
@@ -93,6 +94,7 @@ end
     sample_medium_interaction!(
         scatter_queue,
         per_material_queue,
+        hit_surface_queue,
         hit_area_light_queue,
         next_ray_queue,
         escaped_queue,
@@ -147,6 +149,7 @@ end
     # Output queues
     scatter_queue,
     per_material_queue,
+    hit_surface_queue,
     hit_area_light_queue,
     next_ray_queue,
     escaped_queue,
@@ -267,7 +270,8 @@ end
             work.prev_intr_p, work.prev_intr_n,
             work.medium_idx,
         )
-        enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials, hit_work,
+        enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials,
+            hit_surface_queue, hit_work,
             work.hit_arealight_flat_idx, work.hit_triangle_area, work.t_max)
     end
     return
@@ -516,6 +520,7 @@ function vp_sample_medium_interaction!(state::VolPathState, media, materials)
         state.medium_sample_queue,
         state.medium_scatter_queue,
         state.per_material_queue,
+        state.hit_surface_queue,
         state.hit_area_light_queue,
         next_ray_queue(state),
         state.escaped_queue,

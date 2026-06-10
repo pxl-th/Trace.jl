@@ -424,7 +424,8 @@ end
 @propagate_inbounds function vp_trace_and_shade_kernel!(
     work,
     next_ray_queue, escaped_queue, medium_sample_queue,
-    per_material_queue,                   # MultiTypeMaterialQueue — routed by material type
+    per_material_queue,                   # MultiTypeMaterialQueue — routed by material type (4-byte index items)
+    hit_surface_queue,                    # shared hit store the typed queues index into
     hit_area_light_queue,                 # parallel push for emission-MIS (pbrt-v4 hitAreaLightQueue)
     pixel_L,
     accel, media_interfaces, media, materials, lights,
@@ -559,7 +560,8 @@ end
         # `with_index` on the material axis (vp_shade_material_kernel uses
         # `material_of_type` — a compile-time slot lookup). Emission MIS
         # runs in its own kernel via `hit_area_light_queue`.
-        enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials, hit_work,
+        enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials,
+            hit_surface_queue, hit_work,
             primitive.metadata.arealight_flat_idx, Raycore.area(primitive), t_hit)
         return
     end
@@ -577,6 +579,7 @@ function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, media
         state.escaped_queue,
         state.medium_sample_queue,
         state.per_material_queue,
+        state.hit_surface_queue,
         state.hit_area_light_queue,
         state.pixel_L,
         accel, media_interfaces, media, materials, lights,

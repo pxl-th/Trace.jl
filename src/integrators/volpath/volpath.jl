@@ -5,6 +5,13 @@ using KernelAbstractions
 using KernelAbstractions: @kernel, @index, @Const
 import KernelAbstractions as KA
 
+# How often the bounce loop synchronizes to check whether all rays have died
+# (see the comment on the loop in `render!`). Smaller = exit closer to the
+# true ray-death depth but more pipeline drains; 8 keeps the drain count at
+# (live_rounds / 8) per sample while bounding the dead-round overshoot to 7
+# rounds. Live-ray count is monotonic non-increasing, so the check is exact
+# once it fires.
+const EXIT_CHECK_INTERVAL = Int32(8)
 
 # ============================================================================
 # VolPath Integrator
@@ -499,10 +506,22 @@ function render!(
     # must be full-capacity even on HW.
     chit_owns_surface = (accel isa Lava.HWAdaptedAccel) && isempty(media)
 
+    has_media = !isempty(media)
     if vp.state === nothing ||
        vp.state.width != width ||
        vp.state.height != height ||
-       vp.state.num_lights != n_lights
+       vp.state.num_lights != n_lights ||
+       # Queues allocated as capacity-1 placeholders (no-media medium queues,
+       # chit-owns-surface hit/area-light queues) must grow if a scene that
+       # needs them shows up on a reused integrator.
+       (has_media && Int(vp.state.medium_sample_queue.capacity) < width * height) ||
+       (!chit_owns_surface && Int(vp.state.hit_surface_queue.capacity) < width * height)
+        # Free the previous state's GPU buffers before reallocating — a bare
+        # reassign races GC finalizers and doubles peak memory.
+        if vp.state !== nothing
+            KA.synchronize(backend)
+            free!(vp.state)
+        end
         # Use original scene.lights (MultiTypeSet) for PowerLightSampler (needs .backend)
         # Ensure SobolRNG has enough bits for progressive rendering:
         # When samples_per_pixel=1 (interactive mode), log2_spp=0 causes sample_idx
@@ -517,7 +536,8 @@ function render!(
                                 sampler_seed=UInt32(0),
                                 accumulation_eltype=vp.accumulation_eltype,
                                 sensor=vp.sensor,
-                                hw_accel=chit_owns_surface)
+                                hw_accel=chit_owns_surface,
+                                has_media=has_media)
     end
     state = vp.state
 
@@ -590,12 +610,26 @@ function render!(
     )
 
     # Path tracing loop - following pbrt-v4 wavefront architecture
-    # All inner kernels use indirect dispatch (0 rays = GPU no-op), so we
-    # do NOT check queue sizes on CPU. Reading queue.size triggers a vk_flush!
-    # per bounce — 500 flushes/render kills GPU pipelining and doubles render time.
-    # Instead, we run all bounces and rely on CB auto-split (cb_split_threshold)
-    # to prevent NVIDIA CTX SWITCH TIMEOUT on large command buffers.
+    # All inner kernels use indirect dispatch (0 rays = GPU no-op), so we do
+    # NOT check queue sizes every bounce — that forces a flush + fence per
+    # round and kills GPU pipelining. But running ALL max_depth rounds
+    # unconditionally is just as bad on deep scenes: rays die off long before
+    # max_depth (Crown: maxdepth 100, ray population < 1% past depth ~30),
+    # and every dead round still costs its dispatch commands + barriers —
+    # a measured ~1.3 ms/round, ≈2.1 s of Crown's 3.6 s render.
+    #
+    # Compromise: every EXIT_CHECK_INTERVAL rounds, synchronize once and read
+    # the input ray queue's 4-byte BAR counter. The live-ray count is
+    # monotonically non-increasing across rounds (a ray either continues 1:1
+    # — surface bounce, medium scatter, null crossing — or dies; nothing
+    # splits), so "queue empty" is a stable exit condition. Worst case we
+    # record EXIT_CHECK_INTERVAL-1 extra dead rounds past the true death
+    # point, and pay (live_rounds / interval) pipeline drains per sample.
     for depth in 0:(vp.max_depth - 1)
+        if depth > 0 && depth % EXIT_CHECK_INTERVAL == 0
+            KA.synchronize(backend)
+            length(current_ray_queue(state)) == 0 && break
+        end
         # Sobol samples are generated inline inside each consumer kernel —
         # see the "Inline Sobol samples" block earlier in this file.  The
         # consumers compute their dimensions from (work.depth, sample_idx)
@@ -651,17 +685,35 @@ function render!(
                 vp_handle_emitters!(state, lights)
             end
 
-            # Per-material shading — drains the typed queues populated by both
-            # the surface trace (non-medium) AND the medium delta-tracking
-            # surface-survive path.  One dispatch per concrete material type;
-            # each kernel contains only one material's BSDF, so SPIR-V is small
-            # and the register cliff (128 regs/thread) is avoided.  Per-type
-            # dispatches overlap via `concurrent_dispatch_group` (Lava).
-            vp_shade_typed!(state, accel, media_interfaces, media,
-                            materials, lights,
-                            sample_idx,
-                            camera,
-                            Int32(vp.samples_per_pixel), vp.regularize)
+            if accel isa Lava.HWAdaptedAccel
+                # HW + media: the per-material chit already shaded every
+                # surface hit of a NON-medium ray inline; the only items in
+                # `hit_surface_queue` come from the medium delta-tracking
+                # survive-to-surface path — a tiny, usually-empty population.
+                # Shade them with ONE monolithic dispatch (with_index inside)
+                # instead of 12 per-material dispatches: the register-cliff
+                # argument for the split doesn't apply to a queue this sparse,
+                # and on Crown the 12 indirect dispatches × 1600 rounds were
+                # ~0.25 ms/round of pure command overhead.
+                vp_shade_surface_hits!(state, accel, media_interfaces, media,
+                                       materials, lights,
+                                       sample_idx,
+                                       camera,
+                                       Int32(vp.samples_per_pixel), vp.regularize)
+            else
+                # SW BVH: per-material shading — drains the typed index queues
+                # populated by both the surface trace (non-medium) AND the
+                # medium delta-tracking surface-survive path.  One dispatch per
+                # concrete material type; each kernel contains only one
+                # material's BSDF, so SPIR-V is small and the register cliff
+                # (128 regs/thread) is avoided.  Per-type dispatches overlap
+                # via `concurrent_dispatch_group` (Lava).
+                vp_shade_typed!(state, accel, media_interfaces, media,
+                                materials, lights,
+                                sample_idx,
+                                camera,
+                                Int32(vp.samples_per_pixel), vp.regularize)
+            end
         end
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)

@@ -33,6 +33,7 @@ import Lava: lava_rt_launch_id_x, lava_rt_trace_ray,
     work_queue,                                  # WorkQueue{VPRayWorkItem}
     next_ray_queue, escaped_queue, medium_sample_queue,
     per_material_queue,
+    hit_surface_queue,
     hit_area_light_queue,
     pixel_L,
     accel,
@@ -82,6 +83,7 @@ end
     work_queue,
     next_ray_queue, escaped_queue, medium_sample_queue,
     per_material_queue,
+    hit_surface_queue,
     hit_area_light_queue,
     pixel_L,
     accel,
@@ -197,7 +199,8 @@ end
         primitive.metadata.primitive_index, SVector{3,Float32}(bary),
     )
 
-    enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials, hit_work,
+    enqueue_after_intersection!(per_material_queue, hit_area_light_queue, materials,
+        hit_surface_queue, hit_work,
         primitive.metadata.arealight_flat_idx, Raycore.area(primitive), t_hit)
     return nothing
 end
@@ -210,6 +213,7 @@ end
     work_queue,
     next_ray_queue, escaped_queue, medium_sample_queue,
     per_material_queue,
+    hit_surface_queue,
     hit_area_light_queue,
     pixel_L,
     accel,
@@ -257,6 +261,7 @@ struct VPClosesthitTyped{T} end
     work_queue,
     next_ray_queue, escaped_queue, medium_sample_queue,
     per_material_queue,                  # legacy, unused on per-mat chit path
+    hit_surface_queue,                   # legacy, unused on per-mat chit path
     hit_area_light_queue,                # legacy, unused on per-mat chit path
     pixel_L,
     accel,
@@ -550,6 +555,7 @@ function vp_trace_and_shade!(state::VolPathState, accel::Lava.HWAdaptedAccel,
         state.escaped_queue,
         state.medium_sample_queue,
         state.per_material_queue,
+        state.hit_surface_queue,
         state.hit_area_light_queue,
         state.pixel_L,
         accel, media_interfaces, media, materials, lights,

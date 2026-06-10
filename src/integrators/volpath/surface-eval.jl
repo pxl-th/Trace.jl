@@ -158,62 +158,9 @@ Uses approximate screen-space derivatives for proper mipmap selection.
     return TextureFilterContext(work.uv, dudx, dudy, dvdx, dvdy, work.face_idx, work.bary)
 end
 
-# ============================================================================
-# Process Surface Hits - Emission and Material Queue Setup
-# ============================================================================
-
-@propagate_inbounds function vp_process_surface_hits_kernel!(
-    work,
-    material_queue,
-    pixel_L,
-    materials,
-    lights,
-    rgb2spec_table,
-    bvh_nodes,
-    light_to_bit_trail,
-    num_infinite_lights::Int32,
-    num_bvh_lights::Int32,
-    num_lights::Int32
-)
-    wo = -work.ray.d
-
-    # Resolve MixMaterial to get the actual material index
-    # Following pbrt-v4: MixMaterial is resolved at intersection time
-    # using stochastic selection based on the amount texture and a hash
-    material_idx = resolve_mix_material(
-        materials, work.material_idx,
-        work.pi, wo, work.uv
-    )
-
-    # HandleEmissiveIntersection moved to `vp_handle_emitters_kernel!`
-    # (matches pbrt-v4 hitAreaLightQueue). This kernel is now dead in the
-    # live volpath loop — the fused trace-and-shade path bypasses it. The
-    # stripped emission-MIS block here previously read
-    # `work.arealight_flat_idx`, `work.triangle_area`, `work.t_hit` which
-    # are no longer fields on VPHitSurfaceWorkItem.
-
-
-    # Create material evaluation work item for BSDF evaluation
-    # All materials have BSDF (EmissiveMaterial is removed)
-    push!(material_queue, VPMaterialEvalWorkItem(work, wo, material_idx))
-end
-
-function vp_process_surface_hits!(state::VolPathState, materials, lights)
-    foreach(vp_process_surface_hits_kernel!,
-        state.hit_surface_queue,
-        state.material_queue,
-        state.pixel_L,
-        materials,
-        lights,
-        state.rgb2spec_table,
-        state.bvh_nodes,
-        state.light_to_bit_trail,
-        state.num_infinite_lights,
-        state.num_bvh_lights,
-        state.num_lights,
-    )
-    return nothing
-end
+# (vp_process_surface_hits! and its kernel were deleted: the fused
+# trace-and-shade path made them dead, and with them the intermediate
+# `material_queue` — 379 MiB of vestigial allocation on a 1.4 Mpx render.)
 
 # ============================================================================
 # Direct Lighting Inner Function
@@ -537,48 +484,8 @@ rather than read from a pre-populated per-pixel buffer.  See
     return
 end
 
-# ============================================================================
-# BSDF Sampling and Path Continuation
-# ============================================================================
-
-@propagate_inbounds function vp_evaluate_materials_kernel!(
-    work,
-    next_ray_queue,
-    materials,
-    rgb2spec_table,
-    max_depth::Int32,
-    do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera, samples_per_pixel::Int32,
-    rr_depth::Int32
-)
-    evaluate_material_inner!(
-        next_ray_queue,
-        work, materials, rgb2spec_table, max_depth,
-        do_regularize,
-        sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        rr_depth
-    )
-end
-
-function vp_evaluate_materials!(state::VolPathState, materials,
-                                sample_idx::Int32,
-                                camera, samples_per_pixel::Int32, regularize::Bool = true)
-    output_queue = next_ray_queue(state)
-    foreach(vp_evaluate_materials_kernel!,
-        state.material_queue,
-        output_queue,
-        materials,
-        state.rgb2spec_table,
-        state.max_depth,
-        regularize,
-        state.sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        state.rr_depth,
-    )
-    return nothing
-end
+# (vp_evaluate_materials! and its kernel were deleted along with
+# `material_queue` — the fused trace-and-shade path made them dead.)
 
 # ============================================================================
 # Fused Surface Shading Kernel
@@ -704,7 +611,8 @@ end
 #     `sample_bsdf_spectral(mat, ...)` directly.  No `with_index` for the
 #     material axis.  Sobol inlined + shadow trace inlined, just like the
 #     non-typed versions.
-#   * `vp_shade_material_kernel!` — reads `TypedHit{T}`, looks up the
+#   * `vp_shade_material_kernel!` — reads `TypedHitRef{T}`, loads the hit from
+#     the shared `hit_surface_queue`, looks up the
 #     concrete instance via `material_of_type(materials, T, vec_idx)` (one
 #     array load resolved at compile time), accumulates emission, runs DL
 #     + indirect path.
@@ -919,7 +827,8 @@ material's BSDF code — no `with_index` switching on the material axis.
 Emission MIS still uses `with_index` on `lights` (light-type axis, separate
 concern from materials)."""
 @propagate_inbounds function vp_shade_material_kernel!(
-    typed::TypedHit{T},
+    typed::TypedHitRef{T},
+    hit_surface_queue,
     next_ray_queue,
     pixel_L,
     accel,
@@ -942,7 +851,9 @@ concern from materials)."""
     samples_per_pixel::Int32,
     rr_depth::Int32,
 ) where T
-    work = typed.hit
+    # The typed queue carries 4-byte indices; the hit payload lives once in
+    # the shared hit_surface_queue.
+    work = hit_surface_queue.items[typed.idx]
     wo = -work.ray.d
 
     # Concrete material instance — compile-time slot lookup + indexed array
@@ -1063,7 +974,7 @@ function vp_handle_emitters!(state::VolPathState, lights)
 end
 
 """Drain the per-material typed queues — one indirect dispatch per concrete
-material type, each kernel monomorphised on a single `TypedHit{T}`.
+material type, each kernel monomorphised on a single `TypedHitRef{T}`.
 
 Wrapped in `Lava.concurrent_dispatch_group` so the per-type dispatches can
 overlap on idle SMs instead of serializing on per-dispatch barriers.  The
@@ -1080,6 +991,7 @@ function vp_shade_typed!(
     concurrent_dispatch_group() do
         foreach_type(vp_shade_material_kernel!,
             state.per_material_queue,
+            state.hit_surface_queue,
             next_ray_queue(state),
             state.pixel_L,
             accel,

@@ -58,11 +58,10 @@ mutable struct VolPathState{Backend}
     # Medium scatter queue (real scattering events from delta tracking)
     medium_scatter_queue::WorkQueue{VPMediumScatterWorkItem}
 
-    # Surface hit queue (rays that hit surfaces and are NOT in medium)
+    # Shared surface-hit store. Every surface hit (fused SW trace, HW chit
+    # legacy path, medium survive-to-surface) is written here ONCE; the
+    # per-material typed queues hold 4-byte `TypedHitRef{T}` indices into it.
     hit_surface_queue::WorkQueue{VPHitSurfaceWorkItem}
-
-    # Material evaluation queue
-    material_queue::WorkQueue{VPMaterialEvalWorkItem}
 
     # Shadow ray queue
     shadow_queue::WorkQueue{VPShadowRayWorkItem}
@@ -126,7 +125,7 @@ mutable struct VolPathState{Backend}
     hw_shadow_ray_buf::Any       # RTRay buffer for shadow rays
     hw_shadow_result_buf::Any    # RTHitResult buffer for shadow rays
 
-    # Per-material-type shading queues (one `WorkQueue{TypedHit{T}}` per
+    # Per-material-type shading queues (one `WorkQueue{TypedHitRef{T}}` per
     # concrete material type `T` in the scene).  Built lazily on first render
     # from the scene's adapted `StaticMultiTypeSet` of materials; rebuilt
     # when the type tuple changes (different scene).  Type is left `Any`
@@ -153,7 +152,6 @@ function free!(state::VolPathState)
     free!(state.medium_sample_queue)
     free!(state.medium_scatter_queue)
     free!(state.hit_surface_queue)
-    free!(state.material_queue)
     free!(state.shadow_queue)
     free!(state.escaped_queue)
     free!(state.hit_area_light_queue)
@@ -201,23 +199,32 @@ function VolPathState(
     sensor::PixelSensor = PixelSensor(),  # Pixel sensor for spectral → RGB conversion
     # When HW per-material chit slots own the shading, the post-hoc
     # `vp_handle_emitters!` and `vp_shade_typed!` kernels never run, so the
-    # `hit_area_light_queue` and the typed per-material queues are unused.
-    # `hw_accel=true` allocates them with capacity=1 (placeholder slots that
-    # the chit body never touches) so the SoA queue allocations don't blow
-    # past GPU memory on scenes with many material types (e.g. `materials`
-    # scene at 12 types × 2 MP pixels was ~6 GB of vestigial buffers).
+    # `hit_area_light_queue`, the shared `hit_surface_queue` and the typed
+    # per-material queues are unused. `hw_accel=true` allocates them with
+    # capacity=1 (placeholder slots that the chit body never touches) so the
+    # queue allocations don't blow past GPU memory.
     hw_accel::Bool = false,
+    # Scenes without participating media never push to the medium queues;
+    # allocating them at full pixel capacity wasted ~580 MiB on a 1.4 Mpx
+    # render (VPMediumSampleWorkItem is 320 B). `has_media=false` allocates
+    # capacity-1 placeholders. The freshness check in `render!` rebuilds the
+    # state when a scene with media shows up.
+    has_media::Bool = true,
 )
     n_pixels = width * height
     vestigial_capacity = hw_accel ? 1 : queue_capacity
+    medium_capacity = has_media ? queue_capacity : 1
+    # The shared hit store feeds the SW typed-queue shading path and the
+    # medium survive-to-surface path; with neither (HW chit + no media) a
+    # placeholder suffices.
+    hit_surface_capacity = hw_accel ? 1 : queue_capacity
 
     # Create work queues
     ray_queue_a = WorkQueue{VPRayWorkItem}(backend, queue_capacity)
     ray_queue_b = WorkQueue{VPRayWorkItem}(backend, queue_capacity)
-    medium_sample_queue = WorkQueue{VPMediumSampleWorkItem}(backend, queue_capacity)
-    medium_scatter_queue = WorkQueue{VPMediumScatterWorkItem}(backend, queue_capacity)
-    hit_surface_queue = WorkQueue{VPHitSurfaceWorkItem}(backend, queue_capacity)
-    material_queue = WorkQueue{VPMaterialEvalWorkItem}(backend, queue_capacity)
+    medium_sample_queue = WorkQueue{VPMediumSampleWorkItem}(backend, medium_capacity)
+    medium_scatter_queue = WorkQueue{VPMediumScatterWorkItem}(backend, medium_capacity)
+    hit_surface_queue = WorkQueue{VPHitSurfaceWorkItem}(backend, hit_surface_capacity)
     shadow_queue = WorkQueue{VPShadowRayWorkItem}(backend, queue_capacity)
     escaped_queue = WorkQueue{VPEscapedRayWorkItem}(backend, queue_capacity)
     hit_area_light_queue = WorkQueue{VPHitAreaLightWorkItem}(backend, vestigial_capacity)
@@ -267,7 +274,7 @@ function VolPathState(
         backend,
         ray_queue_a, ray_queue_b, :a,
         medium_sample_queue, medium_scatter_queue,
-        hit_surface_queue, material_queue, shadow_queue, escaped_queue,
+        hit_surface_queue, shadow_queue, escaped_queue,
         hit_area_light_queue,
         pixel_L, pixel_rgb, pixel_weight_sum,
         wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
@@ -325,39 +332,28 @@ end
 """Reset all processing queues for a new bounce.
 
 The empties are tiny 1-element `fill!`s, but the GPU normally inserts a
-full pipeline barrier between each dispatch.  On a typical render that's
-~50 fills/sample, each costing ~600 µs of barrier-wait — a measured
-~1 s/render of pure between-dispatch idle on killeroo.  The empties
-write to disjoint queue size counters and have no inter-dependencies, so
-`concurrent_dispatch_group` lets them all overlap on the GPU with just
-one pre-barrier against the prior bounce's reads."""
-function reset_processing_queues!(state::VolPathState)
-    concurrent_dispatch_group() do
-        empty!(state.medium_sample_queue)
-        empty!(state.medium_scatter_queue)
-        empty!(state.hit_surface_queue)
-        empty!(state.material_queue)
-        empty!(state.shadow_queue)
-        empty!(state.escaped_queue)
-        empty!(state.hit_area_light_queue)
-        empty!(next_ray_queue(state))
-    end
-end
-
-"""Reset iteration queues before ray tracing.  Same barrier-collapsing
-trick as `reset_processing_queues!`."""
+full pipeline barrier between each dispatch.  These counters all live in
+1-element arrays, so resetting them is a handful of stores — the cost was
+entirely the ~20 dispatch commands.  `empty_all!` collapses everything
+into ONE kernel dispatch (a single thread zeroing every counter), which
+removed ~0.4 ms of per-round overhead on Crown's 12-material render."""
 function reset_iteration_queues!(state::VolPathState)
-    concurrent_dispatch_group() do
-        empty!(next_ray_queue(state))
-        empty!(state.medium_sample_queue)
-        empty!(state.medium_scatter_queue)
-        empty!(state.hit_surface_queue)
-        empty!(state.material_queue)
-        empty!(state.shadow_queue)
-        empty!(state.escaped_queue)
-        empty!(state.hit_area_light_queue)
-        state.per_material_queue !== nothing && empty!(state.per_material_queue)
+    pmq = state.per_material_queue
+    if pmq === nothing
+        empty_all!(state.backend,
+            next_ray_queue(state),
+            state.medium_sample_queue, state.medium_scatter_queue,
+            state.hit_surface_queue, state.shadow_queue,
+            state.escaped_queue, state.hit_area_light_queue)
+    else
+        empty_all!(state.backend,
+            next_ray_queue(state),
+            state.medium_sample_queue, state.medium_scatter_queue,
+            state.hit_surface_queue, state.shadow_queue,
+            state.escaped_queue, state.hit_area_light_queue,
+            pmq)
     end
+    return nothing
 end
 
 """Reset film buffer for a new sample."""

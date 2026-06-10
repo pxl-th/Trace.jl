@@ -310,6 +310,52 @@ shared output via atomic-claimed slots).
 end
 
 # ============================================================================
+# Batched counter reset — one dispatch for all queues
+# ============================================================================
+#
+# `empty!(queue)` is a `fill!` on a 1-element array → one GPU dispatch (plus
+# barrier) per queue. The volpath bounce loop resets ~20 queues per round;
+# at ~20µs effective cost per command that was ~0.4ms of pure overhead per
+# round (measured on Crown: 27 single-thread fills per round). One kernel
+# writing every counter replaces all of them.
+
+@inline _zero_counters!(::Tuple{}) = nothing
+@inline function _zero_counters!(counters::Tuple)
+    @inbounds counters[1][1] = Int32(0)
+    _zero_counters!(Base.tail(counters))
+    return nothing
+end
+
+@kernel function zero_size_counters_kernel!(counters)
+    i = @index(Global)
+    if i == 1
+        _zero_counters!(counters)
+    end
+end
+
+# Flatten WorkQueues / MultiTypeWorkQueues into a tuple of size-counter arrays.
+_collect_size_counters(acc::Tuple) = acc
+_collect_size_counters(acc::Tuple, q::WorkQueue, rest...) =
+    _collect_size_counters((acc..., q.size), rest...)
+_collect_size_counters(acc::Tuple, m::MultiTypeWorkQueue, rest...) =
+    _collect_size_counters((acc..., map(q -> q.size, m.queues)...), rest...)
+
+"""
+    empty_all!(backend, queues...)
+
+Reset the size counters of all given queues (`WorkQueue` or
+`MultiTypeWorkQueue`) in a SINGLE kernel dispatch. A handful of stores from
+one thread — the point is replacing N per-queue `fill!` dispatches (each
+with its own barrier) with one command.
+"""
+function empty_all!(backend, queues...)
+    counters = _collect_size_counters((), queues...)
+    kernel! = zero_size_counters_kernel!(backend, 1)
+    kernel!(counters; ndrange=1)
+    return nothing
+end
+
+# ============================================================================
 # Convenience Aliases
 # ============================================================================
 
