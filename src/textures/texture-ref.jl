@@ -84,6 +84,48 @@ end
 @propagate_inbounds eval_tex(::Raycore.StaticMultiTypeSet, val::PiecewiseLinearSpectrum, ::TextureFilterContext) = val
 
 # ============================================================================
+# CheckerboardTexture evaluation — pbrt-v4 textures.cpp Checkerboard(), 2D case
+# ============================================================================
+
+# pbrt-v4 textures.cpp:186 `d`: running integral of the ±1 checkerboard square
+# wave, used to filter the checkerboard analytically over the pixel footprint.
+@propagate_inbounds function checker_d(x::Float32)
+    y = x / 2f0 - floor(x / 2f0) - 0.5f0
+    return x / 2f0 + y * (1f0 - 2f0 * abs(y))
+end
+
+# pbrt-v4 textures.cpp:191 `bf`: triangle-filtered 1D checkerboard of radius r
+# centred at x. When the filter support stays inside one cell this is the exact
+# ±1 point sample (which also covers r == 0, i.e. no derivatives available).
+@propagate_inbounds function checker_bf(x::Float32, r::Float32)
+    if floor(x - r) == floor(x + r)
+        return 1f0 - 2f0 * Float32(unsafe_trunc(Int32, floor(x)) & Int32(1))
+    end
+    return (checker_d(x + r) - 2f0 * checker_d(x) + checker_d(x - r)) / (r * r)
+end
+
+# Checkerboard() 2D branch + UVMapping::Map fused, then the
+# (1 - w) * tex1 + w * tex2 mix from {Float,Spectrum}CheckerboardTexture::Evaluate.
+@propagate_inbounds function eval_tex(ctx::Raycore.StaticMultiTypeSet, cb::CheckerboardTexture,
+                                      tfc::TextureFilterContext)
+    s = cb.su * tfc.uv[1] + cb.du
+    t = cb.sv * tfc.uv[2] + cb.dv
+    ds = 1.5f0 * max(abs(cb.su * tfc.dudx), abs(cb.su * tfc.dudy))
+    dt = 1.5f0 * max(abs(cb.sv * tfc.dvdx), abs(cb.sv * tfc.dvdy))
+    w = 0.5f0 - 0.5f0 * checker_bf(s, ds) * checker_bf(t, dt)
+    t1 = eval_tex(ctx, cb.tex1, tfc)
+    t2 = eval_tex(ctx, cb.tex2, tfc)
+    return t1 * (1f0 - w) + t2 * w
+end
+
+# Derivative-free entry points point-sample (r = 0 ⇒ checker_bf hits the exact
+# ±1 branch), matching pbrt with zero differentials.
+@propagate_inbounds eval_tex(ctx::Raycore.StaticMultiTypeSet, cb::CheckerboardTexture, uv::Point2f) =
+    eval_tex(ctx, cb, TextureFilterContext(uv))
+@propagate_inbounds eval_tex(ctx::Raycore.StaticMultiTypeSet, cb::CheckerboardTexture, si::SurfaceInteraction) =
+    eval_tex(ctx, cb, TextureFilterContext(si.uv))
+
+# ============================================================================
 # Filtered Texture Evaluation (with UV derivatives for mipmap selection)
 # ============================================================================
 

@@ -65,6 +65,33 @@ end
     return sample_texture_data(tex.data, uv)
 end
 
+# Procedural checkerboard texture — exact port of pbrt-v4's CheckerboardTexture
+# (textures.cpp `Checkerboard()`, 2D case) fused with `UVMapping::Map`.
+# Evaluated analytically at shading time with pbrt's closed-form triangle-filter
+# integral. This replaces the old 256² LUT rasterization in the pbrt scene
+# builder: the LUT's bilinear smoothing both quantized checker-edge positions to
+# the texel grid and widened the height-field gradient bands that bump mapping
+# differentiates (shadow_bumpgold_dome_over_velvet pinned the resulting 21%
+# energy loss).
+#
+# `tex1` is returned on even-parity cells, `tex2` on odd — same convention as
+# pbrt (`(1 - w) * tex1 + w * tex2` with w = 0 at even parity).
+struct CheckerboardTexture{T}
+    su::Float32   # uscale
+    sv::Float32   # vscale
+    du::Float32   # udelta
+    dv::Float32   # vdelta
+    tex1::T
+    tex2::T
+end
+
+to_texture(c::CheckerboardTexture) = c
+
+# Anything that is a spatially-varying texture (as opposed to a raw constant
+# scalar/spectrum value). Use this for "is it a texture?" checks; matching only
+# `Texture` silently misses procedural textures.
+const AnyTexture = Union{Texture, CheckerboardTexture}
+
 # Per-face vertex color texture: stores 3 colors per face for barycentric interpolation
 struct VertexColorTexture{T}
     face_colors::T   # (3, n_faces) matrix of RGBSpectrum, becomes TextureRef via MultiTypeSet

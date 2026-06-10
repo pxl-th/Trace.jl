@@ -55,11 +55,14 @@ end
 # Height-field gradient → perturbed shading frame
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Sample the height (float) at a uv. The bump texture is a float texture (the
-# scalar height field); spectrum bump textures fall back to luminance via the
-# float branch of imagemap loading in build_pbrt_textures.
-@propagate_inbounds function _bump_height(bump, materials, uv::Point2f)
-    h = eval_tex(materials, bump, uv)
+# Sample the height (float) at a TextureFilterContext. The bump texture is a
+# float texture (the scalar height field); spectrum bump textures fall back to
+# luminance via the float branch of imagemap loading in build_pbrt_textures.
+# Takes the full filter context, not just uv: pbrt-v4's BumpMap evaluates the
+# shifted samples through `shiftedCtx`, which keeps the original dudx/dudy —
+# procedural textures (CheckerboardTexture) filter over that footprint.
+@propagate_inbounds function _bump_height(bump, materials, tfc::TextureFilterContext)
+    h = eval_tex(materials, bump, tfc)
     return h isa Real ? Float32(h) : Float32(h.c[1])
 end
 
@@ -92,9 +95,14 @@ new bumped normal against `ng`, not against the original interpolated `ns`.
     δu == 0f0 && (δu = BUMP_DEFAULT_DELTA)
     δv = 0.5f0 * (abs(tfc.dvdx) + abs(tfc.dvdy))
     δv == 0f0 && (δv = BUMP_DEFAULT_DELTA)
-    h0 = _bump_height(bump, materials, uv)
-    hu = _bump_height(bump, materials, Point2f(uv[1] + δu, uv[2]))
-    hv = _bump_height(bump, materials, Point2f(uv[1], uv[2] + δv))
+    # pbrt-v4 materials.h:BumpMap shiftedCtx — the shifted evaluations keep the
+    # original screen-space derivatives so filtered procedural textures see the
+    # same footprint at all three sample points.
+    h0 = _bump_height(bump, materials, tfc)
+    hu = _bump_height(bump, materials,
+        TextureFilterContext(Point2f(uv[1] + δu, uv[2]), tfc.dudx, tfc.dudy, tfc.dvdx, tfc.dvdy))
+    hv = _bump_height(bump, materials,
+        TextureFilterContext(Point2f(uv[1], uv[2] + δv), tfc.dudx, tfc.dudy, tfc.dvdx, tfc.dvdy))
     dhdu = (hu - h0) / δu
     dhdv = (hv - h0) / δv
 

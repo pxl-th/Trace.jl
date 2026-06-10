@@ -72,18 +72,20 @@ struct CoatedConductor{
     remap_roughness::Bool
 end
 
-# Full constructor with all textures
+# Full constructor with all textures. Texture args are unannotated on purpose:
+# fields accept any texture-like value (Texture, CheckerboardTexture, raw
+# constants, TextureRef).
 function CoatedConductor(
-    interface_u_roughness::Texture,
-    interface_v_roughness::Texture,
+    interface_u_roughness,
+    interface_v_roughness,
     interface_eta::Float32,
     conductor_eta,  # Spectral or Texture — always required
     conductor_k,    # Spectral or Texture — always required
-    conductor_u_roughness::Texture,
-    conductor_v_roughness::Texture,
-    thickness::Texture,
-    albedo::Texture,
-    g::Texture,
+    conductor_u_roughness,
+    conductor_v_roughness,
+    thickness,
+    albedo,
+    g,
     max_depth::Int,
     n_samples::Int,
     remap_roughness::Bool

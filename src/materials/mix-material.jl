@@ -45,11 +45,13 @@ struct MixMaterial{M1<:Material, M2<:Material, AmountTex} <: Material
     material2_idx::SetKey
 end
 
-# Full constructor (used internally after keys are resolved)
+# Full constructor (used internally after keys are resolved). `amount` is
+# unannotated on purpose: it accepts any float-texture-like value (Texture,
+# CheckerboardTexture, raw Float32, TextureRef).
 function MixMaterial(
     material1::M1,
     material2::M2,
-    amount::Texture,
+    amount,
     material1_idx::SetKey,
     material2_idx::SetKey
 ) where {M1<:Material, M2<:Material}

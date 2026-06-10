@@ -42,15 +42,16 @@ struct CoatedDiffuse{ReflTex, URoughTex, VRoughTex, ThickTex, AlbedoTex, GTex} <
     remap_roughness::Bool
 end
 
-# Full constructor
+# Full constructor. Texture args are unannotated on purpose: fields accept any
+# texture-like value (Texture, CheckerboardTexture, raw constants, TextureRef).
 function CoatedDiffuse(
-    reflectance::Texture,
-    u_roughness::Texture,
-    v_roughness::Texture,
-    thickness::Texture,
+    reflectance,
+    u_roughness,
+    v_roughness,
+    thickness,
     eta::Float32,
-    albedo::Texture,
-    g::Texture,
+    albedo,
+    g,
     max_depth::Int,
     n_samples::Int,
     remap_roughness::Bool
