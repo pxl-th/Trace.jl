@@ -45,18 +45,11 @@ struct MixMaterial{M1<:Material, M2<:Material, AmountTex} <: Material
     material2_idx::SetKey
 end
 
-# Full constructor (used internally after keys are resolved). `amount` is
-# unannotated on purpose: it accepts any float-texture-like value (Texture,
-# CheckerboardTexture, raw Float32, TextureRef).
-function MixMaterial(
-    material1::M1,
-    material2::M2,
-    amount,
-    material1_idx::SetKey,
-    material2_idx::SetKey
-) where {M1<:Material, M2<:Material}
-    MixMaterial{M1, M2, typeof(amount)}(material1, material2, amount, material1_idx, material2_idx)
-end
+# No explicit positional constructor: the synthesized
+# `MixMaterial(material1, material2, amount, material1_idx, material2_idx)`
+# already accepts any amount value (Texture, CheckerboardTexture, raw
+# Float32, TextureRef). Re-declaring it with the identical signature is a
+# method overwrite, which breaks precompilation.
 
 """
     MixMaterial(; materials, amount)

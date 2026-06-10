@@ -42,17 +42,11 @@ struct DiffuseTransmission{RTex, TTex} <: Material
     scale::Float32       # Intensity scale
 end
 
-# Full constructor. Texture args are unannotated on purpose: fields accept any
-# texture-like value (Texture, CheckerboardTexture, raw constants, TextureRef).
-function DiffuseTransmission(
-    reflectance,
-    transmittance,
-    scale::Float32
-)
-    DiffuseTransmission{typeof(reflectance), typeof(transmittance)}(
-        reflectance, transmittance, scale
-    )
-end
+# No explicit positional constructor: the synthesized
+# `DiffuseTransmission(reflectance, transmittance, scale)` already accepts
+# any texture-like value (Texture, CheckerboardTexture, raw constants,
+# TextureRef). Re-declaring it with the identical signature is a method
+# overwrite, which breaks precompilation.
 
 """
     DiffuseTransmission(; reflectance, transmittance, scale=1.0)
