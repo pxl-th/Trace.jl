@@ -54,16 +54,18 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
     # instead of the real screen-space derivative, leaving the gold-dome
     # conductor with coherent mirror highlights.
     #
-    # pbrt-v4's sppScale = max(.125, 1/sqrt(spp)) lives in the *fallback*
-    # `Approximate_dp_dxy` path only — used when ray differentials aren't
-    # present. When pbrt has true ray diffs (`ComputeDifferentials` uses
-    # the differential rays), it returns per-PIXEL dpdx without any spp
-    # scaling, and that's the regime BumpMap was tuned for. We're emulating
-    # the exact-diff path here, so skip the sppScale; otherwise the bump
-    # sampler ends up sqrt(spp) below the texel grid (16× too small at
-    # 256 spp), `h(u+du) == h(u)` bilinearly, dhdu collapses to zero, and
-    # the bumped mirror conductor stays coherent.
-    scale = dist / PERSPECTIVE_NEAR
+    # pbrt-v4 scales BOTH differential paths by max(.125, 1/sqrt(spp)):
+    # true camera ray diffs via `ray.ScaleDifferentials(rayDiffScale)`
+    # (cpu/integrators.cpp:251) and the fallback via `sppScale` inside
+    # `Approximate_dp_dxy` (cameras.h:175). An earlier comment here claimed
+    # the exact-diff path is unscaled and skipped sppScale — that left the
+    # footprint 8× too large at 256 spp and over-smoothed every bump map
+    # (shadow_bumpgold_dome_over_velvet pins this). The sub-texel-du
+    # concern that motivated skipping it only applied to the old
+    # nearest-neighbour `sample_texture_data`; bilinear sampling returns
+    # the correct local slope for sub-texel finite differences.
+    spp_scale = max(0.125f0, 1f0 / sqrt(Float32(samples_per_pixel)))
+    scale = spp_scale * dist / PERSPECTIVE_NEAR
 
     # Transform dx_camera and dy_camera to world space
     # These represent how the ray direction changes per pixel

@@ -356,7 +356,14 @@ end
             # See identical block in the medium branch above — the bump
             # perturbation must happen here, not inside BumpMapped's BSDF
             # wrapper, so cos factors downstream use the bumped normal.
-            tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
+            # pbrt-v4 ComputeDifferentials falls back to the camera-
+            # approximated dp/dxy for EVERY hit (interaction.cpp:138), so the
+            # non-medium path must use it too — the BUMP_DEFAULT_DELTA
+            # fallback under-sizes the height-field footprint and biased
+            # shadow_bumpgold_dome_over_velvet 21% dark.
+            dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
+            dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+            tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
             dndu, dndv = vp_compute_normal_derivatives(primitive)
             ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
                                                        geom.ns, geom.dpdus,
@@ -525,7 +532,11 @@ end
             return
         end
 
-        tfc_bump = TextureFilterContext(geom.uv, 0f0, 0f0, 0f0, 0f0)
+        # Camera-approximated differentials for every hit, matching pbrt-v4
+        # ComputeDifferentials (see the trace-kernel comment above).
+        dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
+        dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+        tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
         dndu, dndv = vp_compute_normal_derivatives(primitive)
         ns_b, dpdus_b = get_perturbed_shading_frame(materials, resolved_mat_idx,
                                                    geom.ns, geom.dpdus,
