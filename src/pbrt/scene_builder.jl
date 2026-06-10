@@ -396,8 +396,6 @@ end
 # Texture building from pbrt named textures
 # ============================================================================
 
-const TEXTURE_RESOLUTION = 256  # Resolution for procedural textures (checkerboard etc.)
-
 function build_pbrt_textures(pbrt::PBRTScene)
     textures = Dict{String, Any}()
     # Two passes: build base textures first, then derived (scale) textures
@@ -409,39 +407,24 @@ function build_pbrt_textures(pbrt::PBRTScene)
         tex_class = pbrt_get_string(tex_entity, "_class", "spectrum")
 
         if tex_type == "checkerboard"
+            # Procedural — evaluated analytically at shading time via
+            # CheckerboardTexture (exact pbrt-v4 port, see textures/basic.jl).
+            dim = Int(pbrt_get_float(tex_entity, "dimension", 2.0))
+            dim == 2 || error("pbrt: only 2D checkerboard textures are supported (got dimension=$dim)")
             uscale = Float32(pbrt_get_float(tex_entity, "uscale", 1.0))
             vscale = Float32(pbrt_get_float(tex_entity, "vscale", 1.0))
-            res = TEXTURE_RESOLUTION
-
-            # Hikari's sample_texture_data applies uv_adj = Vec2f(1-v, u),
-            # so we pre-apply the inverse: store at (row=1-u, col=v) to match pbrt's
-            # direct (u,v) evaluation.
+            udelta = Float32(pbrt_get_float(tex_entity, "udelta", 0.0))
+            vdelta = Float32(pbrt_get_float(tex_entity, "vdelta", 0.0))
             if tex_class == "float"
                 v1 = Float32(pbrt_get_float(tex_entity, "tex1", 1.0))
                 v2 = Float32(pbrt_get_float(tex_entity, "tex2", 0.0))
-                data = Matrix{Float32}(undef, res, res)
-                for j in 1:res, i in 1:res
-                    # uv_adj = (1-v_surf, u_surf): row i ↔ v_surf, col j ↔ u_surf
-                    u_surf = (j - 0.5f0) / res
-                    v_surf = 1f0 - (i - 0.5f0) / res
-                    check = (floor(Int, u_surf * uscale) + floor(Int, v_surf * vscale)) % 2 == 0
-                    data[i, j] = check ? v1 : v2
-                end
-                textures[name] = Texture(data)
+                textures[name] = CheckerboardTexture(uscale, vscale, udelta, vdelta, v1, v2)
             else
                 c1 = pbrt_get_rgb(tex_entity, "tex1", (1.0, 1.0, 1.0))
                 c2 = pbrt_get_rgb(tex_entity, "tex2", (0.0, 0.0, 0.0))
                 rgb1 = RGBSpectrum(Float32(c1[1]), Float32(c1[2]), Float32(c1[3]))
                 rgb2 = RGBSpectrum(Float32(c2[1]), Float32(c2[2]), Float32(c2[3]))
-                data = Matrix{RGBSpectrum}(undef, res, res)
-                for j in 1:res, i in 1:res
-                    # uv_adj = (1-v_surf, u_surf): row i ↔ v_surf, col j ↔ u_surf
-                    u_surf = (j - 0.5f0) / res
-                    v_surf = 1f0 - (i - 0.5f0) / res
-                    check = (floor(Int, u_surf * uscale) + floor(Int, v_surf * vscale)) % 2 == 0
-                    data[i, j] = check ? rgb1 : rgb2
-                end
-                textures[name] = Texture(data)
+                textures[name] = CheckerboardTexture(uscale, vscale, udelta, vdelta, rgb1, rgb2)
             end
         elseif tex_type == "constant"
             if tex_class == "float"
@@ -464,18 +447,19 @@ function build_pbrt_textures(pbrt::PBRTScene)
             # (test_stripes.png triggers this), but `convert(RGB, gray)` is a
             # well-defined widening.
             img_rgb = convert.(Colors.RGB{Float32}, img)
-            # pbrt-v4 default encoding: 8-bit integer formats → sRGB,
-            # everything else (16-bit, float) → linear. spectrum imagemaps
-            # apply the inverse-sRGB curve so the BSDF sees linear-light
-            # reflectance; float imagemaps (bump/height/alpha) stay linear
-            # unless the user explicitly says otherwise. Override via the
-            # `"string encoding"` param. Killeroo's `textures/lines.png`
-            # ships as 8-bit sRGB with mid-tone values (~0.31 and ~0.97);
-            # treating those as linear collapses the grid contrast ~4×.
-            storage_el = eltype(ImageCore.channelview(img))
-            is_8bit = storage_el === N0f8
+            # pbrt-v4 default encoding is purely EXTENSION-based
+            # (textures.cpp:436): `.png → sRGB, everything else → linear` —
+            # for BOTH float and spectrum texture classes, and 16-bit PNGs are
+            # decoded through the encoding just like 8-bit ones
+            # (image.cpp ReadPNG: `v = encoding.ToFloatLinear(v)`). The
+            # earlier rule here (`8-bit && spectrum class`) missed float
+            # height maps: pbrt sRGB-decodes test_ridges.png (16-bit gray),
+            # which scales the bump gradient by the local slope of the sRGB
+            # curve (~1.45× at h≈0.7) — tex_conductor_bumpmap_light_point
+            # pins this. Killeroo's 8-bit lines.png contrast (~4×) is also
+            # covered by the same rule. Override via `"string encoding"`.
             encoding = lowercase(pbrt_get_string(tex_entity, "encoding", ""))
-            default_srgb = is_8bit && tex_class != "float"
+            default_srgb = endswith(lowercase(path), ".png")
             apply_srgb = isempty(encoding) ? default_srgb : encoding == "srgb"
             if apply_srgb
                 @inbounds for idx in CartesianIndices(img_rgb)
@@ -601,13 +585,13 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
 
     elseif type == "conductor"
         rough = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
-        if rough isa Texture
+        if rough isa AnyTexture
             urough = rough; vrough = rough
         else
             urough = Float32(pbrt_get_float(entity, "uroughness", Float64(rough)))
             vrough = Float32(pbrt_get_float(entity, "vroughness", Float64(rough)))
         end
-        combined_rough = rough isa Texture ? rough : max(urough, vrough)
+        combined_rough = rough isa AnyTexture ? rough : max(urough, vrough)
         remap = pbrt_get_bool(entity, "remaproughness", true)
         # Check for named spectra (gold, silver, copper, etc.)
         eta_str = pbrt_get_string(entity, "eta", "")
@@ -640,7 +624,7 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
     elseif type == "dielectric"
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
         rough_base = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
-        rough_scalar = rough_base isa Texture ? 0f0 : Float32(rough_base)
+        rough_scalar = rough_base isa AnyTexture ? 0f0 : Float32(rough_base)
         urough = pbrt_get_float_texture(entity, "uroughness", textures, Float64(rough_scalar))
         vrough = pbrt_get_float_texture(entity, "vroughness", textures, Float64(rough_scalar))
         remap = pbrt_get_bool(entity, "remaproughness", true)
