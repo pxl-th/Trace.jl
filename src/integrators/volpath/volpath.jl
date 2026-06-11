@@ -13,6 +13,11 @@ import KernelAbstractions as KA
 # once it fires.
 const EXIT_CHECK_INTERVAL = Int32(8)
 
+# Benchmark A/B toggle for the bounce-loop early exit. Costs ~0.1s on scenes
+# whose rays survive to max_depth (crown: gem media + RR keep a tail alive);
+# saves 0.2-0.5s wherever rays die early (killeroo, materials).
+const EARLY_EXIT_ENABLED = Ref(true)
+
 # ============================================================================
 # VolPath Integrator
 # ============================================================================
@@ -626,7 +631,7 @@ function render!(
     # record EXIT_CHECK_INTERVAL-1 extra dead rounds past the true death
     # point, and pay (live_rounds / interval) pipeline drains per sample.
     for depth in 0:(vp.max_depth - 1)
-        if depth > 0 && depth % EXIT_CHECK_INTERVAL == 0
+        if EARLY_EXIT_ENABLED[] && depth > 0 && depth % EXIT_CHECK_INTERVAL == 0
             KA.synchronize(backend)
             length(current_ray_queue(state)) == 0 && break
         end

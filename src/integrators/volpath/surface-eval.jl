@@ -988,7 +988,12 @@ function vp_shade_typed!(
     camera, samples_per_pixel::Int32,
     regularize::Bool = true,
 )
-    concurrent_dispatch_group() do
+    # `concurrent_indirect_group`, not the plain dispatch group: each per-type
+    # foreach is a prepare-indirect + indirect-dispatch pair, and an indirect
+    # dispatch can never skip the barrier against its own prepare. The
+    # deferred group records all prepares first, ONE shared barrier, then all
+    # dispatches overlapped — 2 barriers for 12 pairs instead of 12.
+    concurrent_indirect_group() do
         foreach_type(vp_shade_material_kernel!,
             state.per_material_queue,
             state.hit_surface_queue,

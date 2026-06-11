@@ -9,7 +9,7 @@ import KernelAbstractions as KA
 using Atomix: @atomic
 using StructArrays
 using Adapt
-import Lava: LavaBackend, concurrent_dispatch_group
+import Lava: LavaBackend, concurrent_dispatch_group, concurrent_indirect_group
 
 # ============================================================================
 # SOA/AOS Array Allocation (following pbrt-v4's SOA pattern)
