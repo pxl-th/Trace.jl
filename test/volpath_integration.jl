@@ -11,10 +11,10 @@ using GeometryBasics: normal_mesh, Tesselation
     # =========================================================================
 
     # Materials
-    white = Hikari.MatteMaterial(Kd=Hikari.RGBSpectrum(0.73f0, 0.73f0, 0.73f0))
-    red = Hikari.MatteMaterial(Kd=Hikari.RGBSpectrum(0.65f0, 0.05f0, 0.05f0))
-    green = Hikari.MatteMaterial(Kd=Hikari.RGBSpectrum(0.12f0, 0.45f0, 0.15f0))
-    glass = Hikari.GlassMaterial(
+    white = Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.73f0, 0.73f0, 0.73f0))
+    red = Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.65f0, 0.05f0, 0.05f0))
+    green = Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.12f0, 0.45f0, 0.15f0))
+    glass = Hikari.Dielectric(
         Kr=Hikari.RGBSpectrum(1f0),
         Kt=Hikari.RGBSpectrum(1f0),
         index=1.5f0,
@@ -30,7 +30,7 @@ using GeometryBasics: normal_mesh, Tesselation
     glass_with_fog = Hikari.MediumInterface(glass; inside=fog, outside=nothing)
 
     # Conductor sphere (gold)
-    gold = Hikari.ConductorMaterial(
+    gold = Hikari.Conductor(
         eta=Hikari.RGBSpectrum(0.15557f0, 0.42415f0, 1.3831f0),
         k=Hikari.RGBSpectrum(3.6024f0, 2.4721f0, 1.9155f0),
     )

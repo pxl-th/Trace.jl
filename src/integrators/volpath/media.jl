@@ -194,7 +194,11 @@ end
 
 @propagate_inbounds function majorant_lookup(grid::MajorantGrid, media, x::Integer, y::Integer, z::Integer)::Float32
      # Use Int32 arithmetic for GPU compatibility
-     idx = Int32(x) + grid.res[1] * (Int32(y) + grid.res[2] * Int32(z)) + Int32(1)
+     # Clamp indices to prevent out-of-bounds access from floating point edge cases
+     cx = clamp(Int32(x), Int32(0), grid.res[1] - Int32(1))
+     cy = clamp(Int32(y), Int32(0), grid.res[2] - Int32(1))
+     cz = clamp(Int32(z), Int32(0), grid.res[3] - Int32(1))
+     idx = cx + grid.res[1] * (cy + grid.res[2] * cz) + Int32(1)
      # Deref voxels TextureRef to get actual array
      voxels = Raycore.deref(media, grid.voxels)
      voxels[idx]
@@ -647,12 +651,12 @@ Returns (segment, new_iter, valid) where valid=false means exhausted.
 
     else
         # DDA mode - voxel traversal
-        return _ray_majorant_next_dda(iter, media)
+        return ray_majorant_next_dda(iter, media)
     end
 end
 
 """DDA next implementation (separated for clarity)"""
-@inline @propagate_inbounds function _ray_majorant_next_dda(iter::RayMajorantIterator{M}, media) where {M}
+@inline @propagate_inbounds function ray_majorant_next_dda(iter::RayMajorantIterator{M}, media) where {M}
     t_min = iter.t_min
     t_max = iter.t_max
 
@@ -1251,7 +1255,7 @@ Returns default RGBSpectrum(1.0) if σ_a_grid is nothing.
 """
 @propagate_inbounds function sample_σ_a(σ_a_grid, medium::RGBGridMedium, p_norm::Point3f)::RGBSpectrum
     isnothing(σ_a_grid) && return RGBSpectrum(1f0)
-    return _sample_rgb_grid(σ_a_grid, medium.grid_res, p_norm)
+    return sample_rgb_grid(σ_a_grid, medium.grid_res, p_norm)
 end
 
 """
@@ -1260,7 +1264,7 @@ Returns default RGBSpectrum(1.0) if σ_s_grid is nothing.
 """
 @propagate_inbounds function sample_σ_s(σ_s_grid, medium::RGBGridMedium, p_norm::Point3f)::RGBSpectrum
     isnothing(σ_s_grid) && return RGBSpectrum(1f0)
-    return _sample_rgb_grid(σ_s_grid, medium.grid_res, p_norm)
+    return sample_rgb_grid(σ_s_grid, medium.grid_res, p_norm)
 end
 
 """
@@ -1269,14 +1273,14 @@ Returns RGBSpectrum(0.0) if Le_grid is nothing.
 """
 @propagate_inbounds function sample_Le(Le_grid, medium::RGBGridMedium, p_norm::Point3f)::RGBSpectrum
     isnothing(Le_grid) && return RGBSpectrum(0f0)
-    return _sample_rgb_grid(Le_grid, medium.grid_res, p_norm)
+    return sample_rgb_grid(Le_grid, medium.grid_res, p_norm)
 end
 
 """
 Trilinear interpolation for RGB grid.
 p_norm is in [0,1]³ normalized coordinates within bounds.
 """
-@propagate_inbounds function _sample_rgb_grid(
+@propagate_inbounds function sample_rgb_grid(
     grid::AbstractArray{RGBSpectrum,3},
     grid_res::Vec{3, Int32},
     p_norm::Point3f
@@ -1455,79 +1459,90 @@ end
     return RayMajorantSegment(t_min, t_max, σ_maj)
 end
 
-"""Build a coarse majorant grid from the density field"""
-function build_majorant_grid(density::AbstractArray{Float32,3}, res::Vec3i)
+"""Build a coarse majorant grid from the density field (CPU path)."""
+function build_majorant_grid(density::Array{Float32,3}, res::Vec3i)
     nx, ny, nz = size(density)
     grid = MajorantGrid(res, Vector{Float32})
-
-    # For each majorant voxel, find max density in corresponding region
-    # Use floating point mapping to handle cases where majorant res > density res
-    for iz in 0:res[3]-1
-        # Map majorant voxel [iz, iz+1)/res to density range [0, nz)
-        z_start_f = iz * nz / res[3]
-        z_end_f = (iz + 1) * nz / res[3]
-        z_start = max(1, floor(Int, z_start_f) + 1)
-        z_end = min(nz, ceil(Int, z_end_f))
-
-        for iy in 0:res[2]-1
-            y_start_f = iy * ny / res[2]
-            y_end_f = (iy + 1) * ny / res[2]
-            y_start = max(1, floor(Int, y_start_f) + 1)
-            y_end = min(ny, ceil(Int, y_end_f))
-
-            for ix in 0:res[1]-1
-                x_start_f = ix * nx / res[1]
-                x_end_f = (ix + 1) * nx / res[1]
-                x_start = max(1, floor(Int, x_start_f) + 1)
-                x_end = min(nx, ceil(Int, x_end_f))
-
-                # Find max in this region
-                max_val = 0f0
-                for z in z_start:z_end, y in y_start:y_end, x in x_start:x_end
-                     max_val = max(max_val, density[x, y, z])
-                end
-
-                majorant_set!(grid, ix, iy, iz, max_val)
-            end
-        end
-    end
-
+    build_majorant_grid_cpu!(grid, density, nx, ny, nz)
     return grid
 end
 
-"""In-place majorant grid rebuild for GridMedium density updates."""
-function build_majorant_grid!(grid::MajorantGrid, density::AbstractArray{Float32,3})
-    res = grid.res
+"""Build a coarse majorant grid from a GPU density field using a KA kernel."""
+function build_majorant_grid(density::AbstractArray{Float32,3}, res::Vec3i)
     nx, ny, nz = size(density)
+    backend = KA.get_backend(density)
+    n_voxels = Int(res[1]) * Int(res[2]) * Int(res[3])
+    voxels = KA.allocate(backend, Float32, n_voxels)
+    fill!(voxels, 0f0)
+    grid = MajorantGrid(voxels, Vec{3,Int32}(Int32(res[1]), Int32(res[2]), Int32(res[3])))
+    build_majorant_kernel!(backend)(
+        grid.voxels, density, Int32(res[1]), Int32(res[2]), Int32(res[3]),
+        Int32(nx), Int32(ny), Int32(nz); ndrange=n_voxels)
+    KA.synchronize(backend)
+    return grid
+end
 
+@kernel function build_majorant_kernel!(voxels, @Const(density),
+        rx::Int32, ry::Int32, rz::Int32, nx::Int32, ny::Int32, nz::Int32)
+    linear = @index(Global)
+    idx = Int32(linear) - Int32(1)
+    ix = idx % rx
+    iy = (idx ÷ rx) % ry
+    iz = idx ÷ (rx * ry)
+
+    x_start = max(Int32(1), (ix * nx) ÷ rx + Int32(1))
+    x_end   = min(nx, ((ix + Int32(1)) * nx + rx - Int32(1)) ÷ rx)
+    y_start = max(Int32(1), (iy * ny) ÷ ry + Int32(1))
+    y_end   = min(ny, ((iy + Int32(1)) * ny + ry - Int32(1)) ÷ ry)
+    z_start = max(Int32(1), (iz * nz) ÷ rz + Int32(1))
+    z_end   = min(nz, ((iz + Int32(1)) * nz + rz - Int32(1)) ÷ rz)
+
+    max_val = 0f0
+    for z in z_start:z_end, y in y_start:y_end, x in x_start:x_end
+        @inbounds max_val = max(max_val, density[x, y, z])
+    end
+    @inbounds voxels[linear] = max_val
+end
+
+"""In-place majorant grid rebuild (CPU path)."""
+function build_majorant_grid!(grid::MajorantGrid{Vector{Float32}}, density::Array{Float32,3})
+    nx, ny, nz = size(density)
+    build_majorant_grid_cpu!(grid, density, nx, ny, nz)
+    return grid
+end
+
+"""In-place majorant grid rebuild (GPU path)."""
+function build_majorant_grid!(grid::MajorantGrid, density::AbstractArray{Float32,3})
+    nx, ny, nz = size(density)
+    res = grid.res
+    backend = KA.get_backend(density)
+    n_voxels = Int(res[1]) * Int(res[2]) * Int(res[3])
+    build_majorant_kernel!(backend)(
+        grid.voxels, density, Int32(res[1]), Int32(res[2]), Int32(res[3]),
+        Int32(nx), Int32(ny), Int32(nz); ndrange=n_voxels)
+    KA.synchronize(backend)
+    return grid
+end
+
+function build_majorant_grid_cpu!(grid::MajorantGrid, density, nx, ny, nz)
+    res = grid.res
     for iz in 0:res[3]-1
-        z_start_f = iz * nz / res[3]
-        z_end_f = (iz + 1) * nz / res[3]
-        z_start = max(1, floor(Int, z_start_f) + 1)
-        z_end = min(nz, ceil(Int, z_end_f))
-
+        z_start = max(1, floor(Int, iz * nz / res[3]) + 1)
+        z_end   = min(nz, ceil(Int, (iz + 1) * nz / res[3]))
         for iy in 0:res[2]-1
-            y_start_f = iy * ny / res[2]
-            y_end_f = (iy + 1) * ny / res[2]
-            y_start = max(1, floor(Int, y_start_f) + 1)
-            y_end = min(ny, ceil(Int, y_end_f))
-
+            y_start = max(1, floor(Int, iy * ny / res[2]) + 1)
+            y_end   = min(ny, ceil(Int, (iy + 1) * ny / res[2]))
             for ix in 0:res[1]-1
-                x_start_f = ix * nx / res[1]
-                x_end_f = (ix + 1) * nx / res[1]
-                x_start = max(1, floor(Int, x_start_f) + 1)
-                x_end = min(nx, ceil(Int, x_end_f))
-
+                x_start = max(1, floor(Int, ix * nx / res[1]) + 1)
+                x_end   = min(nx, ceil(Int, (ix + 1) * nx / res[1]))
                 max_val = 0f0
                 for z in z_start:z_end, y in y_start:y_end, x in x_start:x_end
-                    max_val = max(max_val, density[x, y, z])
+                    @inbounds max_val = max(max_val, density[x, y, z])
                 end
-
                 majorant_set!(grid, ix, iy, iz, max_val)
             end
         end
     end
-    return grid
 end
 
 @propagate_inbounds is_emissive(::GridMedium) = false
@@ -1766,7 +1781,7 @@ end
 # - "A Practical Model for Subsurface Light Transport" (Jensen et al., SIGGRAPH 2001)
 # - "Acquiring Scattering Properties of Participating Media by Dilution" (SIGGRAPH 2006)
 
-const _MEDIUM_PRESETS = Dict{String, NamedTuple{(:σ_s, :σ_a), Tuple{NTuple{3,Float32}, NTuple{3,Float32}}}}(
+const MEDIUM_PRESETS = Dict{String, NamedTuple{(:σ_s, :σ_a), Tuple{NTuple{3,Float32}, NTuple{3,Float32}}}}(
     # === Milk and dairy products ===
     "Wholemilk" => (σ_s=(2.55f0, 3.21f0, 3.77f0), σ_a=(0.0011f0, 0.0024f0, 0.014f0)),
     "Skimmilk" => (σ_s=(0.70f0, 1.22f0, 1.90f0), σ_a=(0.0014f0, 0.0025f0, 0.0142f0)),
@@ -1849,8 +1864,8 @@ Available presets include:
 - Water: "PacificOceanSurfaceWater"
 """
 function get_medium_preset(name::String)
-    haskey(_MEDIUM_PRESETS, name) || error("Unknown medium preset: $name. Available: $(keys(_MEDIUM_PRESETS))")
-    return _MEDIUM_PRESETS[name]
+    haskey(MEDIUM_PRESETS, name) || error("Unknown medium preset: $name. Available: $(keys(MEDIUM_PRESETS))")
+    return MEDIUM_PRESETS[name]
 end
 
 # ============================================================================
@@ -1871,7 +1886,7 @@ Milk(g=0.8)              # Forward-scattering milk
 ```
 """
 function Milk(; scale::Real=1f0, g::Real=0f0)
-    props = _MEDIUM_PRESETS["Wholemilk"]
+    props = MEDIUM_PRESETS["Wholemilk"]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))
@@ -1955,7 +1970,7 @@ function Juice(name::Symbol; scale::Real=1f0, g::Real=0f0)
     else
         error("Unknown juice type: $name. Available: :apple, :cranberry, :grape, :grapefruit")
     end
-    props = _MEDIUM_PRESETS[preset_name]
+    props = MEDIUM_PRESETS[preset_name]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))
@@ -1985,7 +2000,7 @@ function Wine(name::Symbol; scale::Real=1f0, g::Real=0f0)
     else
         error("Unknown wine type: $name. Available: :chardonnay, :zinfandel, :merlot")
     end
-    props = _MEDIUM_PRESETS[preset_name]
+    props = MEDIUM_PRESETS[preset_name]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))
@@ -2003,7 +2018,7 @@ Coffee(scale=0.3)         # Diluted coffee (americano-like)
 ```
 """
 function Coffee(; scale::Real=1f0, g::Real=0f0)
-    props = _MEDIUM_PRESETS["Espresso"]
+    props = MEDIUM_PRESETS["Espresso"]
     σ_s = RGBSpectrum(props.σ_s...) * Float32(scale)
     σ_a = RGBSpectrum(props.σ_a...) * Float32(scale)
     HomogeneousMedium(σ_a=σ_a, σ_s=σ_s, g=Float32(g))

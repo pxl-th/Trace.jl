@@ -10,7 +10,9 @@
 Uses power-weighted light sampling via alias table for better importance sampling
 in scenes with lights of varying intensities (pbrt-v4's PowerLightSampler approach).
 
-Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
+Sobol samples are generated inline rather than read from a pre-populated
+per-pixel buffer; see `surface_direct_lighting_inner!` in surface-eval.jl
+for the rationale.
 """
 @propagate_inbounds function medium_direct_lighting_inner!(
     shadow_queue,
@@ -22,17 +24,22 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
     num_infinite_lights::Int32,
     num_bvh_lights::Int32,
     num_lights::Int32,
-    # Pre-computed Sobol samples (SOA layout)
-    pixel_samples_direct_uc,
-    pixel_samples_direct_u
+    sobol_rng,           # SobolRNG — samples generated on demand inline
+    sample_idx::Int32,
 )
     # Skip if no lights
     num_lights < Int32(1) && return
 
-    # Use pre-computed Sobol samples for light sampling (pbrt-v4 RaySamples.direct)
+    # Inline Sobol sample generation (matches dimension layout used by the
+    # surface path's `surface_direct_lighting_inner!`).
     pixel_idx = work.pixel_index
-    u_light = pixel_samples_direct_u[pixel_idx]
-    light_select = pixel_samples_direct_uc[pixel_idx]
+    pixel_idx_0 = pixel_idx - Int32(1)
+    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    base_dim = Int32(6) + Int32(7) * work.depth
+    light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
+    u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
+    u_light = Point2f(u_light_x, u_light_y)
 
     # Select light using BVH light sampler (spatially-aware importance sampling)
     # Medium scattering has no surface normal → pass Vec3f(0f0)
@@ -125,7 +132,7 @@ end
     bvh_nodes, infinite_light_indices,
     num_infinite_lights::Int32, num_bvh_lights::Int32,
     num_lights::Int32,
-    pixel_samples_direct_uc, pixel_samples_direct_u
+    sobol_rng, sample_idx::Int32,
 )
     medium_direct_lighting_inner!(
         shadow_queue,
@@ -133,7 +140,7 @@ end
         bvh_nodes, infinite_light_indices,
         num_infinite_lights, num_bvh_lights,
         num_lights,
-        pixel_samples_direct_uc, pixel_samples_direct_u
+        sobol_rng, sample_idx,
     )
 end
 
@@ -143,14 +150,14 @@ end
 
 """Inner function for medium scatter - can use return statements.
 
-Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style).
+Sobol samples are generated inline; see `surface_direct_lighting_inner!`.
 """
 @propagate_inbounds function medium_scatter_inner!(
     ray_queue,
     work::VPMediumScatterWorkItem,
     max_depth::Int32,
-    # Pre-computed Sobol samples (SOA layout)
-    pixel_samples_indirect_u
+    sobol_rng,
+    sample_idx::Int32,
 )
     # Check depth limit
     new_depth = work.depth + Int32(1)
@@ -158,9 +165,14 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
         return
     end
 
-    # Use pre-computed Sobol samples for phase function sampling (pbrt-v4 RaySamples.indirect)
+    # Inline Sobol sample generation for phase function direction (dim+6 = 2D).
     pixel_idx = work.pixel_index
-    u = pixel_samples_indirect_u[pixel_idx]
+    pixel_idx_0 = pixel_idx - Int32(1)
+    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    base_dim = Int32(6) + Int32(7) * work.depth
+    u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))
+    u = Point2f(u_x, u_y)
     wi, phase_pdf = sample_hg(work.g, work.wo, u)
 
     if phase_pdf > 0f0
@@ -191,7 +203,7 @@ Now uses pre-computed Sobol samples from pixel_samples (pbrt-v4 RaySamples style
             new_r_l,
             work.p,           # prev_intr_p
             work.wo,          # prev_intr_n (use wo as pseudo-normal for MIS)
-            1f0,              # eta_scale (no refraction in medium)
+            work.eta_scale,   # eta_scale (carry through from path state)
             false,            # specular_bounce
             true,             # any_non_specular_bounces
             work.medium_idx   # Stay in same medium
@@ -210,17 +222,16 @@ end
     work,
     ray_queue,
     max_depth::Int32,
-    pixel_samples_indirect_u
+    sobol_rng, sample_idx::Int32,
 )
-    medium_scatter_inner!(ray_queue, work, max_depth, pixel_samples_indirect_u)
+    medium_scatter_inner!(ray_queue, work, max_depth, sobol_rng, sample_idx)
 end
 
 # ============================================================================
 # High-Level Functions
 # ============================================================================
 
-function vp_sample_medium_direct_lighting!(state::VolPathState, lights)
-    pixel_samples = state.pixel_samples
+function vp_sample_medium_direct_lighting!(state::VolPathState, lights, sample_idx::Int32)
     foreach(vp_medium_direct_lighting_kernel!,
         state.medium_scatter_queue,
         state.shadow_queue,
@@ -229,19 +240,18 @@ function vp_sample_medium_direct_lighting!(state::VolPathState, lights)
         state.bvh_nodes, state.infinite_light_indices,
         state.num_infinite_lights, state.num_bvh_lights,
         state.num_lights,
-        pixel_samples.direct_uc, pixel_samples.direct_u,
+        state.sobol_rng, sample_idx,
     )
     return nothing
 end
 
-function vp_sample_medium_scatter!(state::VolPathState)
+function vp_sample_medium_scatter!(state::VolPathState, sample_idx::Int32)
     output_queue = next_ray_queue(state)
-    pixel_samples = state.pixel_samples
     foreach(vp_medium_scatter_kernel!,
         state.medium_scatter_queue,
         output_queue,
         state.max_depth,
-        pixel_samples.indirect_u,
+        state.sobol_rng, sample_idx,
     )
     return nothing
 end

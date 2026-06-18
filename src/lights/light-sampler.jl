@@ -335,13 +335,8 @@ end
 @kernel function estimate_powers_kernel!(powers, @Const(lights), @Const(scene_radius::Float32))
     idx = @index(Global)
     light_idx = flat_to_light_index(lights, Int32(idx))
-    power = Raycore.with_index(_estimate_power_impl, lights, light_idx, scene_radius)
+    power = Raycore.with_index(estimate_light_power, lights, light_idx, scene_radius)
     @inbounds powers[idx] = power
-end
-
-# Implementation function for with_index dispatch
-@inline function _estimate_power_impl(light, scene_radius::Float32)::Float32
-    estimate_light_power(light, scene_radius)
 end
 
 """
@@ -539,30 +534,3 @@ GPU-compatible light sampling using pre-computed alias table arrays.
     end
 end
 
-# ============================================================================
-# Light Sampler Factory
-# ============================================================================
-
-"""
-    create_light_sampler(lights::MultiTypeSet; method::Symbol=:power, scene_radius::Float32=10f0) -> LightSampler
-
-Create a light sampler for the given lights.
-
-# Arguments
-- `lights::MultiTypeSet`: Collection of light sources
-- `method::Symbol`: Sampling method (`:uniform` or `:power`)
-- `scene_radius::Float32`: Scene bounding sphere radius (for power-weighted sampling of infinite lights)
-
-# Methods
-- `:uniform`: Uniform random selection (baseline)
-- `:power`: Power-weighted selection (recommended for varying light intensities)
-"""
-function create_light_sampler(lights::Raycore.MultiTypeSet; method::Symbol=:power, scene_radius::Float32=10f0)
-    if method == :uniform
-        return UniformLightSampler(lights)
-    elseif method == :power
-        return PowerLightSampler(lights; scene_radius=scene_radius)
-    else
-        error("Unknown light sampler method: $method")
-    end
-end

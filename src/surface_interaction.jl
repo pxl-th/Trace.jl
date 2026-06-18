@@ -402,7 +402,7 @@ end
 # The primitive (triangle) contains material_type and material_idx for dispatch
 # Note: Only StaticTLAS is used in kernels (adapt converts TLAS → StaticTLAS)
 @propagate_inbounds function intersect!(accel::Raycore.StaticTLAS, ray::AbstractRay)
-    hit_found, triangle, distance, bary_coords, instance_id = closest_hit(accel, ray)
+    hit_found, triangle, distance, bary_coords, inst_idx = closest_hit(accel, ray)
 
     if !hit_found
         return false, triangle, SurfaceInteraction()
@@ -411,42 +411,38 @@ end
     # Convert to SurfaceInteraction (in local/BLAS space)
     interaction = triangle_to_surface_interaction(triangle, ray, bary_coords)
 
-    # Transform surface interaction to world space using instance transform
-    # instance_id is 1-based array index into accel.instances (set during TLAS construction)
-    # Use it directly instead of searching - this ensures we get the current transform
-    # even after updates via update_transform!
-    if instance_id >= 1 && instance_id <= length(accel.instances)
-        inst = accel.instances[instance_id]
-        transform = inst.transform
-        inv_transform = inst.inv_transform
+    # Transform surface interaction to world space using the instance's transform.
+    # `inst_idx` is the 1-based position in `accel.instances` returned by closest_hit.
+    if inst_idx >= 1 && inst_idx <= length(accel.instances)
+        inst = accel.instances[inst_idx]
+        transform = inst.transform           # Mat3x4f = SMatrix{4,3,Float32} (Vulkan row-major 3×4 stored column-major)
+        inv_transform = inst.inv_transform   # Mat3x4f
 
-        # Transform hit point to world space
+        # Affine point transform via Raycore helper — the previous `transform * Vec4f`
+        # was dimensionally wrong (4×3 × 4-vec) and bailed to a dynamic generic path
+        # on GPU, breaking compilation of `gpu_aux_buffer_kernel!`.
         local_p = interaction.core.p
-        world_p = Point3f(transform * Vec4f(local_p..., 1f0))
+        world_p = Raycore.transform_point(transform, local_p)
 
-        # Transform normal to world space: n_world = normalize(transpose(inv_transform) * n_local)
-        # For a 4x4 matrix, we use the upper-left 3x3 for direction transforms
+        # Normal transform: (R^{-1})^T * n_local. inv_transform[i,j] for i,j ∈ 1:3
+        # already equals inv(R)^T after the row/col swap from the Vulkan layout, so
+        # the constructed 3×3 is the desired inverse-transpose.
         local_n = Vec3f(interaction.core.n)
-        # transpose(inv_transform) is equivalent to inverse-transpose of transform
         inv_t_3x3 = Mat3f(inv_transform[1,1], inv_transform[2,1], inv_transform[3,1],
                           inv_transform[1,2], inv_transform[2,2], inv_transform[3,2],
                           inv_transform[1,3], inv_transform[2,3], inv_transform[3,3])
         world_n = Normal3f(normalize(inv_t_3x3 * local_n))
 
-        # Transform shading normal similarly
         local_sn = Vec3f(interaction.shading.n)
         world_sn = Normal3f(normalize(inv_t_3x3 * local_sn))
 
-        # Transform tangent/bitangent (these transform like directions, using the forward transform)
-        t_3x3 = Mat3f(transform[1,1], transform[2,1], transform[3,1],
-                      transform[1,2], transform[2,2], transform[3,2],
-                      transform[1,3], transform[2,3], transform[3,3])
-        # ∂p∂u and ∂p∂v are on SurfaceInteraction directly, not on core
-        world_dpdu = normalize(t_3x3 * interaction.∂p∂u)
-        world_dpdv = normalize(t_3x3 * interaction.∂p∂v)
-        # Shading tangent/bitangent
-        world_st = normalize(t_3x3 * interaction.shading.∂p∂u)
-        world_sb = normalize(t_3x3 * interaction.shading.∂p∂v)
+        # Tangent/bitangent: direction transform R * v_local. Raycore.transform_direction
+        # handles the Mat3x4f layout correctly (the old inline `Mat3f(transform[…])` built
+        # R^T, which is wrong for non-orthogonal R).
+        world_dpdu = normalize(Raycore.transform_direction(transform, interaction.∂p∂u))
+        world_dpdv = normalize(Raycore.transform_direction(transform, interaction.∂p∂v))
+        world_st   = normalize(Raycore.transform_direction(transform, interaction.shading.∂p∂u))
+        world_sb   = normalize(Raycore.transform_direction(transform, interaction.shading.∂p∂v))
 
         # Reconstruct SurfaceInteraction with world-space values
         # Interaction fields: p, time, wo, n
@@ -459,24 +455,10 @@ end
             world_dpdu, world_dpdv, interaction.∂n∂u, interaction.∂n∂v,
             interaction.∂u∂x, interaction.∂u∂y, interaction.∂v∂x, interaction.∂v∂y,
             interaction.∂p∂x, interaction.∂p∂y,
-            interaction.face_idx, interaction.bary, UInt32(instance_id)
+            interaction.face_idx, interaction.bary, UInt32(inst_idx)
         )
     end
 
     return true, triangle, interaction
 end
 
-# Intersect BVH - returns hit info, primitive, and SurfaceInteraction
-@propagate_inbounds function intersect!(accel::BVH, ray::AbstractRay)
-    hit_found, triangle, distance, bary_coords = closest_hit(accel, ray)
-
-    if !hit_found
-        return false, triangle, SurfaceInteraction()
-    end
-
-    # Convert to SurfaceInteraction
-    interaction = triangle_to_surface_interaction(triangle, ray, bary_coords)
-
-    # Return primitive so caller can access triangle.metadata (SetKey)
-    return true, triangle, interaction
-end

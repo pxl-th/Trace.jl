@@ -239,7 +239,7 @@ const BVH_NUM_BUCKETS = 12
 
 """SAH cost for splitting a LightBounds along dimension `dim`.
 Following pbrt-v4 EvaluateCost (lightsamplers.h:383-396)."""
-function _evaluate_cost(lb::LightBounds, bounds::Raycore.Bounds3, dim::Int)
+function evaluate_cost(lb::LightBounds, bounds::Raycore.Bounds3, dim::Int)
     θ_o = acos(clamp(lb.cosθ_o, -1f0, 1f0))
     θ_e = acos(clamp(lb.cosθ_e, -1f0, 1f0))
     θ_w = min(θ_o + θ_e, Float32(π))
@@ -300,7 +300,7 @@ function BVHLightSampler(lights::Raycore.MultiTypeSet; scene_radius::Float32=10f
 
     for flat_idx in 1:n
         light_key = flat_to_light_index(cpu_lights, Int32(flat_idx))
-        lb = Raycore.with_index(_get_light_bounds, cpu_lights, light_key, scene_radius)
+        lb = Raycore.with_index(light_bounds, cpu_lights, light_key, scene_radius)
         if isnothing(lb)
             push!(infinite_indices, Int32(flat_idx))
         elseif lb.phi > 0f0
@@ -319,7 +319,7 @@ function BVHLightSampler(lights::Raycore.MultiTypeSet; scene_radius::Float32=10f
 
     # Build BVH
     nodes = LightBVHNode[]
-    _build_bvh!(nodes, light_to_bit_trail, bvh_lights, 1, length(bvh_lights), UInt32(0), 0)
+    build_bvh!(nodes, light_to_bit_trail, bvh_lights, 1, length(bvh_lights), UInt32(0), 0)
 
     return BVHLightSampler(
         nodes, light_to_bit_trail, infinite_indices,
@@ -327,14 +327,9 @@ function BVHLightSampler(lights::Raycore.MultiTypeSet; scene_radius::Float32=10f
     )
 end
 
-# Helper for with_index dispatch to get light bounds
-@inline function _get_light_bounds(light, scene_radius::Float32)
-    light_bounds(light)
-end
-
 """Recursive BVH construction with SAH splitting.
 Following pbrt-v4 buildBVH (lightsamplers.cpp:135-238)."""
-function _build_bvh!(
+function build_bvh!(
     nodes::Vector{LightBVHNode},
     light_to_bit_trail::Vector{UInt32},
     bvh_lights::Vector{Tuple{Int32, LightBounds}},
@@ -400,8 +395,8 @@ function _build_bvh!(
             # Skip degenerate splits
             (count_below == 0 || count_above == 0) && continue
 
-            cost = _evaluate_cost(lb_below, overall_lb.bounds, dim) +
-                   _evaluate_cost(lb_above, overall_lb.bounds, dim)
+            cost = evaluate_cost(lb_below, overall_lb.bounds, dim) +
+                   evaluate_cost(lb_above, overall_lb.bounds, dim)
 
             if cost < best_cost
                 best_cost = cost
@@ -448,12 +443,12 @@ function _build_bvh!(
     ))
 
     # Build left child (child0 = next node = node_idx + 1)
-    _, lb0 = _build_bvh!(nodes, light_to_bit_trail, bvh_lights,
+    _, lb0 = build_bvh!(nodes, light_to_bit_trail, bvh_lights,
                           start, mid, bit_trail, depth + 1)
 
     # Build right child (child1 = current position)
     child1_idx = length(nodes) + 1
-    _, lb1 = _build_bvh!(nodes, light_to_bit_trail, bvh_lights,
+    _, lb1 = build_bvh!(nodes, light_to_bit_trail, bvh_lights,
                           mid + 1, stop, bit_trail | (UInt32(1) << depth), depth + 1)
 
     # Update interior node with correct child1 index and merged bounds

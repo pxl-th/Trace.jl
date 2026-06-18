@@ -108,8 +108,8 @@ end
         camera.core.shutter_close,
         sample.time,
     )
-    ctw = camera.core.camera_to_world
-    o = ctw(o)
-    d = ctw(d)
+    ctw = camera.core.camera_to_world.m
+    o = Raycore.transform_point(ctw, o)
+    d = Raycore.transform_direction(ctw, d)
     return Ray(d=normalize(d), o=o, time=time), 1f0
 end

@@ -40,60 +40,47 @@ struct MixMaterial{M1<:Material, M2<:Material, AmountTex} <: Material
     material1::M1
     material2::M2
     amount::AmountTex
-    # Store material indices for use after resolution
+    # Material indices, resolved when pushed to scene
     material1_idx::SetKey
     material2_idx::SetKey
 end
 
-# Constructor with material tuple indices
-function MixMaterial(
-    material1::M1,
-    material2::M2,
-    amount::Texture,
-    material1_idx::SetKey,
-    material2_idx::SetKey
-) where {M1<:Material, M2<:Material}
-    MixMaterial{M1, M2, typeof(amount)}(material1, material2, amount, material1_idx, material2_idx)
-end
+# No explicit positional constructor: the synthesized
+# `MixMaterial(material1, material2, amount, material1_idx, material2_idx)`
+# already accepts any amount value (Texture, CheckerboardTexture, raw
+# Float32, TextureRef). Re-declaring it with the identical signature is a
+# method overwrite, which breaks precompilation.
 
 """
-    MixMaterial(; materials, amount, material_indices)
+    MixMaterial(; materials, amount)
 
-Create a MixMaterial with keyword arguments.
+Create a MixMaterial that blends between two sub-materials.
+
+Sub-material indices are resolved automatically when the material is pushed to a scene.
 
 # Arguments
 - `materials`: Tuple of two materials (material1, material2)
-- `amount`: Mixing amount (0-1 scalar, texture, or image path)
-- `material_indices`: Tuple of SetKey for each material
+- `amount`: Mixing amount (0-1 scalar, texture, or image path). 0 = material1, 1 = material2.
 
 # Examples
 ```julia
-# Simple 50-50 blend
-MixMaterial(
-    materials=(gold_material, red_diffuse),
-    amount=0.5,
-    material_indices=(gold_idx, diffuse_idx)
-)
-
-# Texture-based blend (e.g., mask texture)
-MixMaterial(
-    materials=(gold_material, red_diffuse),
-    amount=mask_texture,
-    material_indices=(gold_idx, diffuse_idx)
-)
+MixMaterial(materials=(gold, diffuse), amount=0.5)
+MixMaterial(materials=(gold, diffuse), amount=mask_texture)
 ```
 """
 function MixMaterial(;
     materials::Tuple{<:Material, <:Material},
     amount=0.5f0,
-    material_indices::Tuple{SetKey, SetKey}
+    material_indices::Union{Tuple{SetKey, SetKey}, Nothing}=nothing
 )
+    idx1 = material_indices !== nothing ? material_indices[1] : SetKey()
+    idx2 = material_indices !== nothing ? material_indices[2] : SetKey()
     MixMaterial(
         materials[1],
         materials[2],
-        _to_texture(amount),
-        material_indices[1],
-        material_indices[2]
+        to_texture(amount),
+        idx1,
+        idx2
     )
 end
 
@@ -216,28 +203,8 @@ Type-stable dispatch to check if a material is MixMaterial.
     return with_index(is_mix_material, materials, idx)
 end
 
-"""
-    choose_material_dispatch(materials::StaticMultiTypeSet, idx::SetKey, p, wo, uv) -> SetKey
-
-Type-stable dispatch for choosing material from MixMaterial.
-If the material is not MixMaterial, returns the input index unchanged.
-`materials` is used both for material lookup and texture evaluation.
-"""
-@propagate_inbounds function choose_material_dispatch(
-    materials::StaticMultiTypeSet,
-    idx::SetKey,
-    p::Point3f, wo::Vec3f, uv::Point2f
-)::SetKey
-    return with_index(_choose_material_impl, materials, idx, materials, p, wo, uv)
-end
-
-# Helper for choose_material_dispatch - called with concrete material type
-@propagate_inbounds function _choose_material_impl(mat, ctx, p, wo, uv)
-    return is_mix_material(mat) ? choose_material(mat, ctx, p, wo, uv) : SetKey()
-end
-
-# Overload that preserves the index for non-mix materials
-@propagate_inbounds function _choose_material_impl(mat, ctx, p, wo, uv, idx::SetKey)
+# Helper for resolve_mix_material - called with concrete material type
+@propagate_inbounds function choose_material_impl(mat, ctx, p, wo, uv, idx::SetKey)
     return is_mix_material(mat) ? choose_material(mat, ctx, p, wo, uv) : idx
 end
 
@@ -261,7 +228,7 @@ This should be called at intersection time before creating material work items.
         if !is_mix_material_dispatch(materials, current_idx)
             return current_idx
         end
-        current_idx = with_index(_choose_material_impl, materials, current_idx, materials, p, wo, uv, current_idx)
+        current_idx = with_index(choose_material_impl, materials, current_idx, materials, p, wo, uv, current_idx)
     end
     return current_idx
 end
@@ -271,5 +238,3 @@ end
 # to a concrete material before any BSDF evaluation occurs.
 # See pbrt-v4 materials.h line 339-344: GetBxDF() is LOG_FATAL if called.
 
-"""Type alias: `Mix` is the same as `MixMaterial`"""
-const Mix = MixMaterial

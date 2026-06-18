@@ -49,7 +49,7 @@ Materials should always use TextureRef or raw values, never Texture directly.
 # TextureRef path
 @propagate_inbounds function eval_tex(ctx::Raycore.StaticMultiTypeSet, tref::Raycore.TextureRef, uv::Point2f)
     data = Raycore.deref(ctx, tref)
-    return _sample_texture_data(data, uv)
+    return sample_texture_data(data, uv)
 end
 
 # Raw value path (constant) - for Float32, RGB, Spectrum types
@@ -71,7 +71,7 @@ and UV derivatives for future mipmap support.
 # TextureRef path with context
 @propagate_inbounds function eval_tex(ctx::Raycore.StaticMultiTypeSet, tref::Raycore.TextureRef, tfc::TextureFilterContext)
     data = Raycore.deref(ctx, tref)
-    return _sample_texture_data_filtered(data, tfc.uv, tfc.dudx, tfc.dudy, tfc.dvdx, tfc.dvdy)
+    return sample_texture_data_filtered(data, tfc.uv, tfc.dudx, tfc.dudy, tfc.dvdx, tfc.dvdy)
 end
 
 # Raw value path (constant) - context ignored
@@ -82,6 +82,48 @@ end
 # PiecewiseLinearSpectrum passthrough (not a texture, stored directly in material)
 @propagate_inbounds eval_tex(::Raycore.StaticMultiTypeSet, val::PiecewiseLinearSpectrum, ::Point2f) = val
 @propagate_inbounds eval_tex(::Raycore.StaticMultiTypeSet, val::PiecewiseLinearSpectrum, ::TextureFilterContext) = val
+
+# ============================================================================
+# CheckerboardTexture evaluation — pbrt-v4 textures.cpp Checkerboard(), 2D case
+# ============================================================================
+
+# pbrt-v4 textures.cpp:186 `d`: running integral of the ±1 checkerboard square
+# wave, used to filter the checkerboard analytically over the pixel footprint.
+@propagate_inbounds function checker_d(x::Float32)
+    y = x / 2f0 - floor(x / 2f0) - 0.5f0
+    return x / 2f0 + y * (1f0 - 2f0 * abs(y))
+end
+
+# pbrt-v4 textures.cpp:191 `bf`: triangle-filtered 1D checkerboard of radius r
+# centred at x. When the filter support stays inside one cell this is the exact
+# ±1 point sample (which also covers r == 0, i.e. no derivatives available).
+@propagate_inbounds function checker_bf(x::Float32, r::Float32)
+    if floor(x - r) == floor(x + r)
+        return 1f0 - 2f0 * Float32(unsafe_trunc(Int32, floor(x)) & Int32(1))
+    end
+    return (checker_d(x + r) - 2f0 * checker_d(x) + checker_d(x - r)) / (r * r)
+end
+
+# Checkerboard() 2D branch + UVMapping::Map fused, then the
+# (1 - w) * tex1 + w * tex2 mix from {Float,Spectrum}CheckerboardTexture::Evaluate.
+@propagate_inbounds function eval_tex(ctx::Raycore.StaticMultiTypeSet, cb::CheckerboardTexture,
+                                      tfc::TextureFilterContext)
+    s = cb.su * tfc.uv[1] + cb.du
+    t = cb.sv * tfc.uv[2] + cb.dv
+    ds = 1.5f0 * max(abs(cb.su * tfc.dudx), abs(cb.su * tfc.dudy))
+    dt = 1.5f0 * max(abs(cb.sv * tfc.dvdx), abs(cb.sv * tfc.dvdy))
+    w = 0.5f0 - 0.5f0 * checker_bf(s, ds) * checker_bf(t, dt)
+    t1 = eval_tex(ctx, cb.tex1, tfc)
+    t2 = eval_tex(ctx, cb.tex2, tfc)
+    return t1 * (1f0 - w) + t2 * w
+end
+
+# Derivative-free entry points point-sample (r = 0 ⇒ checker_bf hits the exact
+# ±1 branch), matching pbrt with zero differentials.
+@propagate_inbounds eval_tex(ctx::Raycore.StaticMultiTypeSet, cb::CheckerboardTexture, uv::Point2f) =
+    eval_tex(ctx, cb, TextureFilterContext(uv))
+@propagate_inbounds eval_tex(ctx::Raycore.StaticMultiTypeSet, cb::CheckerboardTexture, si::SurfaceInteraction) =
+    eval_tex(ctx, cb, TextureFilterContext(si.uv))
 
 # ============================================================================
 # Filtered Texture Evaluation (with UV derivatives for mipmap selection)
@@ -103,7 +145,7 @@ The derivatives are passed through for future mipmap implementation.
     dudx::Float32, dudy::Float32, dvdx::Float32, dvdy::Float32
 )
     data = Raycore.deref(ctx, tref)
-    return _sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy)
+    return sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy)
 end
 
 # Raw value path (constant) - derivatives ignored
@@ -115,27 +157,22 @@ end
 end
 
 """
-    _sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy) -> T
+    sample_texture_data_filtered(data, uv, dudx, dudy, dvdx, dvdy) -> T
 
 Sample texture with filtering based on UV derivatives.
-Uses the derivatives to compute the filter footprint for mipmap selection.
-
-TODO: Implement proper mipmap-based filtering. Currently uses bilinear sampling
-as a simple improvement over point sampling.
+TODO: Implement proper mipmap-based filtering with EWA or box filter.
+Currently uses nearest-neighbor (point) sampling, which matches pbrt-v4's
+behavior for pre-rasterized textures and avoids spurious blur.
 """
-@propagate_inbounds function _sample_texture_data_filtered(
+@propagate_inbounds function sample_texture_data_filtered(
     data::AbstractArray{T,N}, uv::Point2f,
     dudx::Float32, dudy::Float32, dvdx::Float32, dvdy::Float32
 )::T where {T,N}
-    # For now, use bilinear sampling as a simple filter
-    # TODO: Implement mipmap selection based on derivatives:
-    #   width = max(sqrt(dudx^2 + dvdx^2), sqrt(dudy^2 + dvdy^2)) * tex_size
-    #   level = log2(max(1, width))
-    return _sample_texture_bilinear(data, uv)
+    return sample_texture_data(data, uv)
 end
 
 # 0-dim arrays (scalar constants) - just return the value
-@propagate_inbounds function _sample_texture_data_filtered(
+@propagate_inbounds function sample_texture_data_filtered(
     data::AbstractArray{T,0}, ::Point2f,
     ::Float32, ::Float32, ::Float32, ::Float32
 )::T where T
@@ -143,12 +180,12 @@ end
 end
 
 """
-    _sample_texture_bilinear(data, uv) -> T
+    sample_texture_bilinear(data, uv) -> T
 
 Bilinear texture sampling for 2D textures.
 Provides smoother results than point sampling.
 """
-@propagate_inbounds function _sample_texture_bilinear(data::AbstractArray{T,2}, uv::Point2f)::T where T
+@propagate_inbounds function sample_texture_bilinear(data::AbstractArray{T,2}, uv::Point2f)::T where T
     # Apply UV flip (standard texture coordinate convention)
     uv_adj = Vec2f(1f0 - uv[2], uv[1])
 
@@ -186,8 +223,8 @@ Provides smoother results than point sampling.
 end
 
 # Fallback for non-2D textures
-@propagate_inbounds function _sample_texture_bilinear(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
-    return _sample_texture_data(data, uv)
+@propagate_inbounds function sample_texture_bilinear(data::AbstractArray{T,N}, uv::Point2f)::T where {T,N}
+    return sample_texture_data(data, uv)
 end
 
 # ============================================================================
@@ -217,6 +254,40 @@ function Raycore.maybe_convert_field(dhv::Raycore.MultiTypeSet, vtex::VertexColo
     vtex.face_colors isa AbstractArray || return vtex
     ref = Raycore.store_texture(dhv, vtex.face_colors)
     return VertexColorTexture(ref, vtex.n_faces)
+end
+
+# ============================================================================
+# update_item overloads — let `Raycore.update!` reuse existing texture slots
+# instead of pushing a new one on every update.  Without these the raw
+# `Texture` / `VertexColorTexture` values coming through `update_material!`
+# would hit the generic struct fallback, mis-match on field names vs the
+# stored (converted) form, and leak ~hundreds of MB of GPU memory per
+# rebuild in scenes with per-frame mesh updates.
+# ============================================================================
+
+# Const Texture over a scalar field: unwrap to the raw value.
+function Raycore.update_item(::Raycore.MultiTypeSet, old, new::Texture)
+    new.isconst && return new.constval
+    error("update_item: non-const Texture cannot overwrite a scalar field of type $(typeof(old)); rebuild the scene")
+end
+
+# Non-const Texture against a stored TextureRef: copy into the existing GPU
+# buffer (reallocating on size mismatch).
+function Raycore.update_item(dhv::Raycore.MultiTypeSet, old::Raycore.TextureRef,
+                              new::Texture)
+    new.isconst && error("update_item: replacing a sampled TextureRef with a const Texture is not supported; rebuild the scene")
+    Raycore.copyto_texture!(dhv, old, new.data)
+    return old
+end
+
+# VertexColorTexture update: reuse the existing ref, copy face_colors in.
+# `old.face_colors` is always a `TextureRef` once the item has been pushed,
+# `new.face_colors` is the raw CPU array the user supplied.
+function Raycore.update_item(dhv::Raycore.MultiTypeSet,
+                              old::VertexColorTexture{<:Raycore.TextureRef},
+                              new::VertexColorTexture{<:AbstractArray})
+    Raycore.copyto_texture!(dhv, old.face_colors, new.face_colors)
+    return old
 end
 
 # ============================================================================

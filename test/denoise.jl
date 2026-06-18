@@ -1,0 +1,110 @@
+using GeometryBasics: normal_mesh, Tesselation
+
+@testset "Denoising" begin
+    to_mesh(prim) = normal_mesh(prim isa Sphere ? Tesselation(prim, 32) : prim)
+
+    function make_noisy_scene()
+        scene = Hikari.Scene()
+        push!(scene, to_mesh(Sphere(Point3f(0, 0.5, 0), 0.5f0)),
+              Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.8f0, 0.3f0, 0.2f0)))
+        push!(scene, to_mesh(Rect3f(Vec3f(-2, 0, -2), Vec3f(4, 0.01, 4))),
+              Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.85f0)))
+        push!(scene, Hikari.PointLight(Point3f(2f0, 3f0, -1f0), Hikari.RGBSpectrum(40f0)))
+        Hikari.sync!(scene)
+        return scene
+    end
+
+    function render_noisy(scene; res=32, spp=2)
+        film = Hikari.Film(Point2f(res, res))
+        camera = Hikari.PerspectiveCamera(
+            Point3f(2f0, 1.5f0, -2f0), Point3f(0f0, 0.3f0, 0f0), film; fov=45f0)
+        Hikari.clear!(film)
+        Hikari.VolPath(samples=spp, max_depth=4)(scene, film, camera)
+        Hikari.fill_aux_buffers!(film, scene, camera)
+        return film, camera
+    end
+
+    @testset "DenoiseConfig defaults" begin
+        config = Hikari.DenoiseConfig()
+        @test config.iterations == 4
+        @test config.sigma_color == 1.0f0
+        @test config.sigma_normal == 64.0f0
+        @test config.sigma_depth == 0.1f0
+        @test config.use_variance == false
+    end
+
+    @testset "denoise! runs without error" begin
+        scene = make_noisy_scene()
+        film, _ = render_noisy(scene)
+
+        fb_before = copy(Array(film.framebuffer))
+        Hikari.denoise!(film)
+        fb_after = Array(film.framebuffer)
+
+        # Framebuffer was modified
+        @test fb_before != fb_after
+
+        # No NaN or Inf in denoised output
+        @test !any(px -> isnan(px.r) || isnan(px.g) || isnan(px.b), fb_after)
+        @test !any(px -> isinf(px.r) || isinf(px.g) || isinf(px.b), fb_after)
+
+        # Non-negative values
+        @test all(px -> px.r >= 0 && px.g >= 0 && px.b >= 0, fb_after)
+    end
+
+    @testset "denoise! reduces noise" begin
+        scene = make_noisy_scene()
+        film, _ = render_noisy(scene; spp=2)
+
+        fb_noisy = Array(film.framebuffer)
+
+        # Compute per-pixel variance in a 3x3 window as a noise proxy
+        function local_variance(img)
+            h, w = size(img)
+            total = 0.0
+            for j in 2:w-1, i in 2:h-1
+                lum_center = Float64(img[i,j].r + img[i,j].g + img[i,j].b) / 3
+                var_sum = 0.0
+                for dj in -1:1, di in -1:1
+                    lum = Float64(img[i+di,j+dj].r + img[i+di,j+dj].g + img[i+di,j+dj].b) / 3
+                    var_sum += (lum - lum_center)^2
+                end
+                total += var_sum / 9
+            end
+            return total / ((h-2) * (w-2))
+        end
+
+        var_noisy = local_variance(fb_noisy)
+        Hikari.denoise!(film)
+        fb_denoised = Array(film.framebuffer)
+        var_denoised = local_variance(fb_denoised)
+
+        # Denoised image should have less local variance
+        @test var_denoised < var_noisy
+    end
+
+    @testset "postprocess after denoise" begin
+        scene = make_noisy_scene()
+        film, _ = render_noisy(scene)
+
+        Hikari.denoise!(film)
+        img = Hikari.postprocess!(film; tonemap=:aces, gamma=2.2f0)
+        arr = Array(img)
+
+        @test size(arr) == (32, 32)
+        @test !any(px -> isnan(px.r) || isnan(px.g) || isnan(px.b), arr)
+        # After tonemap + gamma, values should be in [0, 1]
+        @test all(px -> 0 <= px.r <= 1 && 0 <= px.g <= 1 && 0 <= px.b <= 1, arr)
+    end
+
+    @testset "custom DenoiseConfig" begin
+        scene = make_noisy_scene()
+        film, _ = render_noisy(scene)
+
+        # Test with different parameters
+        config = Hikari.DenoiseConfig(iterations=3, sigma_color=2.0f0, use_variance=false)
+        Hikari.denoise!(film; config=config)
+        fb = Array(film.framebuffer)
+        @test !any(px -> isnan(px.r) || isnan(px.g) || isnan(px.b), fb)
+    end
+end

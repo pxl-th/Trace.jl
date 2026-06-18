@@ -17,6 +17,7 @@ using Adapt
 using KernelAbstractions: @kernel, @index, @Const
 import KernelAbstractions as KA
 using GPUArraysCore: @allowscalar
+# Lava is a weak dependency — hw-rt.jl is loaded via ext/HikariLavaExt.jl
 
 # Re-export Raycore types and functions that Trace uses
 import Raycore: AbstractRay, Ray, RayDifferentials, apply, check_direction, scale_differentials
@@ -25,8 +26,8 @@ import Raycore: distance, distance_squared, bounding_sphere
 # Note: lerp is defined in spectrum.jl for Spectrum, Float32, and Point3f
 import Raycore: Transformation, translate, scale, rotate, rotate_x, rotate_y, rotate_z, look_at, perspective
 import Raycore: swaps_handedness, has_scale
-import Raycore: Triangle, TriangleMesh
-import Raycore: AccelPrimitive, BVH, TLAS, StaticTLAS, TraversableTLAS, TLASHandle, Instance, world_bound, closest_hit, any_hit, sync!
+import Raycore: Triangle
+import Raycore: TLAS, StaticTLAS, TraversableTLAS, TLASHandle, world_bound, closest_hit, any_hit, sync!
 
 # Legacy alias - InstanceHandle was renamed to TLASHandle
 const InstanceHandle = TLASHandle
@@ -39,18 +40,12 @@ import Raycore: SetKey, MultiTypeSet, StaticMultiTypeSet, with_index, is_invalid
 abstract type Spectrum end
 abstract type Light end
 abstract type Material end
-abstract type BxDF end
 abstract type Integrator end
 abstract type Medium end
 
-# Default no-op close for integrators without cached state
+# Default no-op close/clear for integrators without cached state
 Base.close(::Integrator) = nothing
-
-const Radiance = UInt8(1)
-const Importance = UInt8(2)
-
-struct Reflect end
-struct Transmit end
+clear!(::Integrator) = nothing
 
 const DO_ASSERTS = false
 macro real_assert(expr, msg="")
@@ -78,30 +73,33 @@ include("film.jl")
 
 include("camera/camera.jl")
 include("sampler/sampling.jl")
-include("sampler/sampler.jl")
 include("textures/mapping.jl")
 include("textures/basic.jl")
 include("textures/texture-ref.jl")
 include("textures/environment_map.jl")
-include("materials/uber-material.jl")
-include("reflection/Reflection.jl")
-include("materials/bsdf.jl")
-include("materials/material.jl")
-include("materials/volume.jl")
-include("materials/coated-diffuse.jl")
-include("materials/mix-material.jl")
-include("materials/thin-dielectric.jl")
-include("materials/diffuse-transmission.jl")
-include("materials/coated-conductor.jl")
-include("materials/coated-diffuse-transmission.jl")
-include("materials/emissive.jl")
 
-# Spectral rendering support (for PhysicalWavefront)
-# spectral.jl, piecewise-linear.jl, metal-spectra.jl included above (before textures)
+# Spectral rendering support
 include("spectral/color.jl")
 include("spectral/uplift.jl")
-include("materials/spectral-eval.jl")
-# Sobol sampler (needs mix_bits from spectral-eval.jl)
+include("spectral/sensor.jl")
+include("spectral/sensor_data.jl")
+
+# Materials: shared math first, then each material, then dispatch
+include("materials/common.jl")
+include("materials/material.jl")
+include("materials/diffuse.jl")
+include("materials/dielectric.jl")
+include("materials/conductor.jl")
+include("materials/coated-diffuse.jl")
+include("materials/mix-material.jl")
+include("materials/coated-conductor.jl")
+include("materials/coated-diffuse-transmission.jl")
+include("materials/diffuse-transmission.jl")
+include("materials/emissive.jl")
+include("materials/bump-mapped.jl")
+include("materials/dispatch.jl")
+
+# Sobol sampler (needs mix_bits from materials/common.jl)
 include("sampler/sobol_matrices.jl")
 include("sampler/sobol.jl")
 # Stratified sampler (needs murmur_hash_64a from spectral-eval.jl, sobol functions from sobol.jl)
@@ -123,37 +121,37 @@ include("lights/light-sampler.jl")
 include("lights/bvh-light-sampler.jl")
 # GB.Mesh push! API (needs materials, lights, and DiffuseAreaLight)
 include("scene-mesh.jl")
-include("integrators/sampler.jl")
-include("integrators/sppm.jl")
-include("integrators/fast-wavefront.jl")
 # Unified work queue for wavefront integrators
 include("integrators/workqueue.jl")
-# PhysicalWavefront spectral path tracer
-include("integrators/physical-wavefront/workitems.jl")
-include("integrators/physical-wavefront/material-dispatch.jl")
-include("integrators/physical-wavefront/lights.jl")
-include("integrators/physical-wavefront/camera.jl")
-include("integrators/physical-wavefront/intersection.jl")
-include("integrators/physical-wavefront/material-eval.jl")
-include("integrators/physical-wavefront/film-update.jl")
+# Spectral light sampling (used by VolPath for direct lighting, environment evaluation)
+include("lights/spectral-sampling.jl")
 # VolPath volumetric path tracer
 include("integrators/volpath/media.jl")
 include("integrators/volpath/nanovdb.jl")
 include("integrators/volpath/medium-dispatch.jl")
 include("integrators/volpath/workitems.jl")
+include("integrators/volpath/per_material_queues.jl")
 include("integrators/volpath/volpath-state.jl")
 include("integrators/volpath/delta-tracking.jl")
 include("integrators/volpath/medium-scatter.jl")
 include("integrators/volpath/intersection.jl")
 include("integrators/volpath/surface-eval.jl")
-include("integrators/volpath/multi-material-eval.jl")
 include("integrators/volpath/volpath.jl")
+# Hardware RT dispatch (uses Raycore's backend-agnostic HWTLAS/HWAdaptedAccel interface)
+include("integrators/volpath/hw-rt.jl")
+# RT pipeline (raygen+closesthit+miss via VkRayTracingPipelineKHR + SBT) variant
+include("integrators/volpath/rt-pipeline.jl")
 include("kernel-abstractions.jl")
 # Postprocessing pipeline
 include("postprocess.jl")
 
 # Denoising
 include("denoise.jl")
+
+# PBRT file parser
+include("pbrt/tokenizer.jl")
+include("pbrt/parser.jl")
+include("pbrt/scene_builder.jl")
 
 # include("model_loader.jl")
 

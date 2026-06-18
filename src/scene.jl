@@ -29,7 +29,6 @@ end
 
 # Accessors for scene bounds (dereference the RefValue)
 @inline world_bound(scene::Scene) = scene.bounds[][1]
-@inline world_sphere(scene::Scene) = scene.bounds[][2]
 @inline world_center(scene::Scene) = scene.bounds[][2].center
 @inline world_radius(scene::Scene) = scene.bounds[][2].r
 
@@ -47,8 +46,11 @@ push!(scene, AmbientLight(...))
 sync!(scene)  # Build acceleration structure
 ```
 """
-function Scene(; backend=KA.CPU())
-    tlas = TLAS(backend)
+default_accel(backend, ::Val{false}) = TLAS(backend)
+# Val{true} defined in hw-rt.jl -> HWTLAS(backend) for any HW-capable backend
+
+function Scene(; backend=KA.CPU(), accel=nothing, hw_accel::Bool=false)
+    tlas = accel !== nothing ? accel : default_accel(backend, Val(hw_accel))
     lights = MultiTypeSet(backend)
     materials = MultiTypeSet(backend)
     media = MultiTypeSet(backend)
@@ -56,8 +58,8 @@ function Scene(; backend=KA.CPU())
     Scene(lights, tlas, materials, media, media_interfaces, Ref((Bounds3(), Sphere(Point3f(0), 0f0))))
 end
 
-function Scene(mesh_material_pairs::Vector{<:Tuple}; lights = (), backend = KA.CPU())
-    scene = Scene(; backend=backend)
+function Scene(mesh_material_pairs::Vector{<:Tuple}; lights = (), backend = KA.CPU(), accel = nothing, hw_accel::Bool=false)
+    scene = Scene(; backend=backend, accel=accel, hw_accel=hw_accel)
     for light in lights
         push!(scene, light)
     end
@@ -78,18 +80,24 @@ function Base.push!(scene::Scene, light::Light)
 end
 
 function Base.push!(scene::Scene, material::Material)
-    interface = MediumInterface(material)
-    return push!(scene, interface)
+    return push!(scene, MediumInterface(material))
 end
 
 function Base.push!(scene::Scene, medium::Medium)
     push!(scene.media, medium)
 end
 
-Base.push!(scene::Scene, medium::Nothing) = SetKey()
+Base.push!(scene::Scene, ::Nothing) = SetKey()
 
 function Base.push!(scene::Scene, medium::MediumInterface)
     mat_idx = push!(scene.materials, medium.material)
+    # Record the materials-set SetKey of the inner material from this push so
+    # `push!(scene, mesh, ::Material)` can read it back without doing a GPU
+    # scalar readback on `scene.media_interfaces`. The materials are converted
+    # by `maybe_convert_field` inside the MultiTypeSet push (texture wrappers
+    # collapse to bare scalars), so this is the only place that knows the
+    # canonical type_idx for SBT routing.
+    _LAST_MAT_SETKEY[] = mat_idx
     inside_idx = push!(scene, medium.inside)
     outside_idx = push!(scene, medium.outside)
     mi = MediumInterfaceIdx(mat_idx, inside_idx, outside_idx)
@@ -101,6 +109,27 @@ function Base.push!(scene::Scene, medium::MediumInterface)
     return UInt32(idx)
 end
 
+# Side-channel for `push!(scene, mesh, ::Material)` to read the materials-set
+# SetKey produced by the last `push!(scene, ::MediumInterface)` — needed to
+# compute the HWTLAS instance's `sbt_offset` in the per-material chit path.
+const _LAST_MAT_SETKEY = Ref(SetKey(UInt32(0), UInt32(0)))
+
+"""
+    update_material!(scene, idx::UInt32, new_medium::Medium)
+    update_material!(scene, idx::UInt32, new_material::Material)
+
+Mutate an existing entry in `scene.media` / `scene.materials` in place.
+Does **not** synchronize with the GPU.
+
+Invariants:
+- CPU-side bookkeeping and MultiTypeSet slot contents are updated.
+- If a texture slot in the backing MultiTypeSet has to be reshaped,
+  `copyto_texture!` handles the retirement sync internally (see its
+  docstring) — callers don't need to pair this with anything.
+- If the update rendered any transitively-owned resource unreachable,
+  the caller is responsible for pairing the release with a `sync!` call:
+  this function does not force one.
+"""
 function update_material!(scene::Scene, idx::UInt32, new_medium::Medium)
     mi = @allowscalar scene.media_interfaces[idx]
     Raycore.update!(scene.media, mi.inside, new_medium)
@@ -109,6 +138,30 @@ end
 function update_material!(scene::Scene, idx::UInt32, new_material::Material)
     mi = @allowscalar scene.media_interfaces[idx]
     Raycore.update!(scene.materials, mi.material, new_material)
+end
+
+# `MediumInterface` is itself a `<:Material`, so plots that use it (e.g. a
+# volume-bounding cube with `MediumInterface(NullMaterial(); inside=medium)`)
+# hit this overload instead of the generic `::Material` one.  Falling through
+# to the generic path is wrong: it would try to stuff a whole `MediumInterface`
+# into the inner-material slot of `scene.materials`, which is a type mismatch,
+# and with a `NullMaterial` inside the inner slot is `SetKey()` (unpushed)
+# which used to trip a `BoundsError`.  Instead, refresh the three component
+# slots independently — each guarded by `Raycore.is_valid` so invalid /
+# unpushed slots (NullMaterial, `inside=nothing`, `outside=nothing`) are
+# silent no-ops.
+function update_material!(scene::Scene, idx::UInt32,
+                          new_mi::MediumInterface)
+    mi = @allowscalar scene.media_interfaces[idx]
+    Raycore.is_valid(mi.material) &&
+        Raycore.update!(scene.materials, mi.material, new_mi.material)
+    if new_mi.inside !== nothing && Raycore.is_valid(mi.inside)
+        Raycore.update!(scene.media, mi.inside, new_mi.inside)
+    end
+    if new_mi.outside !== nothing && Raycore.is_valid(mi.outside)
+        Raycore.update!(scene.media, mi.outside, new_mi.outside)
+    end
+    return nothing
 end
 
 struct SceneHandle
@@ -138,11 +191,25 @@ end
 """
     sync!(scene::Scene)
 
-Build/rebuild the acceleration structure and update scene bounds.
-Call this after adding geometry with `push!`.
+Build/rebuild the acceleration structure, update scene bounds, and **wait
+for the GPU to finish** all work queued on the scene's backend (via
+`Raycore.sync!`).
+
+After `sync!(scene)` returns:
+- The acceleration structure reflects all prior `push!` / `delete!`.
+- Scene bounds are up to date on the CPU.
+- The GPU is idle for this scene's backend — it is safe to release
+  resources that are no longer reachable (old materials / media / AS
+  storage that a just-completed `update_material!` or `push!` rendered
+  unreachable).
+
+Invariants for callers (see the accel's `sync!` docstrings for detail):
+- `push!`, `delete!`, and `update_material!` do NOT synchronize; they
+  mutate CPU bookkeeping and mark state dirty. Pair any follow-up
+  release of transitively-owned resources with a `sync!` call.
 """
 function sync!(scene::Scene{<:TLAS})
-    sync!(scene.accel)
+    sync!(scene.accel)   # Raycore.sync! runs KA.synchronize at the end.
     bound = Raycore.world_bound(scene.accel)
     scene.bounds[] = (bound, bounding_sphere(bound))
     return scene
@@ -159,9 +226,6 @@ function Adapt.adapt_structure(to, scene::Scene)
         Adapt.adapt(to, scene.bounds)  # RefValue → device RefValue
     )
 end
-
-# Type alias for scenes with materials (used for get_material dispatch)
-const MaterialScene = AbstractScene
 
 # Common interface for both scene types
 @propagate_inbounds function intersect!(scene::AbstractScene, ray::AbstractRay)
@@ -197,9 +261,6 @@ function Base.show(io::IO, ::MIME"text/plain", scene::Scene)
         n_geometries = length(accel.blas_array)
         println(io, "  Geometries: ", n_geometries)
         println(io, "  Instances:  ", n_instances)
-    elseif accel isa BVH
-        n_triangles = length(accel.primitives)
-        println(io, "  Triangles:  ", n_triangles)
     end
     bound = world_bound(scene)
     print(io,   "  Bounds:     ", bound.p_min, " to ", bound.p_max)

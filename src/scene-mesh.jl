@@ -5,21 +5,155 @@
 
 using LinearAlgebra: I, norm
 
+# MixMaterial: resolve sub-material keys before pushing to the scene
+function Base.push!(scene::Scene, mix::MixMaterial)
+    key1 = push!(scene.materials, mix.material1)
+    key2 = push!(scene.materials, mix.material2)
+    resolved = MixMaterial(mix.material1, mix.material2, mix.amount, key1, key2)
+    interface = MediumInterface(resolved)
+    return push!(scene, interface)
+end
+
+# SBT slot for the most recently pushed material. The materials set converts
+# texture wrappers to bare scalars at push! time (e.g. `Diffuse{Texture{RGB,
+# 0, Array{RGB, 0}}, ...}` → `Diffuse{RGB, Float32}`), so the type that ends
+# up in the chit-tuple slot order is the *converted* type — not the type the
+# user pushed. `push!(::MediumInterface)` stashes the SetKey it got back from
+# `MultiTypeSet.push!`, and we read the `type_idx` from that here.
+function _last_pushed_sbt_offset()
+    setkey = _LAST_MAT_SETKEY[]
+    setkey.type_idx == UInt32(0) && return UInt32(0)
+    return UInt32(setkey.type_idx - 1)
+end
+
 # Single material for entire mesh
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, material::Material;
                     transform::Mat4f=Mat4f(I))
     mat_idx = push!(scene, material)
     face_meta = build_face_meta(scene, mesh, mat_idx, material)
     mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
-    handle = push!(scene.accel, mesh_with_meta, transform)
+    sbt_offset = _last_pushed_sbt_offset()
+    handle = push!(scene.accel, mesh_with_meta, transform; sbt_offset=sbt_offset)
     return SceneHandle(scene, mat_idx, handle)
+end
+
+"""
+    push!(scene::Scene, mesh::GeometryBasics.Mesh, mat_idx::UInt32, material::Material;
+          transform=Mat4f(I))
+
+Push geometry pointing at a **pre-existing** medium-interface slot.  Callers
+are responsible for having already brought the slot's stored material up to
+date via [`update_material!`](@ref) — this overload only builds the face
+metadata / BLAS and registers the instance.  RayMakie's mesh-rebuild path
+uses this to recycle a single material slot across many geometry rebuilds
+instead of growing `scene.materials` and `scene.media_interfaces` on every
+frame.
+"""
+function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, mat_idx::UInt32,
+                    material::Material; transform::Mat4f=Mat4f(I))
+    face_meta = build_face_meta(scene, mesh, mat_idx, material)
+    mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
+    # Reuse path: the material is being update!'d into an existing slot,
+    # so update! returns its SetKey. We don't have a side channel for
+    # update! (would mutate the global state unnecessarily); we still need
+    # the slot index, so we look it up by checking the materials set's
+    # stored representation. Concrete materials only — texture wrappers
+    # collapse to bare scalars during conversion.
+    sbt_offset = UInt32(0)
+    mats = scene.materials
+    if mats isa Raycore.MultiTypeSet
+        converted = Raycore.maybe_convert_field(mats, _unwrap_inner(material))
+        for (i, T) in enumerate(mats.data_order)
+            T === typeof(converted) && (sbt_offset = UInt32(i - 1); break)
+        end
+    end
+    handle = push!(scene.accel, mesh_with_meta, transform; sbt_offset=sbt_offset)
+    return SceneHandle(scene, mat_idx, handle)
+end
+
+_unwrap_inner(m::Material) = m
+_unwrap_inner(m::MediumInterface) = _unwrap_inner(m.material)
+
+"""
+    push!(scene::Scene, mesh::GeometryBasics.Mesh,
+          materials::AbstractVector{<:Material},
+          transforms::AbstractVector{Mat4f}) -> Vector{SceneHandle}
+
+N-instance push: build **one** BLAS from `mesh` and append N
+`InstanceDescriptor`s — one per (material, transform) pair.  Each
+instance's `instance_id` carries its own `medium_interface_idx`, so the
+hit shader resolves material per-instance via `resolve_mi_idx`.
+
+This is the path `meshscatter` should use.  It avoids the "N BLASes with
+identical geometry" explosion of calling the single-transform push!
+per instance (~1 GB / frame memory growth in the dolphin demo).
+
+`materials` and `transforms` must have equal length.  Emissive materials
+are not yet supported here — an emitter would need per-instance area
+lights and per-instance-transformed geometry, which is a different
+feature.  Use the per-mesh `push!` for emitters.
+"""
+function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh,
+                    materials::AbstractVector{<:Material},
+                    transforms::AbstractVector{Mat4f};
+                    reuse_mi_indices::Union{Nothing, AbstractVector{UInt32}}=nothing)
+    length(materials) == length(transforms) ||
+        throw(ArgumentError("materials ($(length(materials))) and transforms ($(length(transforms))) must have same length"))
+
+    for m in materials
+        if get_emission_info(m) !== nothing
+            throw(ArgumentError("per-instance emissive materials are not supported; use the single-transform push! for each emitter"))
+        end
+    end
+
+    # Resolve one `mi_idx` per instance.  If the caller hands us
+    # `reuse_mi_indices` (the indices returned by a prior push for the same
+    # meshscatter/streamplot), update those slots in place via
+    # `update_material!` — no growth of scene.materials at all.  Any excess
+    # (`length(materials) > length(reuse_mi_indices)`) is pushed as new
+    # MediumInterfaces, so the materials vector grows only up to the high
+    # water mark of instance count.
+    n = length(materials)
+    if reuse_mi_indices === nothing
+        # Push all materials; MultiTypeSet's dirty flag absorbs the batch and
+        # the next `get_static` read triggers a single rebuild.
+        mi_indices = Vector{UInt32}(undef, n)
+        for i in 1:n
+            mi_indices[i] = push!(scene, MediumInterface(materials[i]))
+        end
+    else
+        n_reuse = min(n, length(reuse_mi_indices))
+        mi_indices = Vector{UInt32}(undef, n)
+        for i in 1:n_reuse
+            mi_indices[i] = reuse_mi_indices[i]
+            Hikari.update_material!(scene, mi_indices[i], materials[i])
+        end
+        for i in (n_reuse+1):n
+            mi_indices[i] = push!(scene, MediumInterface(materials[i]))
+        end
+    end
+
+    # Bake a neutral per-face metadata: `medium_interface_idx = 0` marks
+    # "inherit from instance override".  `arealight_flat_idx = 0` —
+    # no per-face area lights (we already rejected emissive materials).
+    gb_faces = GeometryBasics.faces(mesh)
+    n_faces = length(gb_faces)
+    face_meta = [TriangleMeta(UInt32(0), UInt32(i), UInt32(0)) for i in 1:n_faces]
+    mesh_with_meta = GeometryBasics.mesh(mesh; face_meta=GeometryBasics.per_face(face_meta, mesh))
+
+    accel_handle = push!(scene.accel, mesh_with_meta, collect(transforms);
+                         instance_ids=mi_indices)
+    # One SceneHandle per instance, all sharing the same accel handle.
+    return [SceneHandle(scene, mi_indices[i], accel_handle) for i in eachindex(mi_indices)]
 end
 
 # Per-face materials (for MetaMesh with multiple materials)
 function Base.push!(scene::Scene, mesh::GeometryBasics.Mesh, materials::AbstractVector{<:Material};
                     transform::Mat4f=Mat4f(I))
-    # Deduplicate materials via cache (push! already deduplicates at scene level)
-    mat_cache = Dict{UInt64, UInt32}()  # objectid → scene index
+    # Deduplicate materials via cache (push! already deduplicates at scene level).
+    # Each push! just marks its MultiTypeSet dirty; the next `get_static` read
+    # collapses the whole batch into one rebuild.
+    mat_cache = Dict{UInt64, UInt32}()
     mat_indices = map(materials) do m
         get!(mat_cache, objectid(m)) do
             push!(scene, m)
@@ -125,11 +259,10 @@ function register_face_area_lights!(scene, mesh, face_meta, mat_idx::UInt32, emi
         normal = Raycore.Normal3f(cross_product / twice_area)
         tri_area = 0.5f0 * twice_area
         light = DiffuseAreaLight(vs, normal, tri_area, face_uv, Le, emission.scale, emission.two_sided)
-        push!(scene.lights, light; rebuild=false)
+        push!(scene.lights, light)
         face_meta[i] = TriangleMeta(mat_idx, UInt32(i), UInt32(length(scene.lights)))
     end
 
-    Raycore.rebuild_static!(scene.lights)
 end
 
 # Per-face materials (different materials per face, some may be emissive)
@@ -171,9 +304,8 @@ function register_face_area_lights!(scene, mesh, face_meta,
         normal = Raycore.Normal3f(cross_product / twice_area)
         tri_area = 0.5f0 * twice_area
         light = DiffuseAreaLight(vs, normal, tri_area, face_uv, Le, emission.scale, emission.two_sided)
-        push!(scene.lights, light; rebuild=false)
+        push!(scene.lights, light)
         face_meta[i] = TriangleMeta(mat_indices[i], UInt32(i), UInt32(length(scene.lights)))
     end
 
-    Raycore.rebuild_static!(scene.lights)
 end

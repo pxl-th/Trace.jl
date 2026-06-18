@@ -9,6 +9,7 @@ import KernelAbstractions as KA
 using Atomix: @atomic
 using StructArrays
 using Adapt
+import Lava: LavaBackend, concurrent_dispatch_group, concurrent_indirect_group
 
 # ============================================================================
 # SOA/AOS Array Allocation (following pbrt-v4's SOA pattern)
@@ -28,10 +29,10 @@ Allocate array with AOS (soa=false) or SOA (soa=true) layout.
 Both support identical indexing: arr[i] returns T, arr[i] = val stores T.
 """
 function allocate_array(backend, ::Type{T}, n::Integer; soa::Bool=false) where T
-    soa ? _allocate_soa(backend, T, n) : KA.allocate(backend, T, n)
+    soa ? allocate_soa(backend, T, n) : KA.allocate(backend, T, n)
 end
 
-function _allocate_soa(backend, ::Type{T}, n::Integer) where T
+function allocate_soa(backend, ::Type{T}, n::Integer) where T
     if !should_use_soa(T)
         return KA.allocate(backend, T, n)
     end
@@ -39,7 +40,7 @@ function _allocate_soa(backend, ::Type{T}, n::Integer) where T
         fnames = fieldnames(T)
         ftypes = fieldtypes(T)
         components = NamedTuple{fnames}(
-            ntuple(i -> _allocate_soa(backend, ftypes[i], n), length(fnames))
+            ntuple(i -> allocate_soa(backend, ftypes[i], n), length(fnames))
         )
         return StructArray{T}(components)
     end
@@ -85,16 +86,43 @@ struct WorkQueue{T, V <: AbstractVector{T}, S <: AbstractVector{Int32}}
 end
 
 """
-    WorkQueue{T}(backend, capacity; soa=false)
+    free!(queue::WorkQueue)
+
+Release GPU memory held by the work queue's items and size arrays.
+Does **not** synchronize — caller must ensure the GPU is idle (see the
+sync!/free! contract in Raycore and Hikari).
+"""
+function free!(queue::WorkQueue)
+    # SOA queues store `items` as a `StructArray{T}` whose components are
+    # LavaArrays; `finalize(::StructArray)` is a no-op and leaves the
+    # component LavaArrays alive until Julia GC runs.  AOS queues store
+    # `items` as a single LavaArray directly.  Walk in either case.
+    _finalize_items!(queue.items)
+    finalize(queue.size)
+    return nothing
+end
+_finalize_items!(items) = finalize(items)
+function _finalize_items!(items::StructArray)
+    for c in StructArrays.components(items)
+        _finalize_items!(c)
+    end
+end
+
+"""
+    WorkQueue{T}(backend, capacity; soa=should_use_soa(T))
 
 Create a new work queue with the given capacity on the specified backend.
 
 # Arguments
 - `backend`: KernelAbstractions backend (e.g., `CPU()`, `CUDABackend()`, `ROCBackend()`)
 - `capacity`: Maximum number of items the queue can hold
-- `soa`: If true, use Structure-of-Arrays layout for better GPU memory coalescing
+- `soa`: If true, use Structure-of-Arrays layout for better GPU memory coalescing.
+  Defaults to `should_use_soa(T)` so flagged item types automatically get the
+  faster layout without every caller having to remember the kwarg. (Before
+  this default was wired up, the trait was set on `VPRayWorkItem` and friends
+  but never actually read — every queue was AOS regardless.)
 """
-function WorkQueue{T}(backend, capacity::Integer; soa::Bool=false) where T
+function WorkQueue{T}(backend, capacity::Integer; soa::Bool=should_use_soa(T)) where T
     items = allocate_array(backend, T, capacity; soa=soa)
     size = KA.allocate(backend, Int32, 1)
     KA.fill!(size, Int32(0))
@@ -134,11 +162,6 @@ function Base.empty!(queue::WorkQueue)
     return queue
 end
 
-function cleanup!(queue::WorkQueue)
-    finalize(queue.items)
-    finalize(queue.size)
-    return nothing
-end
 
 # ============================================================================
 # Adapt.jl Integration for GPU Kernels
@@ -165,7 +188,7 @@ end
 # ============================================================================
 # Map Operations for GPU Kernel Execution
 # ============================================================================
-@kernel function _workqueue_map_kernel!(f, queue, args...)
+@kernel function workqueue_map_kernel!(f, queue, args...)
     i = @index(Global)
     if i <= queue.size[1]
         @inbounds f(queue.items[i], args...)
@@ -173,16 +196,162 @@ end
 end
 
 # Default workgroupsize=256 gives ~14% speedup on CUDA (Ampere) vs auto-selection.
-# Static workgroupsize helps the compiler optimize register allocation and enables
+# Static workgroupsize helps GPU compilers optimize register allocation and enables
 # more concurrent blocks per SM.
 const DEFAULT_WORKGROUPSIZE = 256
 
+"""
+    gpu_ndrange(backend, size_buf)
+
+Get the ndrange for dispatching over a queue's GPU-resident size buffer.
+Default: CPU readback (works on AMDGPU, CUDA, CPU).
+Lava overrides this to return the GPU array directly for indirect dispatch (no flush).
+"""
+# Clamp to 1 (not 0) because ndrange=0 crashes on some backends (AMDGPU).
+# The kernel's bounds check (idx > queue_size) handles the empty case.
+# Backends supporting indirect dispatch (Lava) return the GPU array directly,
+# avoiding GPU->CPU sync. Others fall back to CPU readback.
+function gpu_ndrange(backend, size_buf)
+    if backend isa LavaBackend
+        return size_buf
+    end
+    return max(Int(Array(size_buf)[1]), 1)
+end
+
 function Base.foreach(f, queue::WorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
-    n = length(queue)
-    n == 0 && return nothing
     backend = KA.get_backend(queue.items)
-    kernel! = _workqueue_map_kernel!(backend, workgroupsize)
-    kernel!(f, queue, args...; ndrange=n)
+    kernel! = workqueue_map_kernel!(backend, workgroupsize)
+    kernel!(f, queue, args...; ndrange=gpu_ndrange(backend, queue.size))
+    return nothing
+end
+
+# ============================================================================
+# MultiTypeWorkQueue — one WorkQueue per concrete item type
+# ============================================================================
+#
+# Mirrors pbrt-v4's per-material-type queue pattern (MaterialEvalQueue<T> in
+# wavefront/workitems.h). One `WorkQueue{ItemFor[T]}` per concrete type T in
+# the scene. The trace kernel routes each work item into the queue for its
+# concrete type via `with_index` dispatch; the consumer drains *all* of them
+# with `foreach_type`, which lowers to one indirect dispatch per type into
+# the active Lava command buffer.
+#
+# Each per-type kernel is fully monomorphised by Julia (no `with_index`
+# switch inside the kernel), so the resulting SPIR-V is small and the warps
+# never diverge on material-type branches.
+#
+# On Lava the N dispatches naturally serialise via the existing per-dispatch
+# barriers. Wrapping the loop in `Lava.concurrent_dispatch_group()` (see
+# Lava commit eefc75c) suppresses the inter-dispatch barriers so independent
+# per-type kernels run concurrently on idle SMs — verified to give up to
+# ~3× wall-clock speedup on small dispatches that don't saturate the GPU.
+
+"""
+    MultiTypeWorkQueue{Qs <: Tuple}
+
+Heterogeneous tuple of `WorkQueue`s, one per concrete item type. Iteration
+order matches the type-tuple order. Compile-time-known number of queues, so
+`foreach_type` unrolls cleanly via `Base.foreach(::Tuple)` (which lowers to
+`afoldl`) with full type stability per arm.
+
+# Fields
+- `queues::Qs`: NTuple of WorkQueue, one per concrete item type
+"""
+struct MultiTypeWorkQueue{Qs <: Tuple}
+    queues::Qs
+end
+
+"""
+    MultiTypeWorkQueue(item_types::Tuple, capacity, backend; soa=false)
+
+Build a MultiTypeWorkQueue with one `WorkQueue{T}(backend, capacity)` per `T`
+in `item_types`.
+
+```julia
+mtwq = MultiTypeWorkQueue((HitWorkA, HitWorkB, HitWorkC), 1024, backend)
+```
+"""
+function MultiTypeWorkQueue(item_types::Tuple, capacity::Integer, backend; soa::Bool=false)
+    qs = map(T -> WorkQueue{T}(backend, capacity; soa=soa), item_types)
+    return MultiTypeWorkQueue(qs)
+end
+
+function free!(mtwq::MultiTypeWorkQueue)
+    foreach(free!, mtwq.queues)
+    return nothing
+end
+
+Base.empty!(mtwq::MultiTypeWorkQueue) = (foreach(empty!, mtwq.queues); mtwq)
+
+# Adapt walks into the tuple so each per-queue Adapt.adapt_structure runs
+# and the kernel sees device-side arrays.
+function Adapt.adapt_structure(backend, mtwq::MultiTypeWorkQueue)
+    MultiTypeWorkQueue(map(q -> Adapt.adapt(backend, q), mtwq.queues))
+end
+
+"""
+    foreach_type(kernel!, mtwq::MultiTypeWorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
+
+Dispatch `kernel!` once per queue in `mtwq`, indirect-dispatched on each
+queue's GPU-resident size buffer. Julia unrolls the tuple loop at compile
+time (via `Base.foreach(::Tuple) → afoldl`) and the kernel is monomorphised
+per concrete item type, so each arm compiles to a separate small SPIR-V
+module with no `with_index` switch inside.
+
+Per-dispatch barriers between the per-type kernels serialise them on the
+GPU. Wrap the call in `Lava.concurrent_dispatch_group(...) do ... end` to
+let them overlap when they're independent (different output queues, or
+shared output via atomic-claimed slots).
+"""
+@inline function foreach_type(kernel!, mtwq::MultiTypeWorkQueue, args...;
+                              workgroupsize=DEFAULT_WORKGROUPSIZE)
+    foreach(q -> foreach(kernel!, q, args...; workgroupsize=workgroupsize), mtwq.queues)
+    return nothing
+end
+
+# ============================================================================
+# Batched counter reset — one dispatch for all queues
+# ============================================================================
+#
+# `empty!(queue)` is a `fill!` on a 1-element array → one GPU dispatch (plus
+# barrier) per queue. The volpath bounce loop resets ~20 queues per round;
+# at ~20µs effective cost per command that was ~0.4ms of pure overhead per
+# round (measured on Crown: 27 single-thread fills per round). One kernel
+# writing every counter replaces all of them.
+
+@inline _zero_counters!(::Tuple{}) = nothing
+@inline function _zero_counters!(counters::Tuple)
+    @inbounds counters[1][1] = Int32(0)
+    _zero_counters!(Base.tail(counters))
+    return nothing
+end
+
+@kernel function zero_size_counters_kernel!(counters)
+    i = @index(Global)
+    if i == 1
+        _zero_counters!(counters)
+    end
+end
+
+# Flatten WorkQueues / MultiTypeWorkQueues into a tuple of size-counter arrays.
+_collect_size_counters(acc::Tuple) = acc
+_collect_size_counters(acc::Tuple, q::WorkQueue, rest...) =
+    _collect_size_counters((acc..., q.size), rest...)
+_collect_size_counters(acc::Tuple, m::MultiTypeWorkQueue, rest...) =
+    _collect_size_counters((acc..., map(q -> q.size, m.queues)...), rest...)
+
+"""
+    empty_all!(backend, queues...)
+
+Reset the size counters of all given queues (`WorkQueue` or
+`MultiTypeWorkQueue`) in a SINGLE kernel dispatch. A handful of stores from
+one thread — the point is replacing N per-queue `fill!` dispatches (each
+with its own barrier) with one command.
+"""
+function empty_all!(backend, queues...)
+    counters = _collect_size_counters((), queues...)
+    kernel! = zero_size_counters_kernel!(backend, 1)
+    kernel!(counters; ndrange=1)
     return nothing
 end
 

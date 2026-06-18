@@ -34,16 +34,26 @@ struct DenoiseConfig
 end
 
 """
-    DenoiseConfig(; iterations=5, sigma_color=4.0, sigma_normal=128.0, sigma_depth=1.0, use_variance=true)
+    DenoiseConfig(; iterations=4, sigma_color=1.0, sigma_normal=64.0,
+                    sigma_depth=0.1, use_variance=false)
 
 Create a denoiser configuration with sensible defaults.
+
+Units (post log-luminance / relative-depth fix):
+- `sigma_color` is in **stops** (log2 luminance diff) — 1.0 means a 2× ratio
+  weighted at `exp(-1) ≈ 0.37`. Lower = sharper edges.
+- `sigma_normal` is the exponent on `clamp(dot(n_p, n_q), 0, 1)`. Higher =
+  more sensitive to normal differences.
+- `sigma_depth` is **relative** depth tolerance (fraction of local depth) —
+  0.1 means a 10% depth diff per filter step weighted at `exp(-1)`.
+- `use_variance` is currently a no-op (see `weight_color` doc).
 """
 function DenoiseConfig(;
-    iterations::Int=5,
-    sigma_color::Real=4.0f0,
-    sigma_normal::Real=128.0f0,
-    sigma_depth::Real=1.0f0,
-    use_variance::Bool=true
+    iterations::Int=4,
+    sigma_color::Real=1.0f0,
+    sigma_normal::Real=64.0f0,
+    sigma_depth::Real=0.1f0,
+    use_variance::Bool=false
 )
     return DenoiseConfig(
         Int32(iterations),
@@ -70,21 +80,32 @@ end
 """
     weight_color(lum_p, lum_q, sigma, variance) -> Float32
 
-Color/luminance edge-stopping weight.
-If variance > 0, scales by sqrt(variance) for variance-guided filtering.
+Color/luminance edge-stopping weight in **log-luminance space** (HDR-safe).
+`sigma` is in *stops* (log2 luminance ratio) — a 2^sigma ratio between p and q
+weights to `exp(-1) ≈ 0.37`.
+
+**Asymmetric:** when `q` is dimmer than the center `p` we treat the diff as
+`FIREFLY_RATIO ≈ 0.3×` of its actual magnitude, so bright outliers pool down
+into their dim surroundings (firefly suppression). When `q` is brighter we
+stay strict so genuine edges viewed from the dim side are preserved. This is
+the standard fix for à-trous's intrinsic inability to remove fireflies via a
+purely symmetric bilateral weight — a firefly otherwise looks like an edge.
+
+`variance` is ignored (kept for API): real SVGF needs *temporal* variance
+from sample history, which this `Film` does not store. Using spatial variance
+instead was actively harmful (it mistakes texture for noise).
 """
+const FIREFLY_RATIO = 0.1f0
+
 @propagate_inbounds function weight_color(
     lum_p::Float32, lum_q::Float32,
-    sigma::Float32, variance::Float32
+    sigma::Float32, _variance::Float32
 )::Float32
-    diff = abs(lum_p - lum_q)
-    # Variance-guided: larger variance allows more blur
-    effective_sigma = if variance > 0.0f0
-        sigma * sqrt(variance) + 1.0f-4
-    else
-        sigma
-    end
-    return exp(-diff / effective_sigma)
+    log_p = log2(max(lum_p, 0.0f0) + 1.0f-4)
+    log_q = log2(max(lum_q, 0.0f0) + 1.0f-4)
+    signed_diff = log_p - log_q   # > 0 ⇒ q is dimmer than p
+    diff = signed_diff > 0.0f0 ? signed_diff * FIREFLY_RATIO : -signed_diff
+    return exp(-diff / max(sigma, 1.0f-4))
 end
 
 """
@@ -105,26 +126,33 @@ end
 """
     weight_depth(d_p, d_q, sigma, step_size) -> Float32
 
-Depth edge-stopping weight.
-Uses step size to adapt to increasing filter radius.
+Depth edge-stopping weight using a **relative** depth difference so the same
+`sigma` works at any scene scale. `sigma` is the fractional depth tolerance
+(e.g. `0.1` = 10% of local depth). Scales with `step_size` because the
+expected per-step depth delta on an angled surface grows with filter radius.
+
+Standard SVGF/EAW would use the actual screen-space depth gradient `∇d`
+here; we approximate it by `max(d_p, d_q) * step_size`, which is correct up
+to a constant for perspective surfaces and never blows up for misses.
 """
 @propagate_inbounds function weight_depth(
     d_p::Float32, d_q::Float32,
     sigma::Float32, step_size::Float32
 )::Float32
     diff = abs(d_p - d_q)
-    # Scale by step size to handle increasing filter radius
-    return exp(-diff / (sigma * step_size + 1.0f-4))
+    scale = max(d_p, d_q, 1.0f0)
+    return exp(-diff / (sigma * step_size * scale + 1.0f-4))
 end
 
 # =============================================================================
 # À-Trous Wavelet Kernel
 # =============================================================================
 
-# 5x5 B-spline wavelet kernel weights
-# h = [1/16, 1/4, 3/8, 1/4, 1/16]
-# These are the 1D weights; 2D weights are outer product
-const ATROUS_KERNEL_1D = @SVector Float32[1/16, 1/4, 3/8, 1/4, 1/16]
+# 5x5 B-spline wavelet kernel weights: h = [1/16, 1/4, 3/8, 1/4, 1/16].
+@inline function atrous_kernel_1d(i::Int32)
+    kern = SVector{5,Float32}(0.0625f0, 0.25f0, 0.375f0, 0.25f0, 0.0625f0)
+    return kern[i]
+end
 
 """
     atrous_denoise_kernel!(output, input, normals, depth, variance,
@@ -192,8 +220,8 @@ Applies a 5x5 filter with edge-stopping weights.
                 d_q = depth[q_row, q_col]
 
                 # Compute spatial kernel weight (2D separable B-spline)
-                k_x = ATROUS_KERNEL_1D[dx_i]
-                k_y = ATROUS_KERNEL_1D[dy_i]
+                k_x = atrous_kernel_1d(dx_i)
+                k_y = atrous_kernel_1d(dy_i)
                 w_spatial = k_x * k_y
 
                 # Edge-stopping weights
@@ -285,100 +313,56 @@ end
 """
     denoise!(film::Film; config=DenoiseConfig())
 
-Apply edge-avoiding à-trous wavelet denoising to film's framebuffer.
-Uses auxiliary buffers (normal, depth) from film for edge-stopping.
-Result is stored in film.postprocess.
+Apply edge-avoiding à-trous wavelet denoising to `film.framebuffer` in place.
+Uses `film.normal` and `film.depth` as edge-stopping guides.
 
 # Arguments
-- `film`: Film with framebuffer and auxiliary buffers populated
+- `film`: Film with framebuffer + aux buffers populated
 - `config`: DenoiseConfig with filter parameters
 
 # Notes
-- Requires film.normal and film.depth to be populated (e.g., via fill_aux_buffers!)
-- Modifies film.postprocess in place
-- For PhysicalWavefront, aux buffers are populated during first bounce
+- Requires `film.normal` and `film.depth` populated (e.g. via `fill_aux_buffers!`).
+- Mutates `film.framebuffer` (downstream `postprocess!` reads it).
+- `config.use_variance` is currently a no-op: see `weight_color` docstring.
 """
 function denoise!(film::Film; config::DenoiseConfig=DenoiseConfig())
     height, width = size(film.framebuffer)
     num_pixels = width * height
-
     backend = KA.get_backend(film.framebuffer)
 
-    # Allocate variance buffer if needed
-    variance = if config.use_variance
-        similar(film.depth)
-    else
-        # Placeholder - won't be used
-        similar(film.depth)
-    end
+    # use_variance is intentionally ignored; pass a zero-length placeholder so
+    # the kernel signature stays stable. The kernel never reads it when
+    # use_variance==false, but KA still wants a typed array argument.
+    variance_placeholder = similar(film.depth, 0)
 
-    # Compute variance if using variance-guided filtering
-    if config.use_variance
-        var_kernel! = compute_variance_kernel!(backend)
-        var_kernel!(
-            variance, film.framebuffer,
-            Int32(width), Int32(height);
-            ndrange=num_pixels
-        )
-        KA.synchronize(backend)
-    end
-
-    # Allocate ping-pong buffer
+    # Ping-pong: buffer_a aliases the framebuffer (input on iter 1, also final
+    # destination on even-iter counts). buffer_b is a scratch.
     buffer_a = film.framebuffer
     buffer_b = similar(film.framebuffer)
 
     denoise_kernel! = atrous_denoise_kernel!(backend)
 
-    # À-trous iterations with exponentially increasing step size
     for i in 1:config.iterations
-        step_size = Int32(1 << (i - 1))  # 1, 2, 4, 8, 16...
-
-        # Alternate between buffers
+        step_size = Int32(1 << (i - 1))  # 1, 2, 4, 8, 16…
         if i % 2 == 1
-            # Read from buffer_a, write to buffer_b
             denoise_kernel!(
-                buffer_b,
-                buffer_a, film.normal, film.depth, variance,
+                buffer_b, buffer_a, film.normal, film.depth, variance_placeholder,
                 Int32(width), Int32(height), step_size,
                 config.sigma_color, config.sigma_normal, config.sigma_depth,
-                config.use_variance;
-                ndrange=num_pixels
-            )
+                false; ndrange=num_pixels)
         else
-            # Read from buffer_b, write to buffer_a
             denoise_kernel!(
-                buffer_a,
-                buffer_b, film.normal, film.depth, variance,
+                buffer_a, buffer_b, film.normal, film.depth, variance_placeholder,
                 Int32(width), Int32(height), step_size,
                 config.sigma_color, config.sigma_normal, config.sigma_depth,
-                config.use_variance;
-                ndrange=num_pixels
-            )
+                false; ndrange=num_pixels)
         end
-
         KA.synchronize(backend)
     end
 
-    # Copy result to postprocess buffer
+    # Ensure the final result lives in film.framebuffer.
     if config.iterations % 2 == 1
-        # Result is in buffer_b
-        copyto!(film.postprocess, buffer_b)
-    else
-        # Result is in buffer_a (framebuffer)
-        copyto!(film.postprocess, buffer_a)
+        film.framebuffer .= buffer_b
     end
-
-    return nothing
-end
-
-"""
-    denoise_inplace!(film::Film; config=DenoiseConfig())
-
-Like denoise!, but modifies framebuffer directly instead of using postprocess.
-"""
-function denoise_inplace!(film::Film; config::DenoiseConfig=DenoiseConfig())
-    denoise!(film; config=config)
-    # Copy postprocess back to framebuffer
-    copyto!(film.framebuffer, film.postprocess)
     return nothing
 end

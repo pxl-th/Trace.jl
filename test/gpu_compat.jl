@@ -184,8 +184,8 @@ using Adapt
 
 function gen_gpu_test_scene()
     # Materials
-    white_matte = Hikari.MatteMaterial(Kd=Hikari.RGBSpectrum(0.73f0))
-    glass = Hikari.GlassMaterial(index=1.5f0)
+    white_matte = Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.73f0))
+    glass = Hikari.Dielectric(index=1.5f0)
     emissive = Hikari.Emissive(Le=Hikari.RGBSpectrum(10f0))
 
     # Media
@@ -236,11 +236,13 @@ end
 
     tfc_type = Hikari.TextureFilterContext
 
-    @testset "Material Dispatch Functions" begin
-        @test test_no_dispatch(Hikari.is_emissive, (typeof(td.materials), typeof(td.mat_idx)))
-        @test test_no_dispatch(Hikari.is_pure_emissive, (typeof(td.materials), typeof(td.mat_idx)))
-        @test test_no_dispatch(Hikari.has_medium_interface_dispatch, (typeof(td.materials), typeof(td.mat_idx)))
-    end
+    # NOTE: dropped the "Material Dispatch Functions" testset — the
+    # `*_dispatch` helpers it covered were removed in the
+    # physical-wavefront → volpath refactor (commit ee442ef). The volpath
+    # integrator now reaches these predicates inline via `with_index`, and
+    # the per-material `is_emissive(::Mat)` / `is_pure_emissive(::Mat)`
+    # methods are already exercised by the higher-level dispatch tests
+    # below (BSDF Sampling and Microfacet/Fresnel).
 
     @testset "Phase Functions" begin
         @test test_no_dispatch(Hikari.hg_p, (Float32, Float32))
@@ -264,24 +266,18 @@ end
         glass_mat = first(td.materials.data[2])
         emissive_mat = first(td.materials.data[3])
 
+        # sample_bsdf_spectral signature: mat, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng
         @test test_no_dispatch(Hikari.sample_bsdf_spectral,
-            (typeof(matte_mat), typeof(td.rgb2spec_table), typeof(td.materials), Vec3f, Vec3f, tfc_type, typeof(td.lambda), Point2f, Float32))
+            (typeof(matte_mat), typeof(td.rgb2spec_table), typeof(td.materials), Vec3f, Vec3f, Vec3f, tfc_type, typeof(td.lambda), Point2f, Float32))
         @test test_no_dispatch(Hikari.sample_bsdf_spectral,
-            (typeof(glass_mat), typeof(td.rgb2spec_table), typeof(td.materials), Vec3f, Vec3f, tfc_type, typeof(td.lambda), Point2f, Float32))
+            (typeof(glass_mat), typeof(td.rgb2spec_table), typeof(td.materials), Vec3f, Vec3f, Vec3f, tfc_type, typeof(td.lambda), Point2f, Float32))
         @test test_no_dispatch(Hikari.sample_bsdf_spectral,
-            (typeof(emissive_mat), typeof(td.rgb2spec_table), typeof(td.materials), Vec3f, Vec3f, tfc_type, typeof(td.lambda), Point2f, Float32))
-    end
-
-    @testset "Emission Functions" begin
-        @test test_no_dispatch(Hikari.get_emission_spectral_dispatch,
-            (typeof(td.rgb2spec_table), typeof(td.materials), typeof(td.mat_idx), Vec3f, Vec3f, tfc_type, typeof(td.lambda)))
-        @test test_no_dispatch(Hikari.get_emission_spectral_uv_dispatch,
-            (typeof(td.rgb2spec_table), typeof(td.materials), typeof(td.mat_idx), tfc_type, typeof(td.lambda)))
+            (typeof(emissive_mat), typeof(td.rgb2spec_table), typeof(td.materials), Vec3f, Vec3f, Vec3f, tfc_type, typeof(td.lambda), Point2f, Float32))
     end
 
     @testset "Microfacet/Fresnel Functions" begin
         @test test_no_dispatch(Hikari.sample_dielectric_transmission_spectral, (Float32, Vec3f, Float32))
         @test test_no_dispatch(Hikari.sample_ggx_vndf, (Vec3f, Float32, Float32, Point2f))
-        @test test_no_dispatch(Hikari.trowbridge_reitz_sample, (Vec3f, Float32, Float32, Float32, Float32))
+        @test test_no_dispatch(Hikari.trowbridge_reitz_sample_wm, (Vec3f, Point2f, Float32, Float32))
     end
 end

@@ -68,10 +68,11 @@ Parameterized by array types for GPU compatibility:
 
 Use `to_gpu(ArrayType, table)` to convert to GPU-compatible arrays.
 """
-struct RGBToSpectrumTable{V1 <: AbstractVector{Float32}, V5 <: AbstractArray{Float32, 5}}
+struct RGBToSpectrumTable{V1 <: AbstractVector{Float32}, V5 <: AbstractArray{Float32, 5}, VD <: AbstractVector{Float32}}
     res::Int32
     scale::V1           # [res] - z-axis (max component) scale values
     coeffs::V5          # [3, res, res, res, 3] - [maxc, z, y, x, coeff]
+    d65_values::VD      # [107] - D65 illuminant values as GPU array (avoids NTuple runtime indexing on Metal)
 end
 
 """
@@ -394,10 +395,10 @@ rgb_illuminant_spectrum(table::RGBToSpectrumTable, rgb::RGB) =
 # ============================================================================
 
 # Type alias for CPU table
-const RGBToSpectrumTableCPU = RGBToSpectrumTable{Vector{Float32}, Array{Float32, 5}}
+const RGBToSpectrumTableCPU = RGBToSpectrumTable{Vector{Float32}, Array{Float32, 5}, Vector{Float32}}
 
 # Global table instance (loaded lazily) - always CPU version
-const _srgb_table = Ref{Union{Nothing, RGBToSpectrumTableCPU}}(nothing)
+const SRGB_TABLE = Ref{Union{Nothing, RGBToSpectrumTableCPU}}(nothing)
 
 """Load the sRGB spectrum table from raw binary format"""
 function load_srgb_table_binary(path::String)::RGBToSpectrumTableCPU
@@ -407,7 +408,7 @@ function load_srgb_table_binary(path::String)::RGBToSpectrumTableCPU
         read!(io, scale)
         coeffs = Array{Float32, 5}(undef, 3, res, res, res, 3)
         read!(io, coeffs)
-        return RGBToSpectrumTable(res, scale, coeffs)
+        return RGBToSpectrumTable(res, scale, coeffs, d65_cpu_values())
     end
 end
 
@@ -422,22 +423,22 @@ end
 
 """Load the sRGB spectrum table (generates if not cached)"""
 function get_srgb_table()::RGBToSpectrumTableCPU
-    if _srgb_table[] === nothing
+    if SRGB_TABLE[] === nothing
         bin_path = joinpath(@__DIR__, "srgb_spectrum_table.dat")
         if isfile(bin_path)
             # Load from binary cache
-            _srgb_table[] = load_srgb_table_binary(bin_path)
+            SRGB_TABLE[] = load_srgb_table_binary(bin_path)
         else
             # Generate and save
             println("Generating sRGB spectrum table (this may take a minute)...")
             include(joinpath(@__DIR__, "rgb2spec_gen.jl"))
             table_data = RGB2SpecGen.generate_rgb2spec_table(64; verbose=true)
-            table = RGBToSpectrumTable(Int32(table_data.res), table_data.scale, table_data.coeffs)
+            table = RGBToSpectrumTable(Int32(table_data.res), table_data.scale, table_data.coeffs, d65_cpu_values())
             save_srgb_table_binary(bin_path, table)
-            _srgb_table[] = table
+            SRGB_TABLE[] = table
         end
     end
-    return _srgb_table[]
+    return SRGB_TABLE[]
 end
 
 # ============================================================================
@@ -453,7 +454,8 @@ Uses KernelAbstractions backend for allocation.
 function to_gpu(backend, table::RGBToSpectrumTable)
     scale_gpu = adapt(backend, table.scale)
     coeffs_gpu = adapt(backend, table.coeffs)
-    return RGBToSpectrumTable(table.res, scale_gpu, coeffs_gpu)
+    d65_gpu = adapt(backend, table.d65_values)
+    return RGBToSpectrumTable(table.res, scale_gpu, coeffs_gpu, d65_gpu)
 end
 
 function Adapt.adapt_structure(to, table::RGBToSpectrumTable)
@@ -461,5 +463,6 @@ function Adapt.adapt_structure(to, table::RGBToSpectrumTable)
         table.res,
         Adapt.adapt(to, table.scale),
         Adapt.adapt(to, table.coeffs),
+        Adapt.adapt(to, table.d65_values),
     )
 end

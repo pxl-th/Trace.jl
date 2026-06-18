@@ -49,6 +49,11 @@ function from_interleaved(::Type{PiecewiseLinearSpectrum{N}}, data::NTuple{M, Fl
     return PiecewiseLinearSpectrum{N}(lambdas, values)
 end
 
+# Accept Float64 tuples (auto-convert to Float32)
+function from_interleaved(::Type{PiecewiseLinearSpectrum{N}}, data::NTuple{M, Float64}) where {N, M}
+    from_interleaved(PiecewiseLinearSpectrum{N}, Float32.(data))
+end
+
 # Convert to RGB by sampling at representative wavelengths
 # Used as fallback for Whitted/FastWavefront path
 @propagate_inbounds function to_rgb(s::PiecewiseLinearSpectrum)
