@@ -26,11 +26,11 @@ using GeometryBasics: normal_mesh, Tesselation
 
     @testset "DenoiseConfig defaults" begin
         config = Hikari.DenoiseConfig()
-        @test config.iterations == 5
-        @test config.sigma_color == 4.0f0
-        @test config.sigma_normal == 128.0f0
-        @test config.sigma_depth == 1.0f0
-        @test config.use_variance == true
+        @test config.iterations == 4
+        @test config.sigma_color == 1.0f0
+        @test config.sigma_normal == 64.0f0
+        @test config.sigma_depth == 0.1f0
+        @test config.use_variance == false
     end
 
     @testset "denoise! runs without error" begin

@@ -63,6 +63,24 @@ jobs:
           # convergence tolerances in test/pbrt/test_pbrt_all_materials.jl
           # are set generously enough to clear at 32 spp.
           HIKARI_PBRT_SPP: "32"
+          # Skip the HW-RT pbrt run on CI. Modern Mesa lavapipe DOES report
+          # rt_pipeline_properties (so `hw_rt_available()` returns true and
+          # the suite tries the HW path), but lavapipe implements VK_KHR_
+          # ray_tracing_pipeline in software via its LLVM JIT — every shader
+          # in the 450-scene suite has to be re-JIT'd before each scene
+          # renders. SW pbrt at 32 spp finishes in ~35 min; HW pbrt at 32
+          # spp doesn't make it through the coatedconductor block before
+          # the 60-minute job timeout. The HW RT code path (including the
+          # Lava SER fallback to OpTraceRayKHR on non-SER devices) is still
+          # exercised on lavapipe by the smaller HW-using tests earlier in
+          # runtests.jl:
+          #   - test_hw_sw_parity.jl    (1-shot HW vs SW image)
+          #   - test_multitypeset_updates.jl J4 (HW after update_material!)
+          #   - test_volpath_per_iter_lifecycle.jl (HW lifecycle, 24 tests)
+          # Skipping HW pbrt here means we don't re-render 450 scenes
+          # through the JIT-emulated RT pipeline; full HW pbrt is still
+          # expected to run on real-HW (RADV / NVIDIA) developer machines.
+          HIKARI_SKIP_PBRT_HW: "true"
 
   pbrt-comparison:
     name: pbrt-v4 Comparison
