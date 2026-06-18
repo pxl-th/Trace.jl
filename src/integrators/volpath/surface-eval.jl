@@ -976,8 +976,8 @@ end
 """Drain the per-material typed queues — one indirect dispatch per concrete
 material type, each kernel monomorphised on a single `TypedHitRef{T}`.
 
-Wrapped in `Lava.concurrent_dispatch_group` so the per-type dispatches can
-overlap on idle SMs instead of serializing on per-dispatch barriers.  The
+Wrapped in `Lava.concurrent_indirect_group` so the per-type dispatches
+share one fused multi-prepare + barrier and overlap on idle SMs.  The
 per-type kernels write to atomically-claimed slots in the shared
 `next_ray_queue` and to per-pixel atomic `pixel_L` accumulators, so
 overlap is safe."""
@@ -988,11 +988,10 @@ function vp_shade_typed!(
     camera, samples_per_pixel::Int32,
     regularize::Bool = true,
 )
-    # `concurrent_indirect_group`, not the plain dispatch group: each per-type
-    # foreach is a prepare-indirect + indirect-dispatch pair, and an indirect
-    # dispatch can never skip the barrier against its own prepare. The
-    # deferred group records all prepares first, ONE shared barrier, then all
-    # dispatches overlapped — 2 barriers for 12 pairs instead of 12.
+    # Deferred indirect group: ONE fused multi-prepare for all per-type
+    # dispatches, one shared barrier, then the dispatches overlapped.
+    # Grouping the medium/escaped/emitters stages in here too was tried and
+    # benchmarked worse (see the note in render!'s bounce loop).
     concurrent_indirect_group() do
         foreach_type(vp_shade_material_kernel!,
             state.per_material_queue,

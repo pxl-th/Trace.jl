@@ -658,6 +658,16 @@ function render!(
             vp_sample_medium_interaction!(state, media, materials)
         end
 
+        # NOTE on grouping: only the per-material shading dispatches share a
+        # deferred indirect group (inside `vp_shade_typed!`). Grouping the
+        # medium DL/scatter + escaped + emitters stages in with the shading
+        # was tried (2026-06-10) and BENCHMARKED WORSE on volume/trace-heavy
+        # scenes (bunny SW +25%, killeroo SW +22%) even though it removes
+        # barriers — co-scheduling the heavy ray-query kernels (medium DL's
+        # shadow transmittance, the shading kernels' inline shadow traces)
+        # thrashes cache/occupancy. Sequential pairs win there; the fused
+        # multi-prepare group only pays off for the 12 SMALL per-type
+        # shading dispatches (materials SW −25%, crown SW −5%).
         if !isempty(media)
             if length(lights) > 0
                 vp_sample_medium_direct_lighting!(state, lights, sample_idx)
@@ -683,9 +693,7 @@ function render!(
         if !chit_owns_surface
             # Emission MIS — drains hit_area_light_queue. Direct port of
             # pbrt-v4's "Handle emitters hit by indirect rays" kernel
-            # (wavefront/integrator.cpp:540). Runs after trace (queue has been
-            # populated by `enqueue_after_intersection!`) and before the
-            # material kernels (which no longer carry the emission-MIS code).
+            # (wavefront/integrator.cpp:540).
             if length(lights) > 0
                 vp_handle_emitters!(state, lights)
             end
@@ -696,23 +704,20 @@ function render!(
                 # `hit_surface_queue` come from the medium delta-tracking
                 # survive-to-surface path — a tiny, usually-empty population.
                 # Shade them with ONE monolithic dispatch (with_index inside)
-                # instead of 12 per-material dispatches: the register-cliff
-                # argument for the split doesn't apply to a queue this sparse,
-                # and on Crown the 12 indirect dispatches × 1600 rounds were
-                # ~0.25 ms/round of pure command overhead.
+                # instead of 12 per-material dispatches.
                 vp_shade_surface_hits!(state, accel, media_interfaces, media,
                                        materials, lights,
                                        sample_idx,
                                        camera,
                                        Int32(vp.samples_per_pixel), vp.regularize)
             else
-                # SW BVH: per-material shading — drains the typed index queues
-                # populated by both the surface trace (non-medium) AND the
-                # medium delta-tracking surface-survive path.  One dispatch per
-                # concrete material type; each kernel contains only one
-                # material's BSDF, so SPIR-V is small and the register cliff
-                # (128 regs/thread) is avoided.  Per-type dispatches overlap
-                # via `concurrent_dispatch_group` (Lava).
+                # SW BVH: per-material shading — drains the typed index
+                # queues populated by both the surface trace (non-medium)
+                # AND the medium delta-tracking surface-survive path. One
+                # dispatch per concrete material type; each kernel contains
+                # only one material's BSDF, so SPIR-V is small and the
+                # register cliff (128 regs/thread) is avoided. The dispatches
+                # share a fused-prepare deferred group inside.
                 vp_shade_typed!(state, accel, media_interfaces, media,
                                 materials, lights,
                                 sample_idx,
