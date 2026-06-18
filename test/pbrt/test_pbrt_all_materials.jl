@@ -47,16 +47,12 @@ function _test_scene(scene_name; backend, samples, hw_accel,
     scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
     isfile(scene_file) || return nothing
 
-    # CI renders at 32 spp (HIKARI_PBRT_SPP) to stay inside the lavapipe
-    # job budget; the default tile_thresh of 0.07 was calibrated for the
-    # 256-spp local path. At 32 spp a handful of otherwise-clean scenes
-    # (e.g. mat_dielectric_rough_*_light_spot) sit just above 0.07 from
-    # pure Monte-Carlo noise — widen the noise floor when caller-supplied
-    # samples are below 128.
-    if samples < 128 && tile_thresh == TILE_THRESHOLD
-        tile_thresh = 0.10
-    end
-
+    # One uniform gate for every scene class: tile < 0.07, energy in
+    # [0.95, 1.05]. No per-scene overrides and no SPP-dependent relaxation —
+    # the suite renders at high spp (HIKARI_PBRT_SPP defaults to 256) so the
+    # Monte-Carlo noise floor sits well under the tile gate. A scene that
+    # can't clear this band is a real rendering bug to fix, not a threshold
+    # to widen.
     ref = ensure_reference(scene_name; spp=ref_spp)
     fb  = render_scene(scene_name; backend, samples, hw_accel)
     m   = compute_metrics(ref, fb)

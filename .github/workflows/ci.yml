@@ -14,7 +14,11 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Raised from 60: the pbrt suite now renders at 256 spp (tight gate, no
+    # relaxations). ~19 min locally on a 12-core lavapipe; the slower Azure
+    # runner needs the extra headroom. If this still times out, the suite
+    # should move to a self-hosted real-GPU runner, not drop back to low spp.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - name: Install Vulkan (lavapipe) + Xvfb
@@ -56,21 +60,22 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         env:
-          # pbrt reference suite is the slowest part of runtests by far —
-          # 256 spp on lavapipe (Mesa LLVMpipe, no HW accel) blows past
-          # the 60-minute job timeout. 32 spp still catches the noise /
-          # MIS regressions the suite is designed to surface; per-scene
-          # convergence tolerances in test/pbrt/test_pbrt_all_materials.jl
-          # are set generously enough to clear at 32 spp.
-          HIKARI_PBRT_SPP: "32"
+          # pbrt reference suite renders at HIGH spp so the gate can stay
+          # TIGHT (tile<0.07, energy in [0.95,1.05]) with no per-scene or
+          # SPP-dependent relaxations — a scene that misses the band is a
+          # real bug, not a threshold to widen. The full SW suite (151
+          # scenes) clears the tight band at 256 spp; locally on lavapipe
+          # (LLVM 22, 12-core) that is ~19 min. The Azure CI runner is
+          # slower, hence the raised job timeout below.
+          HIKARI_PBRT_SPP: "256"
           # Skip the HW-RT pbrt run on CI. Modern Mesa lavapipe DOES report
           # rt_pipeline_properties (so `hw_rt_available()` returns true and
           # the suite tries the HW path), but lavapipe implements VK_KHR_
           # ray_tracing_pipeline in software via its LLVM JIT — every shader
-          # in the 450-scene suite has to be re-JIT'd before each scene
-          # renders. SW pbrt at 32 spp finishes in ~35 min; HW pbrt at 32
-          # spp doesn't make it through the coatedconductor block before
-          # the 60-minute job timeout. The HW RT code path (including the
+          # in the suite has to be re-JIT'd before each scene renders, which
+          # is far too slow to get through 151 scenes at 256 spp inside any
+          # reasonable job budget. SW pbrt is the gate; HW pbrt runs on
+          # real-HW (RADV / NVIDIA) dev machines. The HW RT code path (the
           # Lava SER fallback to OpTraceRayKHR on non-SER devices) is still
           # exercised on lavapipe by the smaller HW-using tests earlier in
           # runtests.jl:
