@@ -57,11 +57,14 @@ builder constructs the material first, then attaches the height field). Returns
 likewise has no displacement on `MixMaterial` (materials.h: the mix resolves to
 a sub-material before `GetDisplacement` is consulted).
 """
-@generated function set_displacement(mat::M, h::TexHandle) where {M <: Material}
+@generated function set_displacement(mat::M, h) where {M <: Material}
     fs = fieldnames(M)
     :displacement in fs || return :(mat)
     args = [f === :displacement ? :h : :(getfield(mat, $(QuoteNode(f)))) for f in fs]
-    return :($(M)($(args...)))
+    # Through the UnionAll: rebuilding through the CONCRETE type would convert
+    # `h` to the old field's type, and for an unstored texture that conversion
+    # is exactly what cannot exist yet.
+    return :($(Base.typename(M).wrapper)($(args...)))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

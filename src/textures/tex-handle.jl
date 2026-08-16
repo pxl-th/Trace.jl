@@ -91,7 +91,13 @@ Base.convert(::Type{TexHandle}, v::Union{Real, RGBSpectrum, Colorant, Tuple{Real
 # Host-side queries used by the pbrt builder to decide whether a parameter can
 # still be folded into a scalar (pbrt's `uroughness` defaults to `roughness`,
 # which is only meaningful when `roughness` is a constant).
+#
+# Total over the host forms, not just handles: when no scene exists to store
+# textures in, a pbrt parameter is still whatever `build_pbrt_textures` built —
+# a 0-d `ConstTexture` for a constant, an image `Texture` otherwise.
 @inline is_const_float(h::TexHandle) = h.kind == TexKind.CONST_FLOAT
+@inline is_const_float(::Texture{T, 0}) where {T <: Real} = true
+@inline is_const_float(x) = false
 
 """
     const_float(h, default) -> Float32
@@ -101,6 +107,9 @@ The inline scalar of a constant handle, or `default` for out-of-line kinds.
 @inline const_float(h::TexHandle, default::Real = 0f0) =
     h.kind == TexKind.CONST_FLOAT ? h.f :
     h.kind == TexKind.CONST_SPECTRUM ? h.rgb.c[1] : Float32(default)
+@inline const_float(t::Texture{T, 0}, default::Real = 0f0) where {T <: Real} =
+    Float32(t.data[])
+@inline const_float(x, default::Real = 0f0) = Float32(default)
 
 """
     const_spectrum(h) -> RGBSpectrum

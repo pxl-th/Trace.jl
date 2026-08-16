@@ -14,10 +14,10 @@ Matte (diffuse) material with Lambertian or Oren-Nayar BRDF.
 """
 # Non-parametric: constant-vs-texture must not change the material's TYPE, or
 # the per-material chit path compiles a separate shader for each combination.
-struct Diffuse{KdT, SigmaT} <: Material
+struct Diffuse{KdT, SigmaT, DispT} <: Material
     Kd::KdT
     σ::SigmaT
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 
@@ -38,7 +38,7 @@ Diffuse(Kd=my_texture)                   # Textured
 ```
 """
 function Diffuse(; Kd=RGBSpectrum(0.5f0), σ=0f0, bump=nothing)
-    Diffuse(matparam(Kd), matparam(σ), TexHandle(bump))
+    Diffuse(matparam(Kd), matparam(σ), matparam(bump))
 end
 
 

@@ -21,14 +21,14 @@ Glass/dielectric material with reflection and transmission.
 # Non-parametric texture parameters: constant-vs-texture must not change the
 # material's TYPE. Spectral IOR fields stay parametric because a
 # PiecewiseLinearSpectrum cannot live inline in a handle.
-struct Dielectric{KrT, KtT, URoughT, VRoughT, IndexT} <: Material
+struct Dielectric{KrT, KtT, URoughT, VRoughT, IndexT, DispT} <: Material
     Kr::KrT
     Kt::KtT
     u_roughness::URoughT
     v_roughness::VRoughT
     index::IndexT
     remap_roughness::Bool
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 """
@@ -117,14 +117,14 @@ window = ThinDielectric(eta=1.5)
 film = ThinDielectric(eta=1.4)
 ```
 """
-struct ThinDielectric{E} <: Material
+struct ThinDielectric{E, DispT} <: Material
     eta::E  # Float32 or PiecewiseLinearSpectrum
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # Keyword constructor
 function ThinDielectric(; eta=1.5f0, bump=nothing)
-    ThinDielectric(matparam(eta), TexHandle(bump))
+    ThinDielectric(matparam(eta), matparam(bump))
 end
 
 # Mark as non-emissive

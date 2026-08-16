@@ -48,7 +48,7 @@ sampling between the layers (LayeredBxDF algorithm).
 # Non-parametric texture parameters: constant-vs-texture must not change the
 # material's TYPE. Spectral IOR fields stay parametric because a
 # PiecewiseLinearSpectrum cannot live inline in a handle.
-struct CoatedConductor{IURoughT, IVRoughT, CETex, CKTex, CURoughT, CVRoughT, ThickT, AlbedoT, GT} <: Material
+struct CoatedConductor{IURoughT, IVRoughT, CETex, CKTex, CURoughT, CVRoughT, ThickT, AlbedoT, GT, DispT} <: Material
     # Interface parameters
     interface_u_roughness::IURoughT
     interface_v_roughness::IVRoughT
@@ -69,7 +69,7 @@ struct CoatedConductor{IURoughT, IVRoughT, CETex, CKTex, CURoughT, CVRoughT, Thi
     max_depth::Int32
     n_samples::Int32
     remap_roughness::Bool
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # Full constructor with all textures. Texture args are unannotated on purpose:
@@ -89,7 +89,7 @@ function CoatedConductor(
         matparam(conductor_eta), matparam(conductor_k),
         matparam(conductor_u_roughness), matparam(conductor_v_roughness),
         matparam(thickness), matparam(albedo), matparam(g),
-        Int32(max_depth), Int32(n_samples), remap_roughness, TexHandle(displacement),
+        Int32(max_depth), Int32(n_samples), remap_roughness, matparam(displacement),
     )
 end
 
@@ -202,7 +202,7 @@ function CoatedConductor(;
         ce, ck,
         cu_rough, cv_rough,
         Float32(thickness), albedo, Float32(g),
-        max_depth, n_samples, remap_roughness, TexHandle(bump),
+        max_depth, n_samples, remap_roughness, matparam(bump),
     )
 end
 

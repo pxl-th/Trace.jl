@@ -21,9 +21,9 @@ Perfect mirror (specular reflection) material.
 # Non-parametric texture parameters: constant-vs-texture must not change the
 # material's TYPE, or the per-material chit path compiles a separate shader per
 # combination.
-struct Mirror{KrT} <: Material
+struct Mirror{KrT, DispT} <: Material
     Kr::KrT
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 """
@@ -42,7 +42,7 @@ Mirror(Kr=(0.9, 0.9, 0.9))            # Using tuple
 ```
 """
 function Mirror(; Kr=RGBSpectrum(0.9f0), bump=nothing)
-    Mirror(matparam(Kr), TexHandle(bump))
+    Mirror(matparam(Kr), matparam(bump))
 end
 
 
@@ -76,13 +76,13 @@ Metals reflect light based on Fresnel equations for conductors, characterized by
 # (448 bytes of measured metal data) which cannot live inline in a handle. In
 # practice every conductor in a scene uses the same spectral representation, so
 # they do not multiply types.
-struct Conductor{EtaTex, KTex, RoughT, ReflT} <: Material
+struct Conductor{EtaTex, KTex, RoughT, ReflT, DispT} <: Material
     eta::EtaTex             # PiecewiseLinearSpectrum or spectral value
     k::KTex                 # PiecewiseLinearSpectrum or spectral value
     roughness::RoughT
     reflectance::ReflT
     remap_roughness::Bool
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 
@@ -120,7 +120,7 @@ function Conductor(;
     # presets); RGB ones become inline handles so `Conductor(eta=rgb)` and
     # `Conductor(eta=other_rgb)` share one concrete type.
     Conductor(matparam(eta), matparam(k), matparam(roughness),
-              matparam(reflectance), remap_roughness, TexHandle(bump))
+              matparam(reflectance), remap_roughness, matparam(bump))
 end
 
 # ============================================================================
@@ -141,7 +141,7 @@ Gold(roughness=0.3)             # Matte gold
 """
 Gold(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
     Conductor(AU_ETA_SPECTRUM, AU_K_SPECTRUM, matparam(roughness), matparam(reflectance),
-              remap_roughness, TexHandle(bump))
+              remap_roughness, matparam(bump))
 
 """
     Silver(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -156,7 +156,7 @@ Silver(roughness=0.05)          # Slightly brushed
 """
 Silver(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
     Conductor(AG_ETA_SPECTRUM, AG_K_SPECTRUM, matparam(roughness), matparam(reflectance),
-              remap_roughness, TexHandle(bump))
+              remap_roughness, matparam(bump))
 
 """
     Copper(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -171,7 +171,7 @@ Copper(roughness=0.2)           # Weathered copper
 """
 Copper(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
     Conductor(CU_ETA_SPECTRUM, CU_K_SPECTRUM, matparam(roughness), matparam(reflectance),
-              remap_roughness, TexHandle(bump))
+              remap_roughness, matparam(bump))
 
 """
     Aluminum(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -186,7 +186,7 @@ Aluminum(roughness=0.1)         # Brushed aluminum
 """
 Aluminum(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
     Conductor(AL_ETA_SPECTRUM, AL_K_SPECTRUM, matparam(roughness), matparam(reflectance),
-              remap_roughness, TexHandle(bump))
+              remap_roughness, matparam(bump))
 
 """
     Brass(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -201,7 +201,7 @@ Brass(roughness=0.15)           # Brushed brass
 """
 Brass(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
     Conductor(CUZN_ETA_SPECTRUM, CUZN_K_SPECTRUM, matparam(roughness), matparam(reflectance),
-              remap_roughness, TexHandle(bump))
+              remap_roughness, matparam(bump))
 
 # ============================================================================
 # Helpers for evaluating IOR values (PiecewiseLinearSpectrum or RGB textures)

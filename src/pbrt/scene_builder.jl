@@ -574,7 +574,7 @@ function _attach_bump(mat::Material, entity::PBRTEntity, textures::AbstractDict{
         tex_name isa AbstractString || continue
         h = get(textures, String(tex_name), nothing)
         h === nothing && continue
-        return set_displacement(mat, TexHandle(h))
+        return set_displacement(mat, matparam(h))
     end
     return mat
 end
@@ -624,7 +624,7 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
         # pbrt's `uroughness`/`vroughness` default to `roughness`; that fold is
         # only meaningful when `roughness` itself is a constant.
         combined_rough = if is_const_float(rough)
-            rv = Float64(rough.f)
+            rv = Float64(const_float(rough))
             urough = Float32(pbrt_get_float(entity, "uroughness", rv))
             vrough = Float32(pbrt_get_float(entity, "vroughness", rv))
             TexHandle(max(urough, vrough))

@@ -19,6 +19,7 @@ include("test_checkerboard_texture.jl")
 include("test_hw_sw_parity.jl")
 include("test_update_material_null.jl")
 include("test_multitypeset_updates.jl")
+include("test_material_type_collapse.jl")
 include("test_volpath_per_iter_lifecycle.jl")
 
 # ── pbrt reference suite ────────────────────────────────────────────────────

@@ -39,11 +39,11 @@ leaf = DiffuseTransmission(reflectance=(0.2, 0.3, 0.1), transmittance=(0.1, 0.5,
 # Non-parametric texture parameters: constant-vs-texture must not change the
 # material's TYPE, or the per-material chit path compiles a separate shader per
 # combination.
-struct DiffuseTransmission{ReflT, TransT} <: Material
+struct DiffuseTransmission{ReflT, TransT, DispT} <: Material
     reflectance::ReflT
     transmittance::TransT
     scale::Float32       # Intensity scale
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # No explicit positional constructor: the synthesized
@@ -81,7 +81,7 @@ function DiffuseTransmission(;
         matparam(reflectance),
         matparam(transmittance),
         Float32(scale),
-        TexHandle(bump),
+        matparam(bump),
     )
 end
 

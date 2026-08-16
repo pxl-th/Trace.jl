@@ -32,7 +32,7 @@ sampling between the layers (LayeredBxDF algorithm).
 # Non-parametric texture parameters: constant-vs-texture must not change the
 # material's TYPE, or the per-material chit path compiles a separate shader per
 # combination.
-struct CoatedDiffuse{ReflT, URoughT, VRoughT, ThickT, AlbedoT, GT} <: Material
+struct CoatedDiffuse{ReflT, URoughT, VRoughT, ThickT, AlbedoT, GT, DispT} <: Material
     reflectance::ReflT
     u_roughness::URoughT
     v_roughness::VRoughT
@@ -43,7 +43,7 @@ struct CoatedDiffuse{ReflT, URoughT, VRoughT, ThickT, AlbedoT, GT} <: Material
     max_depth::Int32
     n_samples::Int32
     remap_roughness::Bool
-    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
+    displacement::DispT       # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # Positional constructor taking Ints for the two counters; the struct's own
@@ -56,7 +56,7 @@ function CoatedDiffuse(
     CoatedDiffuse(
         matparam(reflectance), matparam(u_roughness), matparam(v_roughness),
         matparam(thickness), eta, matparam(albedo), matparam(g),
-        Int32(max_depth), Int32(n_samples), remap_roughness, TexHandle(displacement),
+        Int32(max_depth), Int32(n_samples), remap_roughness, matparam(displacement),
     )
 end
 
@@ -118,7 +118,7 @@ function CoatedDiffuse(;
         max_depth,
         n_samples,
         remap_roughness,
-        TexHandle(bump),
+        matparam(bump),
     )
 end
 
