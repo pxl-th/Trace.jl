@@ -149,11 +149,55 @@ Algorithm:
 
 When `regularize=true`, the coating's microfacet alpha is increased to reduce fireflies.
 """
-@propagate_inbounds function sample_bsdf_spectral(
+# CoatedDiffuseEvaluated — pbrt-v4 CoatedDiffuseBxDF analogue.
+#
+# This is the material that most needs it: the layered BSDF is stochastic, so
+# `sample`/`evaluate` run a multi-bounce random walk, and every one of these
+# six textures was re-read on each entry. `evaluate_bsdf_spectral` is called
+# once per light sample in direct lighting on top of that.
+struct CoatedDiffuseEvaluated
+    reflectance::SpectralRadiance   # uplifted
+    albedo::SpectralRadiance        # uplifted medium albedo
+    thickness::Float32
+    eta::Float32
+    g::Float32
+    alpha_x::Float32
+    alpha_y::Float32
+    has_medium::Bool
+    max_depth::Int32
+    n_samples::Int32
+end
+
+@propagate_inbounds function get_bxdf(
     mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng_in::Float32,
-    regularize::Bool = false
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+)
+    refl_rgb   = eval_tex(textures, mat.reflectance, tfc)
+    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
+    thickness  = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
+    g_val      = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
+
+    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
+    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
+    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
+    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
+
+    return CoatedDiffuseEvaluated(
+        uplift_rgb(table, refl_rgb, lambda),
+        uplift_rgb(table, albedo_rgb, lambda),
+        thickness, mat.eta, g_val, alpha_x, alpha_y,
+        !is_black(albedo_rgb), mat.max_depth, mat.n_samples)
+end
+
+@propagate_inbounds function sample_bsdf_spectral(
+    bxdf::CoatedDiffuseEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng_in::Float32,
+    ::Bool = false,
 )
     # Check for grazing angle
     wo_dot_n = dot(wo, n)
@@ -161,32 +205,16 @@ When `regularize=true`, the coating's microfacet alpha is increased to reduce fi
         return SpectralBSDFSample()
     end
 
-    # Get material properties
-    refl_rgb = eval_tex(textures, mat.reflectance, tfc)
-    eta = mat.eta
-    thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
-    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
-
-    # Get roughness parameters
-    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
-    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
-
-    # Remap roughness if needed
-    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
-    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
-
-    # Apply regularization if requested
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
-
-    refl_spectral = uplift_rgb(table, refl_rgb, lambda)
-    albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
-    has_medium = !is_black(albedo_rgb)
-
-    max_depth = Int(mat.max_depth)
+    # All of it resolved once per hit in `get_bxdf`.
+    eta             = bxdf.eta
+    thickness       = bxdf.thickness
+    g_val           = bxdf.g
+    alpha_x         = bxdf.alpha_x
+    alpha_y         = bxdf.alpha_y
+    refl_spectral   = bxdf.reflectance
+    albedo_spectral = bxdf.albedo
+    has_medium      = bxdf.has_medium
+    max_depth       = Int(bxdf.max_depth)
 
     # Build coordinate system from shading normal
     tangent, bitangent = shading_frame(n, dpdus)
@@ -351,30 +379,20 @@ Evaluate CoatedDiffuse BSDF using pbrt-v4's LayeredBxDF::f random walk algorithm
 Exact port of pbrt-v4 bxdfs.h lines 477-652.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    bxdf::CoatedDiffuseEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
-    refl_rgb = eval_tex(textures, mat.reflectance, tfc)
-    eta = mat.eta
-    thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
-    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
-    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
-    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
-    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
-    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
-
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
-
-    refl_spectral = uplift_rgb(table, refl_rgb, lambda)
-    albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
-    has_medium = !is_black(albedo_rgb)
-    n_samples = Int(mat.n_samples)
-    max_depth = Int(mat.max_depth)
+    eta             = bxdf.eta
+    thickness       = bxdf.thickness
+    g_val           = bxdf.g
+    alpha_x         = bxdf.alpha_x
+    alpha_y         = bxdf.alpha_y
+    refl_spectral   = bxdf.reflectance
+    albedo_spectral = bxdf.albedo
+    has_medium      = bxdf.has_medium
+    n_samples       = Int(bxdf.n_samples)
+    max_depth       = Int(bxdf.max_depth)
 
     tangent, bitangent = shading_frame(n, dpdus)
     wo_local = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, n))

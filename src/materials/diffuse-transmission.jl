@@ -95,11 +95,33 @@ Sample diffuse transmission BSDF matching pbrt-v4's DiffuseTransmissionBxDF::Sam
 This material diffusely scatters light in both reflection (same hemisphere)
 and transmission (opposite hemisphere). Sampling is proportional to max(R) and max(T).
 """
-@propagate_inbounds function sample_bsdf_spectral(
+# DiffuseTransmissionEvaluated — reflectance/transmittance scaled, clamped and
+# uplifted once per hit (see `get_bxdf`).
+struct DiffuseTransmissionEvaluated
+    r_rgb::RGBSpectrum        # clamped RGB, for the sampling probabilities
+    t_rgb::RGBSpectrum
+    r::SpectralRadiance       # uplifted to the 4 wavelengths
+    t::SpectralRadiance
+end
+
+@propagate_inbounds function get_bxdf(
     mat::DiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
+    tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
+)
+    r_rgb = eval_tex(textures, mat.reflectance, tfc) * mat.scale
+    t_rgb = eval_tex(textures, mat.transmittance, tfc) * mat.scale
+    r_rgb = RGBSpectrum(clamp(r_rgb.c[1], 0f0, 1f0), clamp(r_rgb.c[2], 0f0, 1f0), clamp(r_rgb.c[3], 0f0, 1f0))
+    t_rgb = RGBSpectrum(clamp(t_rgb.c[1], 0f0, 1f0), clamp(t_rgb.c[2], 0f0, 1f0), clamp(t_rgb.c[3], 0f0, 1f0))
+    return DiffuseTransmissionEvaluated(r_rgb, t_rgb,
+                                        uplift_rgb(table, r_rgb, lambda),
+                                        uplift_rgb(table, t_rgb, lambda))
+end
+
+@propagate_inbounds function sample_bsdf_spectral(
+    bxdf::DiffuseTransmissionEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng::Float32,
+    ::Bool = false,
 )
     # Check for grazing angle
     wo_dot_n = dot(wo, n)
@@ -107,16 +129,13 @@ and transmission (opposite hemisphere). Sampling is proportional to max(R) and m
         return SpectralBSDFSample()
     end
 
-    # Get material properties and apply scale
-    r_rgb = eval_tex(textures, mat.reflectance, tfc) * mat.scale
-    t_rgb = eval_tex(textures, mat.transmittance, tfc) * mat.scale
-
-    # Clamp to [0, 1]
-    r_rgb = RGBSpectrum(clamp(r_rgb.c[1], 0f0, 1f0), clamp(r_rgb.c[2], 0f0, 1f0), clamp(r_rgb.c[3], 0f0, 1f0))
-    t_rgb = RGBSpectrum(clamp(t_rgb.c[1], 0f0, 1f0), clamp(t_rgb.c[2], 0f0, 1f0), clamp(t_rgb.c[3], 0f0, 1f0))
-
-    r_spectral = uplift_rgb(table, r_rgb, lambda)
-    t_spectral = uplift_rgb(table, t_rgb, lambda)
+    # Scaled, clamped and uplifted once in `get_bxdf`. Both the RGB form (for
+    # the sampling probabilities) and the spectral form are needed, so the
+    # evaluated struct carries both rather than recomputing either.
+    r_rgb = bxdf.r_rgb
+    t_rgb = bxdf.t_rgb
+    r_spectral = bxdf.r
+    t_spectral = bxdf.t
 
     # Compute probabilities based on max component (pbrt-v4 lines 102-108)
     pr = max(r_rgb.c[1], r_rgb.c[2], r_rgb.c[3])
@@ -185,9 +204,9 @@ end
 Evaluate diffuse transmission BSDF matching pbrt-v4's DiffuseTransmissionBxDF::f and PDF.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::DiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    bxdf::DiffuseTransmissionEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
     cos_θi = dot(wi, n)
     cos_θo = dot(wo, n)
@@ -197,16 +216,13 @@ Evaluate diffuse transmission BSDF matching pbrt-v4's DiffuseTransmissionBxDF::f
         return (SpectralRadiance(), 0f0)
     end
 
-    # Get material properties and apply scale
-    r_rgb = eval_tex(textures, mat.reflectance, tfc) * mat.scale
-    t_rgb = eval_tex(textures, mat.transmittance, tfc) * mat.scale
-
-    # Clamp to [0, 1]
-    r_rgb = RGBSpectrum(clamp(r_rgb.c[1], 0f0, 1f0), clamp(r_rgb.c[2], 0f0, 1f0), clamp(r_rgb.c[3], 0f0, 1f0))
-    t_rgb = RGBSpectrum(clamp(t_rgb.c[1], 0f0, 1f0), clamp(t_rgb.c[2], 0f0, 1f0), clamp(t_rgb.c[3], 0f0, 1f0))
-
-    r_spectral = uplift_rgb(table, r_rgb, lambda)
-    t_spectral = uplift_rgb(table, t_rgb, lambda)
+    # Scaled, clamped and uplifted once in `get_bxdf`. Both the RGB form (for
+    # the sampling probabilities) and the spectral form are needed, so the
+    # evaluated struct carries both rather than recomputing either.
+    r_rgb = bxdf.r_rgb
+    t_rgb = bxdf.t_rgb
+    r_spectral = bxdf.r
+    t_spectral = bxdf.t
 
     # Probabilities
     pr = max(r_rgb.c[1], r_rgb.c[2], r_rgb.c[3])

@@ -1494,27 +1494,17 @@ end
 # These forwarding functions delegate BSDF operations to the wrapped material
 
 """
-    sample_bsdf_spectral for MediumInterface - forwards to wrapped material.
-"""
-@propagate_inbounds function sample_bsdf_spectral(
-    mi::MediumInterface, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
-)
-    return sample_bsdf_spectral(mi.material, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng, regularize)
-end
+    get_bxdf for MediumInterface - forwards to the wrapped material.
 
+Forwarding here rather than forwarding `sample_bsdf_spectral` /
+`evaluate_bsdf_spectral` separately is what lets each leaf material keep one
+BSDF implementation (on its evaluated form) instead of also retaining a raw
+version for wrappers to land on.
 """
-    evaluate_bsdf_spectral for MediumInterface - forwards to wrapped material.
-"""
-@propagate_inbounds function evaluate_bsdf_spectral(
+@propagate_inbounds get_bxdf(
     mi::MediumInterface, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
-)
-    return evaluate_bsdf_spectral(mi.material, table, textures, wo, wi, n, dpdus, tfc, lambda, regularize)
-end
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+) = get_bxdf(mi.material, table, textures, tfc, lambda, regularize)
 
 """
     is_emissive for MediumInterface - forwards to wrapped material.

@@ -40,20 +40,46 @@ end
 
 
 # ============================================================================
+# DiffuseEvaluated — pbrt-v4 DiffuseBxDF analogue
+# ============================================================================
+#
+# `get_bxdf` resolves Kd and σ once per hit; the sample/evaluate methods below
+# then see only plain values. Without this, every `sample_bsdf_spectral` AND
+# every `evaluate_bsdf_spectral` call re-ran `eval_tex` + `uplift_rgb` — and
+# direct lighting calls `evaluate_bsdf_spectral` once per light sample, so the
+# texture read was repeated several times per hit for a value that cannot
+# change within the hit.
+
+struct DiffuseEvaluated
+    kd::SpectralRadiance   # already clamped and uplifted to the 4 wavelengths
+    sigma::Float32         # Oren-Nayar roughness (0 = Lambertian)
+end
+
+@propagate_inbounds function get_bxdf(
+    mat::Diffuse, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
+)
+    # Clamp reflectance to [0,1] as per pbrt-v4, then uplift to spectral.
+    kd_rgb = clamp(eval_tex(textures, mat.Kd, tfc))
+    return DiffuseEvaluated(uplift_rgb(table, kd_rgb, lambda),
+                            eval_tex(textures, mat.σ, tfc))
+end
+
+# ============================================================================
 # Spectral BSDF sampling
 # ============================================================================
 
 """
-    sample_bsdf_spectral(table, mat::Diffuse, textures, wo, n, uv, lambda, sample_u, rng) -> SpectralBSDFSample
+    sample_bsdf_spectral(bxdf::DiffuseEvaluated, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng) -> SpectralBSDFSample
 
 Sample diffuse BSDF with spectral evaluation.
 Uses pbrt-v4 convention: work in local shading space where n = (0,0,1).
 """
 @propagate_inbounds function sample_bsdf_spectral(
-    mat::Diffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
+    bxdf::DiffuseEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, ::Float32,
+    ::Bool = false,
 )
     # Check for grazing angle (wo perpendicular to shading normal)
     # This matches pbrt-v4's wo.z == 0 check in BSDF::Sample_f
@@ -62,16 +88,10 @@ Uses pbrt-v4 convention: work in local shading space where n = (0,0,1).
         return SpectralBSDFSample()
     end
 
-    # Get material properties
+    # Material properties were resolved once in `get_bxdf`.
     # Alpha is handled at intersection level (vp_trace_rays_kernel!), not here.
-    kd_rgb = eval_tex(textures, mat.Kd, tfc)
-    σ = eval_tex(textures, mat.σ, tfc)
-
-    # Clamp reflectance to [0,1] as per pbrt-v4
-    kd_rgb = clamp(kd_rgb)
-
-    # Uplift to spectral
-    kd_spectral = uplift_rgb(table, kd_rgb, lambda)
+    kd_spectral = bxdf.kd
+    σ = bxdf.sigma
 
     # Build local coordinate system from shading normal
     tangent, bitangent = shading_frame(n, dpdus)
@@ -115,9 +135,9 @@ end
 # ============================================================================
 
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::Diffuse, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    bxdf::DiffuseEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
     # Check if wi is in the correct hemisphere
     cos_theta_i = dot(wi, n)
@@ -132,12 +152,8 @@ end
     end
 
     # Alpha is handled at intersection level (vp_trace_rays_kernel!), not here.
-    kd_rgb = eval_tex(textures, mat.Kd, tfc)
-
-    # Clamp reflectance to [0,1] as per pbrt-v4
-    kd_rgb = clamp(kd_rgb)
-    kd_spectral = uplift_rgb(table, kd_rgb, lambda)
-    f = kd_spectral / Float32(π)
+    # Kd was clamped and uplifted once in `get_bxdf`.
+    f = bxdf.kd / Float32(π)
     pdf = cos_theta / Float32(π)
 
     return (f, pdf)

@@ -129,23 +129,22 @@ new bumped normal against `ng`, not against the original interpolated `ns`.
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BSDF dispatch — pure passthrough to the inner material. The bump
-# perturbation is now applied at intersection time by
-# `get_perturbed_shading_frame` (see dispatch.jl). Doing it here as well
-# would double-apply the height-field gradient on every sample/evaluate.
+# BSDF dispatch — pure passthrough to the inner material, done at `get_bxdf`
+# rather than at sample/evaluate.
+#
+# Forwarding `get_bxdf` (instead of forwarding `sample_bsdf_spectral` and
+# `evaluate_bsdf_spectral` separately) is what lets the leaf materials keep a
+# SINGLE BSDF implementation, on their evaluated form. Forwarding the two BSDF
+# entry points instead forces every leaf to ALSO retain a raw-material version
+# for wrappers to land on — which is how `Conductor` ended up with two full
+# copies of its BSDF in the module.
+#
+# The bump perturbation itself is applied at intersection time by
+# `get_perturbed_shading_frame` (see dispatch.jl). Doing it here as well would
+# double-apply the height-field gradient on every sample/evaluate.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@propagate_inbounds sample_bsdf_spectral(
-    mat::BumpMapped, table::RGBToSpectrumTable, materials,
-    wo::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false,
-) = sample_bsdf_spectral(mat.inner, table, materials, wo, ns, dpdus, tfc,
-                         lambda, sample_u, rng, regularize)
-
-@propagate_inbounds evaluate_bsdf_spectral(
-    mat::BumpMapped, table::RGBToSpectrumTable, materials,
-    wo::Vec3f, wi::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, regularize::Bool = false,
-) = evaluate_bsdf_spectral(mat.inner, table, materials, wo, wi, ns, dpdus, tfc,
-                           lambda, regularize)
+@propagate_inbounds get_bxdf(
+    mat::BumpMapped, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+) = get_bxdf(mat.inner, table, textures, tfc, lambda, regularize)

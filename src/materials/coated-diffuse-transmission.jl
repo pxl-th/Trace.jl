@@ -182,24 +182,35 @@ end
 
 # --- sample_bsdf_spectral for CoatedDiffuseTransmission ---
 
-@propagate_inbounds function sample_bsdf_spectral(
-    mat::CoatedDiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng_in::Float32,
-    regularize::Bool = false
-)
-    wo_dot_n = dot(wo, n)
-    if abs(wo_dot_n) < 1f-6
-        return SpectralBSDFSample()
-    end
+# CoatedDiffuseTransmissionEvaluated — pbrt-v4 CoatedDiffuseTransmissionBxDF
+# analogue. Seven textures resolved once per hit in `get_bxdf`; both the RGB
+# forms (for the bottom-layer sampling probabilities) and the spectral forms
+# are carried, since the walk needs both.
+struct CoatedDiffuseTransmissionEvaluated
+    reflectance::SpectralRadiance
+    transmittance::SpectralRadiance
+    albedo::SpectralRadiance
+    pr_max::Float32          # max component of clamped reflectance RGB
+    pt_max::Float32          # max component of clamped transmittance RGB
+    thickness::Float32
+    eta::Float32
+    g::Float32
+    alpha_x::Float32
+    alpha_y::Float32
+    has_medium::Bool
+    max_depth::Int32
+    n_samples::Int32
+end
 
-    # Get material properties
-    refl_rgb = eval_tex(textures, mat.reflectance, tfc)
-    trans_rgb = eval_tex(textures, mat.transmittance, tfc)
-    eta = mat.eta
-    thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
+@propagate_inbounds function get_bxdf(
+    mat::CoatedDiffuseTransmission, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+)
+    refl_rgb   = eval_tex(textures, mat.reflectance, tfc)
+    trans_rgb  = eval_tex(textures, mat.transmittance, tfc)
     albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
+    thickness  = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
+    g_val      = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
 
     u_roughness = eval_tex(textures, mat.u_roughness, tfc)
     v_roughness = eval_tex(textures, mat.v_roughness, tfc)
@@ -210,19 +221,43 @@ end
         alpha_y = regularize_alpha(alpha_y)
     end
 
-    # Clamp and uplift
-    refl_rgb = RGBSpectrum(clamp(refl_rgb.c[1], 0f0, 1f0), clamp(refl_rgb.c[2], 0f0, 1f0), clamp(refl_rgb.c[3], 0f0, 1f0))
+    refl_rgb  = RGBSpectrum(clamp(refl_rgb.c[1], 0f0, 1f0), clamp(refl_rgb.c[2], 0f0, 1f0), clamp(refl_rgb.c[3], 0f0, 1f0))
     trans_rgb = RGBSpectrum(clamp(trans_rgb.c[1], 0f0, 1f0), clamp(trans_rgb.c[2], 0f0, 1f0), clamp(trans_rgb.c[3], 0f0, 1f0))
-    refl_spectral = uplift_rgb(table, refl_rgb, lambda)
-    trans_spectral = uplift_rgb(table, trans_rgb, lambda)
-    albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
-    has_medium = !is_black(albedo_rgb)
 
-    # Bottom layer probabilities (for sampling reflection vs transmission)
-    pr_max = max(refl_rgb.c[1], refl_rgb.c[2], refl_rgb.c[3])
-    pt_max = max(trans_rgb.c[1], trans_rgb.c[2], trans_rgb.c[3])
+    return CoatedDiffuseTransmissionEvaluated(
+        uplift_rgb(table, refl_rgb, lambda),
+        uplift_rgb(table, trans_rgb, lambda),
+        uplift_rgb(table, albedo_rgb, lambda),
+        max(refl_rgb.c[1], refl_rgb.c[2], refl_rgb.c[3]),
+        max(trans_rgb.c[1], trans_rgb.c[2], trans_rgb.c[3]),
+        thickness, mat.eta, g_val, alpha_x, alpha_y,
+        !is_black(albedo_rgb), mat.max_depth, mat.n_samples)
+end
 
-    max_depth = Int(mat.max_depth)
+@propagate_inbounds function sample_bsdf_spectral(
+    bxdf::CoatedDiffuseTransmissionEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng_in::Float32,
+    ::Bool = false,
+)
+    wo_dot_n = dot(wo, n)
+    if abs(wo_dot_n) < 1f-6
+        return SpectralBSDFSample()
+    end
+
+    eta             = bxdf.eta
+    thickness       = bxdf.thickness
+    g_val           = bxdf.g
+    alpha_x         = bxdf.alpha_x
+    alpha_y         = bxdf.alpha_y
+    refl_spectral   = bxdf.reflectance
+    trans_spectral  = bxdf.transmittance
+    albedo_spectral = bxdf.albedo
+    has_medium      = bxdf.has_medium
+    pr_max          = bxdf.pr_max
+    pt_max          = bxdf.pt_max
+
+    max_depth = Int(bxdf.max_depth)
 
     # Build local frame
     tangent, bitangent = shading_frame(n, dpdus)
@@ -347,40 +382,24 @@ end
 # --- evaluate_bsdf_spectral for CoatedDiffuseTransmission ---
 
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::CoatedDiffuseTransmission, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    bxdf::CoatedDiffuseTransmissionEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
-    # Get material properties
-    refl_rgb = eval_tex(textures, mat.reflectance, tfc)
-    trans_rgb = eval_tex(textures, mat.transmittance, tfc)
-    eta = mat.eta
-    thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
-    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
+    eta             = bxdf.eta
+    thickness       = bxdf.thickness
+    g_val           = bxdf.g
+    alpha_x         = bxdf.alpha_x
+    alpha_y         = bxdf.alpha_y
+    refl_spectral   = bxdf.reflectance
+    trans_spectral  = bxdf.transmittance
+    albedo_spectral = bxdf.albedo
+    has_medium      = bxdf.has_medium
+    pr_max          = bxdf.pr_max
+    pt_max          = bxdf.pt_max
 
-    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
-    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
-    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
-    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
-
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
-
-    refl_rgb = RGBSpectrum(clamp(refl_rgb.c[1], 0f0, 1f0), clamp(refl_rgb.c[2], 0f0, 1f0), clamp(refl_rgb.c[3], 0f0, 1f0))
-    trans_rgb = RGBSpectrum(clamp(trans_rgb.c[1], 0f0, 1f0), clamp(trans_rgb.c[2], 0f0, 1f0), clamp(trans_rgb.c[3], 0f0, 1f0))
-    refl_spectral = uplift_rgb(table, refl_rgb, lambda)
-    trans_spectral = uplift_rgb(table, trans_rgb, lambda)
-    albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
-    has_medium = !is_black(albedo_rgb)
-
-    pr_max = max(refl_rgb.c[1], refl_rgb.c[2], refl_rgb.c[3])
-    pt_max = max(trans_rgb.c[1], trans_rgb.c[2], trans_rgb.c[3])
-
-    n_samples = Int(mat.n_samples)
-    max_depth = Int(mat.max_depth)
+    n_samples = Int(bxdf.n_samples)
+    max_depth = Int(bxdf.max_depth)
 
     # Build local frame
     tangent, bitangent = shading_frame(n, dpdus)

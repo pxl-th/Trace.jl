@@ -240,36 +240,42 @@ Key pbrt-v4 details (materials.cpp lines 345-392):
 When `regularize=true`, both interface and conductor microfacet alphas are increased
 to reduce fireflies from near-specular paths (matches pbrt-v4 BSDF::Regularize).
 """
-@propagate_inbounds function sample_bsdf_spectral(
-    mat::CoatedConductor, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
-)
-    # Check for grazing angle
-    wo_dot_n = dot(wo, n)
-    if abs(wo_dot_n) < 1f-6
-        return SpectralBSDFSample()
-    end
+# CoatedConductorEvaluated — pbrt-v4 CoatedConductorBxDF analogue. Nine
+# textures plus two spectral IOR lookups, resolved once per hit in `get_bxdf`.
+struct CoatedConductorEvaluated
+    ce::SpectralRadiance     # conductor eta, already divided by interface IOR
+    ck::SpectralRadiance     # conductor k,   already divided by interface IOR
+    albedo::SpectralRadiance
+    ieta::Float32
+    i_alpha_x::Float32
+    i_alpha_y::Float32
+    c_alpha_x::Float32
+    c_alpha_y::Float32
+    thickness::Float32
+    g::Float32
+    has_medium::Bool
+    max_depth::Int32
+    n_samples::Int32
+end
 
-    # Get interface (coating) parameters
+@propagate_inbounds function get_bxdf(
+    mat::CoatedConductor, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+)
     ieta = mat.interface_eta
-    if ieta == 0f0
-        ieta = 1f0
-    end
+    ieta == 0f0 && (ieta = 1f0)
 
     iu_roughness = eval_tex(textures, mat.interface_u_roughness, tfc)
     iv_roughness = eval_tex(textures, mat.interface_v_roughness, tfc)
     i_alpha_x = mat.remap_roughness ? roughness_to_α(iu_roughness) : iu_roughness
     i_alpha_y = mat.remap_roughness ? roughness_to_α(iv_roughness) : iv_roughness
 
-    # Get conductor parameters
     cu_roughness = eval_tex(textures, mat.conductor_u_roughness, tfc)
     cv_roughness = eval_tex(textures, mat.conductor_v_roughness, tfc)
     c_alpha_x = mat.remap_roughness ? roughness_to_α(cu_roughness) : cu_roughness
     c_alpha_y = mat.remap_roughness ? roughness_to_α(cv_roughness) : cv_roughness
 
-    # Apply regularization if requested (pbrt-v4: doubles alpha if < 0.3, clamps to [0.1, 0.3])
+    # pbrt-v4: doubles alpha if < 0.3, clamps to [0.1, 0.3]
     if regularize
         i_alpha_x = regularize_alpha(i_alpha_x)
         i_alpha_y = regularize_alpha(i_alpha_y)
@@ -277,23 +283,46 @@ to reduce fireflies from near-specular paths (matches pbrt-v4 BSDF::Regularize).
         c_alpha_y = regularize_alpha(c_alpha_y)
     end
 
-    # Get conductor eta/k — always spectral (reflectance was converted at construction)
-    # Matches pbrt-v4 materials.cpp:365-376
-    ce_spectral = eval_ior_spectral(table, textures, mat.conductor_eta, tfc, lambda)
-    ck_spectral = eval_ior_spectral(table, textures, mat.conductor_k, tfc, lambda)
+    # Conductor eta/k — always spectral (reflectance converted at construction).
+    # Matches pbrt-v4 materials.cpp:365-376, including the scale by interface IOR.
+    ce_spectral = eval_ior_spectral(table, textures, mat.conductor_eta, tfc, lambda) / ieta
+    ck_spectral = eval_ior_spectral(table, textures, mat.conductor_k,   tfc, lambda) / ieta
 
-    # Critical: scale conductor eta/k by interface IOR (pbrt-v4 lines 375-376)
-    ce_spectral = ce_spectral / ieta
-    ck_spectral = ck_spectral / ieta
-
-    # Volumetric parameters
-    thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
+    thickness  = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
     albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
-    g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
-    has_medium = !is_black(albedo_rgb)
+    g_val      = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
 
-    max_depth = Int(mat.max_depth)
+    return CoatedConductorEvaluated(
+        ce_spectral, ck_spectral, uplift_rgb(table, albedo_rgb, lambda),
+        ieta, i_alpha_x, i_alpha_y, c_alpha_x, c_alpha_y,
+        thickness, g_val, !is_black(albedo_rgb), mat.max_depth, mat.n_samples)
+end
+
+@propagate_inbounds function sample_bsdf_spectral(
+    bxdf::CoatedConductorEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng::Float32,
+    ::Bool = false,
+)
+    # Check for grazing angle
+    wo_dot_n = dot(wo, n)
+    if abs(wo_dot_n) < 1f-6
+        return SpectralBSDFSample()
+    end
+
+    ieta            = bxdf.ieta
+    i_alpha_x       = bxdf.i_alpha_x
+    i_alpha_y       = bxdf.i_alpha_y
+    c_alpha_x       = bxdf.c_alpha_x
+    c_alpha_y       = bxdf.c_alpha_y
+    ce_spectral     = bxdf.ce
+    ck_spectral     = bxdf.ck
+    thickness       = bxdf.thickness
+    albedo_spectral = bxdf.albedo
+    g_val           = bxdf.g
+    has_medium      = bxdf.has_medium
+
+    max_depth = Int(bxdf.max_depth)
 
     # === LayeredBxDF random walk — identical to CoatedDiffuse but with conductor bottom ===
     # Matches pbrt-v4 bxdfs.h LayeredBxDF<DielectricBxDF, ConductorBxDF>::Sample_f
@@ -419,40 +448,23 @@ Evaluate CoatedConductor BSDF using pbrt-v4's LayeredBxDF::f random walk.
 Exact port — same as CoatedDiffuse evaluate but with conductor bottom interface.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::CoatedConductor, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    bxdf::CoatedConductorEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
-    ieta = mat.interface_eta
-    ieta == 0f0 && (ieta = 1f0)
-    iu_roughness = eval_tex(textures, mat.interface_u_roughness, tfc)
-    iv_roughness = eval_tex(textures, mat.interface_v_roughness, tfc)
-    i_alpha_x = mat.remap_roughness ? roughness_to_α(iu_roughness) : iu_roughness
-    i_alpha_y = mat.remap_roughness ? roughness_to_α(iv_roughness) : iv_roughness
-    cu_roughness = eval_tex(textures, mat.conductor_u_roughness, tfc)
-    cv_roughness = eval_tex(textures, mat.conductor_v_roughness, tfc)
-    c_alpha_x = mat.remap_roughness ? roughness_to_α(cu_roughness) : cu_roughness
-    c_alpha_y = mat.remap_roughness ? roughness_to_α(cv_roughness) : cv_roughness
-
-    if regularize
-        i_alpha_x = regularize_alpha(i_alpha_x)
-        i_alpha_y = regularize_alpha(i_alpha_y)
-        c_alpha_x = regularize_alpha(c_alpha_x)
-        c_alpha_y = regularize_alpha(c_alpha_y)
-    end
-
-    ce_spectral = eval_ior_spectral(table, textures, mat.conductor_eta, tfc, lambda)
-    ck_spectral = eval_ior_spectral(table, textures, mat.conductor_k, tfc, lambda)
-    ce_spectral = ce_spectral / ieta
-    ck_spectral = ck_spectral / ieta
-
-    thickness = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
-    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    albedo_spectral = uplift_rgb(table, albedo_rgb, lambda)
-    has_medium = !is_black(albedo_rgb)
-    g_val = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
-    n_samples = Int(mat.n_samples)
-    max_depth = Int(mat.max_depth)
+    ieta            = bxdf.ieta
+    i_alpha_x       = bxdf.i_alpha_x
+    i_alpha_y       = bxdf.i_alpha_y
+    c_alpha_x       = bxdf.c_alpha_x
+    c_alpha_y       = bxdf.c_alpha_y
+    ce_spectral     = bxdf.ce
+    ck_spectral     = bxdf.ck
+    thickness       = bxdf.thickness
+    albedo_spectral = bxdf.albedo
+    has_medium      = bxdf.has_medium
+    g_val           = bxdf.g
+    n_samples       = Int(bxdf.n_samples)
+    max_depth       = Int(bxdf.max_depth)
     is_smooth = trowbridge_reitz_effectively_smooth(i_alpha_x, i_alpha_y)
     c_is_smooth = trowbridge_reitz_effectively_smooth(c_alpha_x, c_alpha_y)
 

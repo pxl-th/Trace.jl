@@ -187,16 +187,26 @@ Brass(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true) =
 # Mirror spectral BSDF sampling
 # ============================================================================
 
+# MirrorEvaluated — Kr resolved once per hit (see `get_bxdf`).
+struct MirrorEvaluated
+    kr::SpectralRadiance   # already uplifted to the 4 wavelengths
+end
+
+@propagate_inbounds get_bxdf(
+    mat::Mirror, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
+) = MirrorEvaluated(uplift_rgb(table, eval_tex(textures, mat.Kr, tfc), lambda))
+
 """
-    sample_bsdf_spectral(table, mat::Mirror, textures, wo, n, uv, lambda, sample_u, rng) -> SpectralBSDFSample
+    sample_bsdf_spectral(bxdf::MirrorEvaluated, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng) -> SpectralBSDFSample
 
 Sample perfect specular reflection with spectral evaluation.
 """
 @propagate_inbounds function sample_bsdf_spectral(
-    mat::Mirror, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
+    bxdf::MirrorEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, ::Float32,
+    ::Bool = false,
 )
     # Check for grazing angle
     wo_dot_n = dot(wo, n)
@@ -204,9 +214,9 @@ Sample perfect specular reflection with spectral evaluation.
         return SpectralBSDFSample()
     end
 
-    # Get reflectance (rng and sample_u unused for perfect specular)
-    kr_rgb = eval_tex(textures, mat.Kr, tfc)
-    kr_spectral = uplift_rgb(table, kr_rgb, lambda)
+    # Reflectance was resolved once in `get_bxdf` (rng and sample_u are unused
+    # for perfect specular).
+    kr_spectral = bxdf.kr
 
     # Orient normal to face wo for reflection
     n_oriented = wo_dot_n < 0f0 ? -n : n
@@ -224,211 +234,14 @@ end
 # ============================================================================
 
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::Mirror, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    ::MirrorEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
     # Perfect specular has zero PDF for non-delta directions
     return (SpectralRadiance(), 0f0)
 end
 
-# ============================================================================
-# Conductor spectral BSDF sampling
-# ============================================================================
-
-"""
-    sample_bsdf_spectral(table, mat::Conductor, textures, wo, n, uv, lambda, sample_u, rng, regularize=false) -> SpectralBSDFSample
-
-Sample metal BSDF with conductor Fresnel.
-Matches pbrt-v4's ConductorBxDF::Sample_f exactly.
-
-The implementation works in local shading coordinates where n = (0,0,1), then transforms back.
-
-When `regularize=true`, the microfacet alpha is increased to reduce fireflies
-from near-specular paths (matches pbrt-v4 BSDF::Regularize).
-"""
-@propagate_inbounds function sample_bsdf_spectral(
-    mat::Conductor, table::RGBToSpectrumTable, textures,
-    wo_world::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
-)
-    # Build local coordinate frame (matches pbrt-v4's BSDF shading frame)
-    tangent, bitangent = shading_frame(n, dpdus)
-
-    # Transform wo to local coordinates (matches pbrt-v4's RenderToLocal)
-    wo = world_to_local(wo_world, n, tangent, bitangent)
-
-    # Check for grazing angle (matches pbrt-v4's wo.z == 0 check)
-    if wo[3] == 0f0
-        return SpectralBSDFSample()
-    end
-
-    # Get material properties
-    roughness = eval_tex(textures, mat.roughness, tfc)
-
-    # Compute alpha values (matches pbrt-v4's roughness remapping)
-    alpha_x = mat.remap_roughness ? roughness_to_α(roughness) : roughness
-    alpha_y = alpha_x  # Isotropic for now
-
-    # Apply regularization if requested (pbrt-v4: doubles alpha if < 0.3, clamps to [0.1, 0.3])
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
-
-    # Clamp alpha to minimum value if not smooth (matches pbrt-v4 TrowbridgeReitzDistribution constructor)
-    if !trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
-        alpha_x = max(alpha_x, 1f-4)
-        alpha_y = max(alpha_y, 1f-4)
-    end
-
-    # Evaluate eta and k spectrally (dispatches on PiecewiseLinearSpectrum vs RGB texture)
-    eta_spectral = eval_ior_spectral(table, textures, mat.eta, tfc, lambda)
-    k_spectral = eval_ior_spectral(table, textures, mat.k, tfc, lambda)
-
-    if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
-        # Sample perfect specular conductor BRDF (matches pbrt-v4 line 301-305)
-        # wi = (-wo.x, -wo.y, wo.z) in local coordinates
-        wi = Vec3f(-wo[1], -wo[2], wo[3])
-
-        # f = FrComplex(AbsCosTheta(wi), eta, k) / AbsCosTheta(wi)
-        cos_theta_i = abs_cos_theta(wi)
-        F = fr_complex_spectral(cos_theta_i, eta_spectral, k_spectral)
-        f = F / cos_theta_i
-
-        # Transform wi back to world coordinates
-        wi_world = local_to_world(wi, n, tangent, bitangent)
-
-        return SpectralBSDFSample(f, wi_world, 1f0, BXDF_SPECULAR_REFLECTION, 1f0)
-    else
-        # Sample rough conductor BRDF (matches pbrt-v4 line 307-327)
-
-        # Sample microfacet normal wm (matches pbrt-v4 line 311)
-        wm = trowbridge_reitz_sample_wm(wo, sample_u, alpha_x, alpha_y)
-
-        # Compute reflected direction (matches pbrt-v4 line 312)
-        # Reflect(wo, wm) = -wo + 2 * dot(wo, wm) * wm
-        wi = -wo + 2f0 * dot(wo, wm) * wm
-
-        # Reject if not in same hemisphere (matches pbrt-v4 line 313-314)
-        if !same_hemisphere(wo, wi)
-            return SpectralBSDFSample()
-        end
-
-        # Compute PDF of wi for microfacet reflection (matches pbrt-v4 line 317)
-        # pdf = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm))
-        pdf = trowbridge_reitz_pdf(wo, wm, alpha_x, alpha_y) / (4f0 * abs(dot(wo, wm)))
-
-        # Get cos values (matches pbrt-v4 line 319-321)
-        cos_theta_o = abs_cos_theta(wo)
-        cos_theta_i = abs_cos_theta(wi)
-        if cos_theta_i == 0f0 || cos_theta_o == 0f0
-            return SpectralBSDFSample()
-        end
-
-        # Evaluate Fresnel factor F for conductor BRDF (matches pbrt-v4 line 323)
-        # FrComplex uses AbsDot(wo, wm), not AbsCosTheta
-        F = fr_complex_spectral(abs(dot(wo, wm)), eta_spectral, k_spectral)
-
-        # Compute BSDF value (matches pbrt-v4 line 325-326)
-        # f = D(wm) * F * G(wo, wi) / (4 * cosTheta_i * cosTheta_o)
-        D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
-        G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
-        f = D * F * G / (4f0 * cos_theta_i * cos_theta_o)
-
-        # Transform wi back to world coordinates
-        wi_world = local_to_world(wi, n, tangent, bitangent)
-
-        return SpectralBSDFSample(f, wi_world, pdf, BXDF_GLOSSY_REFLECTION, 1f0)
-    end
-end
-
-# ============================================================================
-# Conductor spectral BSDF evaluation (for MIS in direct lighting)
-# ============================================================================
-
-"""
-    evaluate_bsdf_spectral(table, mat::Conductor, ...) -> (f, pdf)
-
-Evaluate metal BSDF for given directions.
-Matches pbrt-v4's ConductorBxDF::f and ConductorBxDF::PDF exactly.
-"""
-@propagate_inbounds function evaluate_bsdf_spectral(
-    mat::Conductor, table::RGBToSpectrumTable, textures,
-    wo_world::Vec3f, wi_world::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
-)
-    # Build local coordinate frame
-    tangent, bitangent = shading_frame(n, dpdus)
-
-    # Transform to local coordinates
-    wo = world_to_local(wo_world, n, tangent, bitangent)
-    wi = world_to_local(wi_world, n, tangent, bitangent)
-
-    # Must be in same hemisphere (matches pbrt-v4 line 332-333)
-    if !same_hemisphere(wo, wi)
-        return (SpectralRadiance(), 0f0)
-    end
-
-    # Get material properties
-    roughness = eval_tex(textures, mat.roughness, tfc)
-
-    # Compute alpha values
-    alpha_x = mat.remap_roughness ? roughness_to_α(roughness) : roughness
-    alpha_y = alpha_x
-
-    # Apply regularization to match sampling state
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
-
-    # Clamp alpha if not smooth
-    if !trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
-        alpha_x = max(alpha_x, 1f-4)
-        alpha_y = max(alpha_y, 1f-4)
-    end
-
-    # Specular returns zero for evaluation (matches pbrt-v4 line 334-335)
-    if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y)
-        return (SpectralRadiance(), 0f0)
-    end
-
-    # Evaluate rough conductor BRDF (matches pbrt-v4 line 336-350)
-    cos_theta_o = abs_cos_theta(wo)
-    cos_theta_i = abs_cos_theta(wi)
-    if cos_theta_i == 0f0 || cos_theta_o == 0f0
-        return (SpectralRadiance(), 0f0)
-    end
-
-    # Compute half-vector wm (matches pbrt-v4 line 341-344)
-    wm = wi + wo
-    if dot(wm, wm) == 0f0
-        return (SpectralRadiance(), 0f0)
-    end
-    wm = normalize(wm)
-
-    # Evaluate eta and k spectrally (dispatches on PiecewiseLinearSpectrum vs RGB texture)
-    eta_spectral = eval_ior_spectral(table, textures, mat.eta, tfc, lambda)
-    k_spectral = eval_ior_spectral(table, textures, mat.k, tfc, lambda)
-
-    # Evaluate Fresnel factor F (matches pbrt-v4 line 347)
-    F = fr_complex_spectral(abs(dot(wo, wm)), eta_spectral, k_spectral)
-
-    # Compute BSDF value (matches pbrt-v4 line 349)
-    # f = D(wm) * F * G(wo, wi) / (4 * cosTheta_i * cosTheta_o)
-    D = trowbridge_reitz_d(wm, alpha_x, alpha_y)
-    G = trowbridge_reitz_g(wo, wi, alpha_x, alpha_y)
-    f = D * F * G / (4f0 * cos_theta_i * cos_theta_o)
-
-    # Compute PDF (matches pbrt-v4 line 361-367)
-    # wm needs to face forward for PDF
-    wm_pdf = face_forward(wm, Vec3f(0f0, 0f0, 1f0))
-    pdf = trowbridge_reitz_pdf(wo, wm_pdf, alpha_x, alpha_y) / (4f0 * abs(dot(wo, wm_pdf)))
-
-    return (f, pdf)
-end
 
 # ============================================================================
 # ConductorEvaluated — pbrt-v4 ConductorBxDF analogue
