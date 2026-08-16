@@ -18,8 +18,12 @@ Perfect mirror (specular reflection) material.
 
 * `Kr`: Spectral reflectance (color texture or TextureRef)
 """
-struct Mirror{KrTex} <: Material
-    Kr::KrTex   # Texture, Raycore.TextureRef, or raw RGBSpectrum
+# Non-parametric texture parameters: constant-vs-texture must not change the
+# material's TYPE, or the per-material chit path compiles a separate shader per
+# combination.
+struct Mirror{KrT} <: Material
+    Kr::KrT
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 """
@@ -37,8 +41,8 @@ Mirror(Kr=RGBSpectrum(0.95, 0.93, 0.88))  # Gold-tinted
 Mirror(Kr=(0.9, 0.9, 0.9))            # Using tuple
 ```
 """
-function Mirror(; Kr=RGBSpectrum(0.9f0))
-    Mirror(to_texture(Kr))
+function Mirror(; Kr=RGBSpectrum(0.9f0), bump=nothing)
+    Mirror(matparam(Kr), TexHandle(bump))
 end
 
 
@@ -63,12 +67,22 @@ Metals reflect light based on Fresnel equations for conductors, characterized by
 * `reflectance`: Color multiplier for Fresnel reflectance (for tinting)
 * `remap_roughness`: Whether to remap roughness to alpha
 """
-struct Conductor{EtaTex, KTex, RoughTex, ReflTex} <: Material
-    eta::EtaTex             # PiecewiseLinearSpectrum, Texture, Raycore.TextureRef, or raw RGBSpectrum
-    k::KTex                 # PiecewiseLinearSpectrum, Texture, Raycore.TextureRef, or raw RGBSpectrum
-    roughness::RoughTex     # Texture, Raycore.TextureRef, or raw Float32
-    reflectance::ReflTex    # Texture, Raycore.TextureRef, or raw RGBSpectrum
+# `roughness` / `reflectance` are `TexHandle`, not type parameters: whether a
+# parameter is a constant or a texture must not change the MATERIAL's type, or
+# the per-material chit path compiles a separate shader for each combination.
+# Crown alone had three `Conductor` types that differ only in this.
+#
+# `eta` / `k` stay parametric because they may be a `PiecewiseLinearSpectrum{56}`
+# (448 bytes of measured metal data) which cannot live inline in a handle. In
+# practice every conductor in a scene uses the same spectral representation, so
+# they do not multiply types.
+struct Conductor{EtaTex, KTex, RoughT, ReflT} <: Material
+    eta::EtaTex             # PiecewiseLinearSpectrum or spectral value
+    k::KTex                 # PiecewiseLinearSpectrum or spectral value
+    roughness::RoughT
+    reflectance::ReflT
     remap_roughness::Bool
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 
@@ -99,9 +113,14 @@ function Conductor(;
     k=(3.9f0, 3.9f0, 3.9f0),
     roughness=0.1f0,
     reflectance=(1f0, 1f0, 1f0),
-    remap_roughness=true
+    remap_roughness=true,
+    bump=nothing,
 )
-    Conductor(to_texture(eta), to_texture(k), to_texture(roughness), to_texture(reflectance), remap_roughness)
+    # eta/k stay whatever they are (a `PiecewiseLinearSpectrum` for the measured
+    # presets); RGB ones become inline handles so `Conductor(eta=rgb)` and
+    # `Conductor(eta=other_rgb)` share one concrete type.
+    Conductor(matparam(eta), matparam(k), matparam(roughness),
+              matparam(reflectance), remap_roughness, TexHandle(bump))
 end
 
 # ============================================================================
@@ -120,8 +139,9 @@ Gold(roughness=0.1)             # Brushed gold
 Gold(roughness=0.3)             # Matte gold
 ```
 """
-Gold(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true) =
-    Conductor(AU_ETA_SPECTRUM, AU_K_SPECTRUM, to_texture(roughness), to_texture(reflectance), remap_roughness)
+Gold(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
+    Conductor(AU_ETA_SPECTRUM, AU_K_SPECTRUM, matparam(roughness), matparam(reflectance),
+              remap_roughness, TexHandle(bump))
 
 """
     Silver(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -134,8 +154,9 @@ Silver()                        # Polished silver
 Silver(roughness=0.05)          # Slightly brushed
 ```
 """
-Silver(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true) =
-    Conductor(AG_ETA_SPECTRUM, AG_K_SPECTRUM, to_texture(roughness), to_texture(reflectance), remap_roughness)
+Silver(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
+    Conductor(AG_ETA_SPECTRUM, AG_K_SPECTRUM, matparam(roughness), matparam(reflectance),
+              remap_roughness, TexHandle(bump))
 
 """
     Copper(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -148,8 +169,9 @@ Copper()                        # Polished copper
 Copper(roughness=0.2)           # Weathered copper
 ```
 """
-Copper(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true) =
-    Conductor(CU_ETA_SPECTRUM, CU_K_SPECTRUM, to_texture(roughness), to_texture(reflectance), remap_roughness)
+Copper(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
+    Conductor(CU_ETA_SPECTRUM, CU_K_SPECTRUM, matparam(roughness), matparam(reflectance),
+              remap_roughness, TexHandle(bump))
 
 """
     Aluminum(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -162,8 +184,9 @@ Aluminum()                      # Polished aluminum
 Aluminum(roughness=0.1)         # Brushed aluminum
 ```
 """
-Aluminum(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true) =
-    Conductor(AL_ETA_SPECTRUM, AL_K_SPECTRUM, to_texture(roughness), to_texture(reflectance), remap_roughness)
+Aluminum(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
+    Conductor(AL_ETA_SPECTRUM, AL_K_SPECTRUM, matparam(roughness), matparam(reflectance),
+              remap_roughness, TexHandle(bump))
 
 """
     Brass(; roughness=0.0, reflectance=(1,1,1), remap_roughness=true)
@@ -176,8 +199,9 @@ Brass()                         # Polished brass
 Brass(roughness=0.15)           # Brushed brass
 ```
 """
-Brass(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true) =
-    Conductor(CUZN_ETA_SPECTRUM, CUZN_K_SPECTRUM, to_texture(roughness), to_texture(reflectance), remap_roughness)
+Brass(; roughness=0f0, reflectance=(1f0, 1f0, 1f0), remap_roughness=true, bump=nothing) =
+    Conductor(CUZN_ETA_SPECTRUM, CUZN_K_SPECTRUM, matparam(roughness), matparam(reflectance),
+              remap_roughness, TexHandle(bump))
 
 # ============================================================================
 # Helpers for evaluating IOR values (PiecewiseLinearSpectrum or RGB textures)
@@ -195,7 +219,7 @@ end
 @propagate_inbounds get_bxdf(
     mat::Mirror, table::RGBToSpectrumTable, textures,
     tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
-) = MirrorEvaluated(uplift_rgb(table, eval_tex(textures, mat.Kr, tfc), lambda))
+) = MirrorEvaluated(uplift_rgb(table, eval_handle_spectrum(textures, mat.Kr, tfc), lambda))
 
 """
     sample_bsdf_spectral(bxdf::MirrorEvaluated, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng) -> SpectralBSDFSample
@@ -293,7 +317,7 @@ overhead of an intermediate struct is unjustified for them.
     mat::Conductor, table::RGBToSpectrumTable, textures,
     tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
 )
-    roughness = eval_tex(textures, mat.roughness, tfc)
+    roughness = eval_handle(textures, mat.roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(roughness) : roughness
     alpha_y = alpha_x  # isotropic
     if regularize

@@ -53,6 +53,10 @@ function MediumInterface(material::M, medium) where {M<:Material}
     MediumInterface{M, typeof(medium), typeof(medium), Nothing}(material, medium, medium, nothing)
 end
 
+# Forward the height field to the wrapped surface material, like every other
+# `MediumInterface` material-level trait.
+@propagate_inbounds displacement(mi::MediumInterface) = displacement(mi.material)
+
 """Check if this interface represents a medium transition"""
 @propagate_inbounds function is_medium_transition(mi::MediumInterface)
     mi.inside !== mi.outside

@@ -23,11 +23,28 @@ light (via the MediumInterface's BSDF material) AND emits light.
 Emissive(Le=(3, 3, 3), scale=1.0, two_sided=true)
 ```
 """
+# Constants collapse into a `TexHandle`, so every `Emissive(Le=<colour>)` is
+# ONE type however the colour was spelled — that is what pbrt area lights use
+# (`AreaLightSource "diffuse" "rgb L"`), and a parametric `Le` used to give an
+# emissive scene one closest-hit shader per spelling.
+#
+# An image `Texture` stays as-is: `Raycore`'s push-time conversion turns it into
+# a `TextureRef` in the scene's store, and per-face emission is baked from it in
+# `register_face_area_lights!`. It cannot become a `TexHandle` at construction
+# time because a handle needs the store slot, which only exists after the push.
 struct Emissive{LeTex} <: Material
-    Le::LeTex  # Texture, Raycore.TextureRef, or raw RGBSpectrum
+    Le::LeTex   # TexHandle for constants, Texture/TextureRef for image emission
     scale::Float32
     two_sided::Bool
 end
+
+@inline _emissive_le(t::Texture{T, N}) where {T, N} = t
+@inline _emissive_le(t::Raycore.TextureRef) = t
+@inline _emissive_le(x) = TexHandle(x)
+
+# Value at a uv, for both representations.
+@propagate_inbounds _emissive_value(Le::TexHandle, uv::Point2f) = const_spectrum(Le)
+@propagate_inbounds _emissive_value(Le, uv::Point2f) = Le(uv)
 
 # ============================================================================
 # User-friendly keyword constructor
@@ -53,7 +70,7 @@ function Emissive(;
     # Apply photometric normalization matching pbrt-v4's area light creation:
     # scale /= SpectrumToPhotometric(Le_spectrum)
     normalized_scale = Float32(scale) / D65_PHOTOMETRIC
-    Emissive(to_texture(Le), normalized_scale, two_sided)
+    Emissive(_emissive_le(Le), normalized_scale, two_sided)
 end
 
 # ============================================================================
@@ -72,9 +89,7 @@ Returns zero if the surface is one-sided and we're on the back.
     if !mat.two_sided && cos_theta < 0f0
         return RGBSpectrum(0f0)
     end
-    # Evaluate Le texture at UV
-    Le = mat.Le(uv)
-    return Le * mat.scale
+    return _emissive_value(mat.Le, uv) * mat.scale
 end
 
 """
@@ -83,8 +98,7 @@ end
 Get the emitted radiance at UV coordinates (without directional check).
 """
 @propagate_inbounds function get_emission(mat::Emissive, uv::Point2f)
-    Le = mat.Le(uv)
-    return Le * mat.scale
+    return _emissive_value(mat.Le, uv) * mat.scale
 end
 
 # Base fallbacks for non-emissive materials are in material.jl (included before this file)
@@ -113,9 +127,9 @@ Check if a material is purely emissive (no BSDF, only emits light).
 Convert Emissive to GPU-compatible form.
 """
 function to_gpu(ArrayType, mat::Emissive)
-    Le_gpu = to_gpu(ArrayType, mat.Le)
-    return Emissive(Le_gpu, mat.scale, mat.two_sided)
+    return Emissive(to_gpu(ArrayType, mat.Le), mat.scale, mat.two_sided)
 end
+to_gpu(ArrayType, h::TexHandle) = h
 
 # ============================================================================
 # Albedo extraction for denoising auxiliary buffers
@@ -128,7 +142,7 @@ Get the "albedo" of an emissive material for denoising.
 For emissive materials, we return the normalized emission color.
 """
 @propagate_inbounds function get_albedo(mat::Emissive, uv::Point2f)
-    Le = mat.Le(uv)
+    Le = _emissive_value(mat.Le, uv)
     # Return normalized color (so it's in 0-1 range for denoising)
     luminance = to_Y(Le)
     if luminance > 0f0

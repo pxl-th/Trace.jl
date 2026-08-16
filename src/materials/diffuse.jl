@@ -12,9 +12,12 @@ Matte (diffuse) material with Lambertian or Oren-Nayar BRDF.
 * `Kd`: Spectral diffuse reflection (color texture or TextureRef)
 * `σ`: Scalar roughness for Oren-Nayar model (0 = Lambertian)
 """
-struct Diffuse{KdTex, σTex} <: Material
-    Kd::KdTex   # Texture, Raycore.TextureRef, or raw RGBSpectrum
-    σ::σTex     # Texture, Raycore.TextureRef, or raw Float32
+# Non-parametric: constant-vs-texture must not change the material's TYPE, or
+# the per-material chit path compiles a separate shader for each combination.
+struct Diffuse{KdT, SigmaT} <: Material
+    Kd::KdT
+    σ::SigmaT
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 
@@ -34,8 +37,8 @@ Diffuse(Kd=(0.8, 0.2, 0.2), σ=20)       # Red with roughness
 Diffuse(Kd=my_texture)                   # Textured
 ```
 """
-function Diffuse(; Kd=RGBSpectrum(0.5f0), σ=0f0)
-    Diffuse(to_texture(Kd), to_texture(σ))
+function Diffuse(; Kd=RGBSpectrum(0.5f0), σ=0f0, bump=nothing)
+    Diffuse(matparam(Kd), matparam(σ), TexHandle(bump))
 end
 
 
@@ -60,9 +63,9 @@ end
     tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
 )
     # Clamp reflectance to [0,1] as per pbrt-v4, then uplift to spectral.
-    kd_rgb = clamp(eval_tex(textures, mat.Kd, tfc))
+    kd_rgb = clamp(eval_handle_spectrum(textures, mat.Kd, tfc))
     return DiffuseEvaluated(uplift_rgb(table, kd_rgb, lambda),
-                            eval_tex(textures, mat.σ, tfc))
+                            eval_handle(textures, mat.σ, tfc))
 end
 
 # ============================================================================
@@ -164,6 +167,6 @@ end
 # ============================================================================
 
 @propagate_inbounds function get_surface_alpha(mat::Diffuse, textures, uv::Point2f)
-    kd_rgb = eval_tex(textures, mat.Kd, uv)
+    kd_rgb = eval_handle_spectrum(textures, mat.Kd, TextureFilterContext(uv))
     return get_alpha(kd_rgb)
 end

@@ -1,12 +1,20 @@
 # ============================================================================
-# BumpMapped — Material wrapper that perturbs the shading frame from a height
-# texture, then delegates BSDF sampling/evaluation to the inner material.
+# Bump mapping — perturbs the shading frame from a height texture.
 #
 # Used for pbrt-v4's `displacement` / `bumpmap` parameter (and indirectly for
 # `normalmap`, which is just a different way of saying "use this texture to
 # perturb the shading normal"). Without it, Hikari rendered scenes like Crown
 # as smooth surfaces; with it, displacement textures on gold and pearl
 # materials show through.
+#
+# This used to be a `BumpMapped{M, T}` WRAPPER material. That wrapper doubled
+# the concrete material type count of any scene that bump-maps some of its
+# surfaces — `Conductor{…}` and `BumpMapped{Conductor{…}, TextureRef{…}}` are
+# different types, so the per-material closest-hit path compiled a separate
+# shader for each. pbrt-v4 does not wrap: `displacement` is a plain field on
+# every `Material`, and `Material::GetBxDF` is oblivious to it. Hikari now does
+# the same — `displacement(mat)` is a `TexHandle` field, NONE when absent, and
+# the perturbation is one predictable branch per hit.
 #
 # Algorithm follows pbrt-v4 §9.3 "Bump Mapping":
 #   1. Sample the height texture h at (u, v), (u+ε, v), (u, v+ε).
@@ -30,26 +38,31 @@
 const BUMP_DEFAULT_DELTA = 5f-4
 
 """
-    BumpMapped(inner::Material, bump::Texture / TextureRef)
+    displacement(mat::Material) -> TexHandle
 
-Wrap `inner` with a per-shading-point height-field normal perturbation.
+The material's height-field (`displacement` / `bumpmap` / `normalmap`) handle,
+or a NONE handle when the material has no such field. Mirrors pbrt-v4's
+`Material::GetDisplacement`.
 """
-struct BumpMapped{M<:Material, T} <: Material
-    inner::M
-    bump::T
+@generated function displacement(mat::M) where {M <: Material}
+    return :displacement in fieldnames(M) ? :(mat.displacement) : :(TexHandle())
 end
-# (Julia synthesizes the parser-friendly outer constructor
-#  `BumpMapped(::M, ::T)` automatically; no explicit one needed.)
 
-# Forward the material-level traits to the inner material.
-@propagate_inbounds is_emissive(mat::BumpMapped) = is_emissive(mat.inner)
-@propagate_inbounds is_pure_emissive(mat::BumpMapped) = is_pure_emissive(mat.inner)
-@propagate_inbounds get_emission(mat::BumpMapped, wo::Vec3f, n::Vec3f, uv::Point2f) =
-    get_emission(mat.inner, wo, n, uv)
-@propagate_inbounds get_emission(mat::BumpMapped, uv::Point2f) =
-    get_emission(mat.inner, uv)
-@propagate_inbounds get_surface_alpha(mat::BumpMapped, textures, uv::Point2f) =
-    get_surface_alpha(mat.inner, textures, uv)
+"""
+    set_displacement(mat, h::TexHandle) -> mat′
+
+Rebuild `mat` with its `displacement` field replaced. Host-side only (the pbrt
+builder constructs the material first, then attaches the height field). Returns
+`mat` unchanged for material types that have no displacement field — pbrt-v4
+likewise has no displacement on `MixMaterial` (materials.h: the mix resolves to
+a sub-material before `GetDisplacement` is consulted).
+"""
+@generated function set_displacement(mat::M, h::TexHandle) where {M <: Material}
+    fs = fieldnames(M)
+    :displacement in fs || return :(mat)
+    args = [f === :displacement ? :h : :(getfield(mat, $(QuoteNode(f)))) for f in fs]
+    return :($(M)($(args...)))
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Height-field gradient → perturbed shading frame
@@ -61,10 +74,8 @@ end
 # Takes the full filter context, not just uv: pbrt-v4's BumpMap evaluates the
 # shifted samples through `shiftedCtx`, which keeps the original dudx/dudy —
 # procedural textures (CheckerboardTexture) filter over that footprint.
-@propagate_inbounds function _bump_height(bump, materials, tfc::TextureFilterContext)
-    h = eval_tex(materials, bump, tfc)
-    return h isa Real ? Float32(h) : Float32(h.c[1])
-end
+@propagate_inbounds _bump_height(bump::TexHandle, materials, tfc::TextureFilterContext) =
+    eval_handle(materials, bump, tfc)
 
 """
     perturb_bump_frame(bump, materials, ns, dpdu, dpdv, dndu, dndv, ng, tfc)
@@ -84,7 +95,7 @@ was the bumped-gold leak into the crown interior pinned by
 `ng` is the geometric (face) normal — pbrt-v4 `SetShadingGeometry` flips the
 new bumped normal against `ng`, not against the original interpolated `ns`.
 """
-@propagate_inbounds function perturb_bump_frame(bump, materials,
+@propagate_inbounds function perturb_bump_frame(bump::TexHandle, materials,
                                                 ns::Vec3f,
                                                 dpdu::Vec3f, dpdv::Vec3f,
                                                 dndu::Vec3f, dndv::Vec3f,
@@ -128,23 +139,8 @@ new bumped normal against `ng`, not against the original interpolated `ns`.
     return n_p, dpdu_p
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BSDF dispatch — pure passthrough to the inner material, done at `get_bxdf`
-# rather than at sample/evaluate.
-#
-# Forwarding `get_bxdf` (instead of forwarding `sample_bsdf_spectral` and
-# `evaluate_bsdf_spectral` separately) is what lets the leaf materials keep a
-# SINGLE BSDF implementation, on their evaluated form. Forwarding the two BSDF
-# entry points instead forces every leaf to ALSO retain a raw-material version
-# for wrappers to land on — which is how `Conductor` ended up with two full
-# copies of its BSDF in the module.
-#
-# The bump perturbation itself is applied at intersection time by
-# `get_perturbed_shading_frame` (see dispatch.jl). Doing it here as well would
-# double-apply the height-field gradient on every sample/evaluate.
-# ─────────────────────────────────────────────────────────────────────────────
-
-@propagate_inbounds get_bxdf(
-    mat::BumpMapped, table::RGBToSpectrumTable, textures,
-    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
-) = get_bxdf(mat.inner, table, textures, tfc, lambda, regularize)
+# The bump perturbation is applied at intersection time by
+# `get_perturbed_shading_frame` (see dispatch.jl), NOT inside the BSDF: the
+# path integrator's own `cos_theta = dot(wi, work.ns)` factor has to see the
+# perturbed normal too, or bumps on Conductor surfaces vanish (Crown's gold
+# dome rendered smooth with the old in-BSDF version).

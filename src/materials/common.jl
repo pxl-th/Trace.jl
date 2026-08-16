@@ -84,6 +84,9 @@ end
 # When eta/k is a PiecewiseLinearSpectrum, sample it directly at the wavelengths.
 # When it's an RGB value (from texture), uplift via the sigmoid polynomial table.
 @inline eval_ior_spectral(table, textures, spec::PiecewiseLinearSpectrum, tfc, lambda) = sample(spec, lambda)
+@propagate_inbounds function eval_ior_spectral(table, textures, h::TexHandle, tfc, lambda)
+    return uplift_rgb_unbounded(table, eval_handle_spectrum(textures, h, tfc), lambda)
+end
 @inline function eval_ior_spectral(table, textures, tex, tfc, lambda)
     rgb = eval_tex(textures, tex, tfc)
     return uplift_rgb_unbounded(table, rgb, lambda)

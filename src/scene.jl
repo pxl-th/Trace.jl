@@ -90,7 +90,7 @@ end
 Base.push!(scene::Scene, ::Nothing) = SetKey()
 
 function Base.push!(scene::Scene, medium::MediumInterface)
-    mat_idx = push!(scene.materials, medium.material)
+    mat_idx = push!(scene.materials, resolve_material(scene, medium.material))
     # Record the materials-set SetKey of the inner material from this push so
     # `push!(scene, mesh, ::Material)` can read it back without doing a GPU
     # scalar readback on `scene.media_interfaces`. The materials are converted

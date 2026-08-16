@@ -36,10 +36,14 @@ paper = DiffuseTransmission(reflectance=(0.8, 0.8, 0.8), transmittance=(0.5, 0.5
 leaf = DiffuseTransmission(reflectance=(0.2, 0.3, 0.1), transmittance=(0.1, 0.5, 0.1))
 ```
 """
-struct DiffuseTransmission{RTex, TTex} <: Material
-    reflectance::RTex    # Texture{RGBSpectrum} - diffuse reflection
-    transmittance::TTex  # Texture{RGBSpectrum} - diffuse transmission
+# Non-parametric texture parameters: constant-vs-texture must not change the
+# material's TYPE, or the per-material chit path compiles a separate shader per
+# combination.
+struct DiffuseTransmission{ReflT, TransT} <: Material
+    reflectance::ReflT
+    transmittance::TransT
     scale::Float32       # Intensity scale
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # No explicit positional constructor: the synthesized
@@ -70,12 +74,14 @@ DiffuseTransmission(reflectance=(0, 0, 0), transmittance=(1, 1, 1))
 function DiffuseTransmission(;
     reflectance = RGBSpectrum(0.5f0),
     transmittance = RGBSpectrum(0.5f0),
-    scale::Real = 1f0
+    scale::Real = 1f0,
+    bump = nothing,
 )
     DiffuseTransmission(
-        to_texture(reflectance),
-        to_texture(transmittance),
-        Float32(scale)
+        matparam(reflectance),
+        matparam(transmittance),
+        Float32(scale),
+        TexHandle(bump),
     )
 end
 
@@ -108,8 +114,8 @@ end
     mat::DiffuseTransmission, table::RGBToSpectrumTable, textures,
     tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
 )
-    r_rgb = eval_tex(textures, mat.reflectance, tfc) * mat.scale
-    t_rgb = eval_tex(textures, mat.transmittance, tfc) * mat.scale
+    r_rgb = eval_handle_spectrum(textures, mat.reflectance, tfc) * mat.scale
+    t_rgb = eval_handle_spectrum(textures, mat.transmittance, tfc) * mat.scale
     r_rgb = RGBSpectrum(clamp(r_rgb.c[1], 0f0, 1f0), clamp(r_rgb.c[2], 0f0, 1f0), clamp(r_rgb.c[3], 0f0, 1f0))
     t_rgb = RGBSpectrum(clamp(t_rgb.c[1], 0f0, 1f0), clamp(t_rgb.c[2], 0f0, 1f0), clamp(t_rgb.c[3], 0f0, 1f0))
     return DiffuseTransmissionEvaluated(r_rgb, t_rgb,

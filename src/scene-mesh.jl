@@ -5,15 +5,6 @@
 
 using LinearAlgebra: I, norm
 
-# MixMaterial: resolve sub-material keys before pushing to the scene
-function Base.push!(scene::Scene, mix::MixMaterial)
-    key1 = push!(scene.materials, mix.material1)
-    key2 = push!(scene.materials, mix.material2)
-    resolved = MixMaterial(mix.material1, mix.material2, mix.amount, key1, key2)
-    interface = MediumInterface(resolved)
-    return push!(scene, interface)
-end
-
 # SBT slot for the most recently pushed material. The materials set converts
 # texture wrappers to bare scalars at push! time (e.g. `Diffuse{Texture{RGB,
 # 0, Array{RGB, 0}}, ...}` → `Diffuse{RGB, Float32}`), so the type that ends
@@ -181,6 +172,10 @@ end
 
 # Evaluate emission Le: textured or constant
 evaluate_face_emission(Le::Texture, face_uv) = evaluate_texture(Le, Point2f((Vec2f(face_uv[1]) + Vec2f(face_uv[2]) + Vec2f(face_uv[3])) / 3f0))
+# Emissive stores Le as a handle; area lights are always specified as constants
+# in pbrt (`AreaLightSource "diffuse" "rgb L"`), so `const_spectrum` errors
+# loudly rather than silently registering a black light if that ever changes.
+evaluate_face_emission(Le::TexHandle, face_uv) = const_spectrum(Le)
 evaluate_face_emission(Le, face_uv) = Le
 
 # ============================================================================

@@ -42,8 +42,8 @@ end
     get_perturbed_shading_frame(materials, idx, ns, dpdus, tfc) -> (ns', dpdus')
 
 Type-stable dispatch that returns the bump-perturbed shading frame for a
-material. Default (any non-BumpMapped material) is identity; `BumpMapped`
-overrides to invoke `perturb_bump_frame`.
+material. Materials without a `displacement` height field (or with an unset
+one) return the frame untouched.
 
 This used to live inside `BumpMapped`'s `sample_bsdf_spectral` wrapper but
 the perturbation never reached the path-integrator's `cos_theta = dot(wi,
@@ -62,23 +62,23 @@ BSDF, MIS, and direct-lighting paths all see the same shading frame.
                       materials, ns, dpdus, dpdu, dpdv, dndu, dndv, ng, tfc)
 end
 
-# Default: any material that isn't BumpMapped leaves the frame untouched.
-# Non-bump materials want the normalized shading tangent `dpdus`; only
-# BumpMapped consumes the unnormalized geometric `dpdu` / `dpdv`.
-@inline perturb_shading_frame_impl(::Material, materials, ns::Vec3f,
-                                   dpdus::Vec3f, ::Vec3f, ::Vec3f,
-                                   ::Vec3f, ::Vec3f, ::Vec3f,
-                                   ::TextureFilterContext) =
-    (ns, dpdus)
-
-@inline function perturb_shading_frame_impl(mat::BumpMapped, materials,
-                                            ns::Vec3f, ::Vec3f,
-                                            dpdu::Vec3f, dpdv::Vec3f,
-                                            dndu::Vec3f, dndv::Vec3f,
-                                            ng::Vec3f,
-                                            tfc::TextureFilterContext)
-    return perturb_bump_frame(mat.bump, materials, ns, dpdu, dpdv,
-                              dndu, dndv, ng, tfc)
+# One implementation for every material: read the `displacement` handle (a
+# compile-time-NONE constant for material types without the field, so the whole
+# body folds away there) and perturb only when it names something.
+#
+# Un-bumped materials want the normalized shading tangent `dpdus`; the bumped
+# branch consumes the unnormalized geometric `dpdu` / `dpdv`, per pbrt-v4
+# shapes.h:959.
+@propagate_inbounds function perturb_shading_frame_impl(
+    mat::Material, materials,
+    ns::Vec3f, dpdus::Vec3f,
+    dpdu::Vec3f, dpdv::Vec3f,
+    dndu::Vec3f, dndv::Vec3f,
+    ng::Vec3f, tfc::TextureFilterContext,
+)
+    h = displacement(mat)
+    is_none(h) && return (ns, dpdus)
+    return perturb_bump_frame(h, materials, ns, dpdu, dpdv, dndu, dndv, ng, tfc)
 end
 
 
@@ -131,3 +131,16 @@ Returns alpha ∈ [0, 1] where 0 = fully transparent, 1 = fully opaque.
 )::Float32
     return with_index(get_surface_alpha, materials, idx, materials, uv)
 end
+
+
+# ============================================================================
+# Push-time conversion hook
+# ============================================================================
+#
+# `Raycore.MultiTypeSet` calls `maybe_convert_field` on every item it stores.
+# For materials Hikari takes over completely: `to_device_material` rewrites the
+# texture-carrying fields into `TexHandle`s (storing whatever needs a slot),
+# which is what collapses "same material, different parameter spelling" into a
+# single concrete type and therefore a single closest-hit shader.
+Raycore.maybe_convert_field(dhv::Raycore.MultiTypeSet, m::Material) =
+    to_device_material(dhv, m)

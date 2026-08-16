@@ -15,7 +15,7 @@
 # before creating material evaluation work items.
 
 """
-    MixMaterial{M1, M2, AmountTex}
+    MixMaterial
 
 A material that stochastically blends between two sub-materials based on a mixing amount.
 
@@ -25,63 +25,85 @@ Following pbrt-v4, the material selection is deterministic based on:
 - The `amount` texture value at the hit point
 
 # Fields
-- `material1`: First material (selected when amount → 0)
-- `material2`: Second material (selected when amount → 1)
-- `amount`: Texture controlling the blend ratio (0 = material1, 1 = material2)
-- `material1_idx`: Index of material1 in the materials tuple
-- `material2_idx`: Index of material2 in the materials tuple
+- `amount`: blend ratio (0 = material1, 1 = material2)
+- `material1_idx`: scene-materials key of the first sub-material
+- `material2_idx`: scene-materials key of the second sub-material
 
 # Usage
 MixMaterial is resolved at intersection time before material evaluation.
 The integrator should call `choose_material()` to get the actual material index
 to use for the hit point, then proceed with normal material evaluation.
 """
-struct MixMaterial{M1<:Material, M2<:Material, AmountTex} <: Material
-    material1::M1
-    material2::M2
-    amount::AmountTex
-    # Material indices, resolved when pushed to scene
+# NON-PARAMETRIC, and that matters more here than anywhere else: the
+# MixMaterial closest-hit shader has to dispatch over EVERY material type in
+# the scene (see rt-pipeline.jl `T <: MixMaterial`), so it inlines the whole
+# shading system. One MixMaterial type per distinct sub-material PAIR therefore
+# cost a full copy of that shader each — the two Crown mixes were the single
+# largest item in its compile time.
+#
+# pbrt-v4 has the same shape: `MixMaterial` holds `Material materials[2]`,
+# where `Material` is a TaggedPointer into a heterogeneous pool. `SetKey` is
+# our TaggedPointer, so the sub-materials are referenced, not embedded. The
+# consequence is that a MixMaterial can only be built against a scene, since
+# that is what hands out the keys.
+struct MixMaterial{AmountT} <: Material
+    amount::AmountT
     material1_idx::SetKey
     material2_idx::SetKey
 end
 
-# No explicit positional constructor: the synthesized
-# `MixMaterial(material1, material2, amount, material1_idx, material2_idx)`
-# already accepts any amount value (Texture, CheckerboardTexture, raw
-# Float32, TextureRef). Re-declaring it with the identical signature is a
-# method overwrite, which breaks precompilation.
+"""
+    MixMaterialSpec(material1, material2, amount)
+
+Host-side form of a [`MixMaterial`](@ref), holding the two sub-materials
+themselves rather than their keys. A `Scene` hands out keys only at push time,
+and materials are routinely built before any scene exists (RayMakie constructs
+them inside a plot's argument-conversion node), so the mix carries its
+sub-materials until then. `resolve_material` turns it into the device form.
+"""
+struct MixMaterialSpec{M1 <: Material, M2 <: Material, AmountT} <: Material
+    material1::M1
+    material2::M2
+    amount::AmountT
+end
+
+is_emissive(::MixMaterialSpec) = false
 
 """
-    MixMaterial(; materials, amount)
+    MixMaterial(scene; materials, amount)
 
-Create a MixMaterial that blends between two sub-materials.
-
-Sub-material indices are resolved automatically when the material is pushed to a scene.
+Create a MixMaterial that blends between two sub-materials, pushing both into
+`scene`'s material set to obtain their keys.
 
 # Arguments
 - `materials`: Tuple of two materials (material1, material2)
-- `amount`: Mixing amount (0-1 scalar, texture, or image path). 0 = material1, 1 = material2.
+- `amount`: Mixing amount (0-1 scalar or texture handle). 0 = material1, 1 = material2.
 
 # Examples
 ```julia
-MixMaterial(materials=(gold, diffuse), amount=0.5)
-MixMaterial(materials=(gold, diffuse), amount=mask_texture)
+MixMaterial(scene; materials=(gold, diffuse), amount=0.5)
+MixMaterial(scene; materials=(gold, diffuse), amount=mask_handle)
 ```
 """
 function MixMaterial(;
     materials::Tuple{<:Material, <:Material},
     amount=0.5f0,
-    material_indices::Union{Tuple{SetKey, SetKey}, Nothing}=nothing
 )
-    idx1 = material_indices !== nothing ? material_indices[1] : SetKey()
-    idx2 = material_indices !== nothing ? material_indices[2] : SetKey()
-    MixMaterial(
-        materials[1],
-        materials[2],
-        to_texture(amount),
-        idx1,
-        idx2
-    )
+    return MixMaterialSpec(materials[1], materials[2], matparam(amount))
+end
+
+"""
+    resolve_material(scene, mat) -> mat
+
+Turn any host-only material form into the one that is stored on the device.
+Only `MixMaterialSpec` needs it today: its sub-materials must be pushed first
+so the mix can reference them by `SetKey`.
+"""
+resolve_material(scene, mat::Material) = mat
+function resolve_material(scene, spec::MixMaterialSpec)
+    key1 = push!(scene.materials, resolve_material(scene, spec.material1))
+    key2 = push!(scene.materials, resolve_material(scene, spec.material2))
+    return MixMaterial(spec.amount, key1, key2)
 end
 
 # MixMaterial is not directly emissive (emission comes from chosen sub-material)
@@ -166,7 +188,7 @@ This function is called at intersection time, before material evaluation.
     mix::MixMaterial, ctx::StaticMultiTypeSet,
     p::Point3f, wo::Vec3f, uv::Point2f
 )::SetKey
-    amt = eval_tex(ctx, mix.amount, uv)
+    amt = eval_handle(ctx, mix.amount, TextureFilterContext(uv))
 
     # Early exit for boundary cases
     if amt <= 0f0

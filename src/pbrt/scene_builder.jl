@@ -152,8 +152,17 @@ function build_hikari_scene(pbrt::PBRTScene;
     samples !== nothing && (int_samples = samples)
     max_depth !== nothing && (int_max_depth = max_depth)
 
-    # --- Build textures ---
-    hikari_textures = build_pbrt_textures(pbrt)
+    # --- Build scene first ---
+    # The scene owns the texture store (`scene.materials`, a MultiTypeSet), and
+    # image textures must be pushed into it BEFORE materials are constructed:
+    # a material's texture parameters are now `TexHandle`s carrying a runtime
+    # `(slot, idx)`, which only exists once the array has been stored. Building
+    # the scene here rather than after the material cache is what makes the
+    # non-parametric material structs possible.
+    scene = Scene(; backend=backend, hw_accel=hw_accel)
+
+    # --- Build textures (pushed into the scene's store, returned as handles) ---
+    hikari_textures = build_pbrt_textures(pbrt, scene)
 
     # --- Build materials cache ---
     mat_cache = Dict{String, Material}()
@@ -162,7 +171,7 @@ function build_hikari_scene(pbrt::PBRTScene;
             is_mix = lowercase(entity.type) == "mix"
             is_mix == pass || continue
             haskey(mat_cache, name) && continue
-            mat_cache[name] = _wrap_with_bump(
+            mat_cache[name] = _attach_bump(
                 build_pbrt_material(entity, pbrt, hikari_textures, mat_cache),
                 entity, hikari_textures)
         end
@@ -175,9 +184,6 @@ function build_hikari_scene(pbrt::PBRTScene;
         med = build_pbrt_medium(entity, pbrt, transform)
         med !== nothing && (media_cache[name] = med)
     end
-
-    # --- Build scene ---
-    scene = Scene(; backend=backend, hw_accel=hw_accel)
 
     # Add standalone lights
     for lrec in pbrt.lights
@@ -205,7 +211,7 @@ function build_hikari_scene(pbrt::PBRTScene;
             Le_spectrum = rgb_illuminant_spectrum(table,
                 RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
             al_scale /= spectrum_to_photometric(Le_spectrum)
-            emissive = Emissive(to_texture(Le), al_scale, two_sided)
+            emissive = Emissive(TexHandle(Le), al_scale, two_sided)
             push!(scene, mesh, MediumInterface(mat;
                 emission=emissive, inside=inside_medium, outside=outside_medium))
         elseif inside_medium !== nothing || outside_medium !== nothing
@@ -396,7 +402,9 @@ end
 # Texture building from pbrt named textures
 # ============================================================================
 
-function build_pbrt_textures(pbrt::PBRTScene)
+build_pbrt_textures(pbrt::PBRTScene) = build_pbrt_textures(pbrt, nothing)
+
+function build_pbrt_textures(pbrt::PBRTScene, scene)
     textures = Dict{String, Any}()
     # Two passes: build base textures first, then derived (scale) textures
     for pass in (false, true)
@@ -523,29 +531,57 @@ function build_pbrt_textures(pbrt::PBRTScene)
         end
     end  # for (name, tex_entity)
     end  # for pass
-    return textures
+
+    # Convert every built texture into a `TexHandle`, storing the out-of-line
+    # ones in the scene's texture store as we go.
+    #
+    # This is the step that lets material structs be non-parametric: a material
+    # field holds a handle carrying a runtime `(slot, idx)`, so whether a
+    # parameter is a constant, an image map or a procedural no longer changes
+    # the material's TYPE — and therefore no longer multiplies closest-hit
+    # shaders.
+    # Without a scene there is nowhere to put them yet; the materials keep the
+    # raw textures and `to_device_material` stores them at push time. That is
+    # correct but stores one copy per material, so the scene-ful path — every
+    # pbrt render — is the one to use when there is a choice.
+    scene === nothing && return textures
+    handles = Dict{String, TexHandle}()
+    for (name, tex) in textures
+        handles[name] = store_texture_handle(scene, tex)
+    end
+    return handles
 end
 
-# Wrap a material in a `BumpMapped` if the pbrt entity has a `displacement`,
-# `bumpmap`, or `normalmap` parameter pointing at a named float texture. pbrt-v4
-# master uses `displacement`; older `.pbrt` files use `bumpmap`. Both are float
-# height fields read via finite differences in the BSDF dispatch.
-function _wrap_with_bump(mat::Material, entity::PBRTEntity, textures::Dict{String, Any})
+"""
+    store_texture_handle(scene, tex) -> TexHandle
+
+Turn a built texture into a handle, pushing it into the scene's texture store
+when it cannot live inline. Building the handles once here (rather than letting
+each material store its own copy at push time) is what keeps a pbrt scene from
+uploading the same image map once per material that references it.
+"""
+store_texture_handle(scene, tex) = device_param(scene.materials, tex)
+
+# Attach the entity's height field to the material's `displacement` field.
+# pbrt-v4 master uses `displacement`; older `.pbrt` files use `bumpmap`. Both
+# are float height fields read via finite differences at intersection time.
+function _attach_bump(mat::Material, entity::PBRTEntity, textures::AbstractDict{String})
     for key in ("displacement", "bumpmap", "normalmap")
         haskey(entity.params, key) || continue
         p = entity.params[key]
         isempty(p.values) && continue
         tex_name = p.values[1]
         tex_name isa AbstractString || continue
-        tex = get(textures, String(tex_name), nothing)
-        tex === nothing && continue
-        return BumpMapped(mat, tex)
+        h = get(textures, String(tex_name), nothing)
+        h === nothing && continue
+        return set_displacement(mat, TexHandle(h))
     end
     return mat
 end
 
 """Get a material parameter as a texture or constant, resolving named texture references."""
-function pbrt_get_texture(entity::PBRTEntity, name::String, textures::Dict{String, Any}, default_rgb)
+function pbrt_get_texture(entity::PBRTEntity, name::String,
+                          textures::AbstractDict{String}, default_rgb)
     if haskey(entity.params, name)
         p = entity.params[name]
         if p.type == :texture && !isempty(p.values) && p.values[1] isa String
@@ -556,11 +592,11 @@ function pbrt_get_texture(entity::PBRTEntity, name::String, textures::Dict{Strin
         end
     end
     # Fall back to constant
-    rgb = pbrt_get_rgb(entity, name, default_rgb)
-    return rgb
+    return TexHandle(pbrt_get_rgb(entity, name, default_rgb))
 end
 
-function pbrt_get_float_texture(entity::PBRTEntity, name::String, textures::Dict{String, Any}, default_val)
+function pbrt_get_float_texture(entity::PBRTEntity, name::String,
+                                textures::AbstractDict{String}, default_val)
     if haskey(entity.params, name)
         p = entity.params[name]
         if !isempty(p.values) && p.values[1] isa AbstractString
@@ -568,14 +604,14 @@ function pbrt_get_float_texture(entity::PBRTEntity, name::String, textures::Dict
             tex_name = String(p.values[1])
             haskey(textures, tex_name) && return textures[tex_name]
             @warn "pbrt: float texture '$tex_name' not found, using default $default_val"
-            return Float32(default_val)
+            return TexHandle(Float32(default_val))
         end
     end
-    return Float32(pbrt_get_float(entity, name, Float64(default_val)))
+    return TexHandle(Float32(pbrt_get_float(entity, name, Float64(default_val))))
 end
 
 function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
-                             textures::Dict{String, Any}=Dict{String,Any}(),
+                             textures::AbstractDict{String}=Dict{String,TexHandle}(),
                              mat_cache::Dict{String, Material}=Dict{String,Material}())
     type = lowercase(entity.type)
 
@@ -585,13 +621,16 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
 
     elseif type == "conductor"
         rough = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
-        if rough isa AnyTexture
-            urough = rough; vrough = rough
+        # pbrt's `uroughness`/`vroughness` default to `roughness`; that fold is
+        # only meaningful when `roughness` itself is a constant.
+        combined_rough = if is_const_float(rough)
+            rv = Float64(rough.f)
+            urough = Float32(pbrt_get_float(entity, "uroughness", rv))
+            vrough = Float32(pbrt_get_float(entity, "vroughness", rv))
+            TexHandle(max(urough, vrough))
         else
-            urough = Float32(pbrt_get_float(entity, "uroughness", Float64(rough)))
-            vrough = Float32(pbrt_get_float(entity, "vroughness", Float64(rough)))
+            rough
         end
-        combined_rough = rough isa AnyTexture ? rough : max(urough, vrough)
         remap = pbrt_get_bool(entity, "remaproughness", true)
         # Check for named spectra (gold, silver, copper, etc.)
         eta_str = pbrt_get_string(entity, "eta", "")
@@ -624,7 +663,7 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
     elseif type == "dielectric"
         eta = Float32(pbrt_get_float(entity, "eta", 1.5))
         rough_base = pbrt_get_float_texture(entity, "roughness", textures, 0.0)
-        rough_scalar = rough_base isa AnyTexture ? 0f0 : Float32(rough_base)
+        rough_scalar = const_float(rough_base, 0f0)
         urough = pbrt_get_float_texture(entity, "uroughness", textures, Float64(rough_scalar))
         vrough = pbrt_get_float_texture(entity, "vroughness", textures, Float64(rough_scalar))
         remap = pbrt_get_bool(entity, "remaproughness", true)
@@ -736,7 +775,7 @@ function build_pbrt_material(entity::PBRTEntity, pbrt::PBRTScene,
 end
 
 function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Material},
-                               pbrt::PBRTScene; textures::Dict{String,Any}=Dict{String,Any}())
+                               pbrt::PBRTScene; textures::AbstractDict{String}=Dict{String,TexHandle}())
     entity = if srec.material_name !== nothing
         name = srec.material_name
         if haskey(mat_cache, name)
@@ -755,7 +794,7 @@ function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Ma
 
     mat = build_pbrt_material(entity, pbrt, textures, mat_cache)
     if mat !== nothing
-        return _wrap_with_bump(mat, entity, textures)
+        return _attach_bump(mat, entity, textures)
     end
     return Diffuse(Kd=(0.5, 0.5, 0.5))
 end

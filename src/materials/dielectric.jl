@@ -18,13 +18,17 @@ Glass/dielectric material with reflection and transmission.
 * `index`: Index of refraction
 * `remap_roughness`: Whether to remap roughness to alpha
 """
-struct Dielectric{KrTex, KtTex, URoughTex, VRoughTex, IndexTex} <: Material
-    Kr::KrTex           # Texture, Raycore.TextureRef, or raw RGBSpectrum
-    Kt::KtTex           # Texture, Raycore.TextureRef, or raw RGBSpectrum
-    u_roughness::URoughTex  # Texture, Raycore.TextureRef, or raw Float32
-    v_roughness::VRoughTex  # Texture, Raycore.TextureRef, or raw Float32
-    index::IndexTex     # Texture, Raycore.TextureRef, or raw Float32
+# Non-parametric texture parameters: constant-vs-texture must not change the
+# material's TYPE. Spectral IOR fields stay parametric because a
+# PiecewiseLinearSpectrum cannot live inline in a handle.
+struct Dielectric{KrT, KtT, URoughT, VRoughT, IndexT} <: Material
+    Kr::KrT
+    Kt::KtT
+    u_roughness::URoughT
+    v_roughness::VRoughT
+    index::IndexT
     remap_roughness::Bool
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 """
@@ -52,7 +56,8 @@ function Dielectric(;
     Kt=RGBSpectrum(1f0),
     roughness=0f0,
     index=1.5f0,
-    remap_roughness=true
+    remap_roughness=true,
+    bump=nothing,
 )
     # Handle roughness - can be single value or (u, v) tuple
     if roughness isa Tuple
@@ -61,9 +66,9 @@ function Dielectric(;
         u_rough = v_rough = roughness
     end
     Dielectric(
-        to_texture(Kr), to_texture(Kt),
-        to_texture(u_rough), to_texture(v_rough),
-        to_texture(index), remap_roughness
+        matparam(Kr), matparam(Kt),
+        matparam(u_rough), matparam(v_rough),
+        matparam(index), remap_roughness, TexHandle(bump)
     )
 end
 
@@ -114,15 +119,12 @@ film = ThinDielectric(eta=1.4)
 """
 struct ThinDielectric{E} <: Material
     eta::E  # Float32 or PiecewiseLinearSpectrum
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # Keyword constructor
-function ThinDielectric(; eta=1.5f0)
-    if eta isa PiecewiseLinearSpectrum
-        ThinDielectric(eta)
-    else
-        ThinDielectric(Float32(eta))
-    end
+function ThinDielectric(; eta=1.5f0, bump=nothing)
+    ThinDielectric(matparam(eta), TexHandle(bump))
 end
 
 # Mark as non-emissive
@@ -138,6 +140,8 @@ is_emissive(::ThinDielectric) = false
 @inline eval_dielectric_ior(textures, idx::PiecewiseLinearSpectrum, tfc, lambda) =
     (sample(idx, lambda.lambda[1]), true)
 # Scalar/texture IOR → not dispersive
+@propagate_inbounds eval_dielectric_ior(textures, idx::TexHandle, tfc, lambda) =
+    (eval_handle(textures, idx, tfc), false)
 @inline function eval_dielectric_ior(textures, idx, tfc, lambda)
     ior = eval_tex(textures, idx, tfc)
     return (ior, false)
@@ -160,8 +164,8 @@ Uses Fresnel to choose between reflection and transmission.
     regularize::Bool = false
 )
     # Get material properties
-    kr_rgb = eval_tex(textures, mat.Kr, tfc)
-    kt_rgb = eval_tex(textures, mat.Kt, tfc)
+    kr_rgb = eval_handle_spectrum(textures, mat.Kr, tfc)
+    kt_rgb = eval_handle_spectrum(textures, mat.Kt, tfc)
 
     # Evaluate IOR — pbrt-v4 DielectricMaterial::GetBxDF:
     # Float sampledEta = eta(lambda[0]);
@@ -175,8 +179,8 @@ Uses Fresnel to choose between reflection and transmission.
     kt_spectral = uplift_rgb(table, kt_rgb, lambda)
 
     # Get roughness and compute alpha
-    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
-    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
+    u_roughness = eval_handle(textures, mat.u_roughness, tfc)
+    v_roughness = eval_handle(textures, mat.v_roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
 
@@ -260,8 +264,8 @@ end
     ior, _ = eval_dielectric_ior(textures, mat.index, tfc, lambda)
     ior == 0f0 && (ior = 1f0)
 
-    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
-    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
+    u_roughness = eval_handle(textures, mat.u_roughness, tfc)
+    v_roughness = eval_handle(textures, mat.v_roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
 
@@ -277,8 +281,8 @@ end
     end
 
     # Delegate to eval_dielectric_interface (same code used by CoatedDiffuse/CoatedConductor)
-    kr_rgb = eval_tex(textures, mat.Kr, tfc)
-    kt_rgb = eval_tex(textures, mat.Kt, tfc)
+    kr_rgb = eval_handle_spectrum(textures, mat.Kr, tfc)
+    kt_rgb = eval_handle_spectrum(textures, mat.Kt, tfc)
     kr_spectral = uplift_rgb(table, kr_rgb, lambda)
     kt_spectral = uplift_rgb(table, kt_rgb, lambda)
 

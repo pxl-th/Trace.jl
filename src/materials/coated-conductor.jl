@@ -45,62 +45,51 @@ sampling between the layers (LayeredBxDF algorithm).
 - **Critical:** Conductor eta/k are scaled by interface IOR: ce /= ieta, ck /= ieta
 - If `conductor_eta` is nothing, uses reflectance-based approach
 """
-struct CoatedConductor{
-    IURoughTex, IVRoughTex,
-    CETex, CKTex, CURoughTex, CVRoughTex,
-    ThickTex, AlbedoTex, GTex
-} <: Material
+# Non-parametric texture parameters: constant-vs-texture must not change the
+# material's TYPE. Spectral IOR fields stay parametric because a
+# PiecewiseLinearSpectrum cannot live inline in a handle.
+struct CoatedConductor{IURoughT, IVRoughT, CETex, CKTex, CURoughT, CVRoughT, ThickT, AlbedoT, GT} <: Material
     # Interface parameters
-    interface_u_roughness::IURoughTex  # Texture{Float32}
-    interface_v_roughness::IVRoughTex  # Texture{Float32}
+    interface_u_roughness::IURoughT
+    interface_v_roughness::IVRoughT
     interface_eta::Float32             # Scalar IOR for interface
 
     # Conductor parameters — always eta/k (reflectance is converted at construction time)
     conductor_eta::CETex               # Spectral complex IOR real part
     conductor_k::CKTex                 # Spectral complex IOR imaginary part
-    conductor_u_roughness::CURoughTex  # Texture{Float32}
-    conductor_v_roughness::CVRoughTex  # Texture{Float32}
+    conductor_u_roughness::CURoughT
+    conductor_v_roughness::CVRoughT
 
     # Volumetric scattering
-    thickness::ThickTex                # Texture{Float32}
-    albedo::AlbedoTex                  # Texture{RGBSpectrum} - medium albedo
-    g::GTex                            # Texture{Float32} - HG asymmetry
+    thickness::ThickT
+    albedo::AlbedoT
+    g::GT
 
     # Algorithm parameters
     max_depth::Int32
     n_samples::Int32
     remap_roughness::Bool
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
 # Full constructor with all textures. Texture args are unannotated on purpose:
 # fields accept any texture-like value (Texture, CheckerboardTexture, raw
 # constants, TextureRef).
 function CoatedConductor(
-    interface_u_roughness,
-    interface_v_roughness,
-    interface_eta::Float32,
-    conductor_eta,  # Spectral or Texture — always required
-    conductor_k,    # Spectral or Texture — always required
-    conductor_u_roughness,
-    conductor_v_roughness,
-    thickness,
-    albedo,
-    g,
-    max_depth::Int,
-    n_samples::Int,
-    remap_roughness::Bool
+    interface_u_roughness, interface_v_roughness, interface_eta::Float32,
+    conductor_eta,  # PiecewiseLinearSpectrum (named metal) or RGB-ish
+    conductor_k,
+    conductor_u_roughness, conductor_v_roughness,
+    thickness, albedo, g, max_depth::Int, n_samples::Int,
+    remap_roughness::Bool, displacement = TexHandle(),
 )
-    CoatedConductor{
-        typeof(interface_u_roughness), typeof(interface_v_roughness),
-        typeof(conductor_eta), typeof(conductor_k),
-        typeof(conductor_u_roughness), typeof(conductor_v_roughness),
-        typeof(thickness), typeof(albedo), typeof(g)
-    }(
-        interface_u_roughness, interface_v_roughness, interface_eta,
-        conductor_eta, conductor_k,
-        conductor_u_roughness, conductor_v_roughness,
-        thickness, albedo, g,
-        Int32(max_depth), Int32(n_samples), remap_roughness,
+    CoatedConductor(
+        matparam(interface_u_roughness), matparam(interface_v_roughness),
+        interface_eta,
+        matparam(conductor_eta), matparam(conductor_k),
+        matparam(conductor_u_roughness), matparam(conductor_v_roughness),
+        matparam(thickness), matparam(albedo), matparam(g),
+        Int32(max_depth), Int32(n_samples), remap_roughness, TexHandle(displacement),
     )
 end
 
@@ -169,7 +158,8 @@ function CoatedConductor(;
     # Algorithm
     max_depth::Int = 10,
     n_samples::Int = 1,
-    remap_roughness::Bool = true
+    remap_roughness::Bool = true,
+    bump = nothing,
 )
     iu_rough, iv_rough = if interface_roughness isa Tuple
         Float32(interface_roughness[1]), Float32(interface_roughness[2])
@@ -208,11 +198,11 @@ function CoatedConductor(;
     end
 
     CoatedConductor(
-        to_texture(iu_rough), to_texture(iv_rough), Float32(interface_eta),
-        to_texture(ce), to_texture(ck),
-        to_texture(cu_rough), to_texture(cv_rough),
-        to_texture(Float32(thickness)), to_texture(albedo), to_texture(Float32(g)),
-        max_depth, n_samples, remap_roughness,
+        iu_rough, iv_rough, Float32(interface_eta),
+        ce, ck,
+        cu_rough, cv_rough,
+        Float32(thickness), albedo, Float32(g),
+        max_depth, n_samples, remap_roughness, TexHandle(bump),
     )
 end
 
@@ -265,13 +255,13 @@ end
     ieta = mat.interface_eta
     ieta == 0f0 && (ieta = 1f0)
 
-    iu_roughness = eval_tex(textures, mat.interface_u_roughness, tfc)
-    iv_roughness = eval_tex(textures, mat.interface_v_roughness, tfc)
+    iu_roughness = eval_handle(textures, mat.interface_u_roughness, tfc)
+    iv_roughness = eval_handle(textures, mat.interface_v_roughness, tfc)
     i_alpha_x = mat.remap_roughness ? roughness_to_α(iu_roughness) : iu_roughness
     i_alpha_y = mat.remap_roughness ? roughness_to_α(iv_roughness) : iv_roughness
 
-    cu_roughness = eval_tex(textures, mat.conductor_u_roughness, tfc)
-    cv_roughness = eval_tex(textures, mat.conductor_v_roughness, tfc)
+    cu_roughness = eval_handle(textures, mat.conductor_u_roughness, tfc)
+    cv_roughness = eval_handle(textures, mat.conductor_v_roughness, tfc)
     c_alpha_x = mat.remap_roughness ? roughness_to_α(cu_roughness) : cu_roughness
     c_alpha_y = mat.remap_roughness ? roughness_to_α(cv_roughness) : cv_roughness
 
@@ -288,9 +278,9 @@ end
     ce_spectral = eval_ior_spectral(table, textures, mat.conductor_eta, tfc, lambda) / ieta
     ck_spectral = eval_ior_spectral(table, textures, mat.conductor_k,   tfc, lambda) / ieta
 
-    thickness  = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
-    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    g_val      = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
+    thickness  = max(eval_handle(textures, mat.thickness, tfc), eps(Float32))
+    albedo_rgb = eval_handle_spectrum(textures, mat.albedo, tfc)
+    g_val      = clamp(eval_handle(textures, mat.g, tfc), -0.99f0, 0.99f0)
 
     return CoatedConductorEvaluated(
         ce_spectral, ck_spectral, uplift_rgb(table, albedo_rgb, lambda),

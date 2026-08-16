@@ -29,39 +29,34 @@ sampling between the layers (LayeredBxDF algorithm).
 - `n_samples`: Number of samples for estimating the BSDF
 - `remap_roughness`: Whether to remap roughness to microfacet alpha
 """
-struct CoatedDiffuse{ReflTex, URoughTex, VRoughTex, ThickTex, AlbedoTex, GTex} <: Material
-    reflectance::ReflTex    # Texture{RGBSpectrum} - diffuse color
-    u_roughness::URoughTex  # Texture{Float32}
-    v_roughness::VRoughTex  # Texture{Float32}
-    thickness::ThickTex     # Texture{Float32}
+# Non-parametric texture parameters: constant-vs-texture must not change the
+# material's TYPE, or the per-material chit path compiles a separate shader per
+# combination.
+struct CoatedDiffuse{ReflT, URoughT, VRoughT, ThickT, AlbedoT, GT} <: Material
+    reflectance::ReflT
+    u_roughness::URoughT
+    v_roughness::VRoughT
+    thickness::ThickT
     eta::Float32            # Index of refraction
-    albedo::AlbedoTex       # Texture{RGBSpectrum} - medium albedo (0 = no medium)
-    g::GTex                 # Texture{Float32} - HG asymmetry
+    albedo::AlbedoT
+    g::GT
     max_depth::Int32
     n_samples::Int32
     remap_roughness::Bool
+    displacement::TexHandle   # pbrt-v4 `Material::displacement` height field (NONE = flat)
 end
 
-# Full constructor. Texture args are unannotated on purpose: fields accept any
-# texture-like value (Texture, CheckerboardTexture, raw constants, TextureRef).
+# Positional constructor taking Ints for the two counters; the struct's own
+# synthesized constructor converts every other argument through `TexHandle`.
 function CoatedDiffuse(
-    reflectance,
-    u_roughness,
-    v_roughness,
-    thickness,
-    eta::Float32,
-    albedo,
-    g,
-    max_depth::Int,
-    n_samples::Int,
-    remap_roughness::Bool
+    reflectance, u_roughness, v_roughness, thickness, eta::Float32,
+    albedo, g, max_depth::Int, n_samples::Int, remap_roughness::Bool,
+    displacement = TexHandle(),
 )
-    CoatedDiffuse{
-        typeof(reflectance), typeof(u_roughness), typeof(v_roughness),
-        typeof(thickness), typeof(albedo), typeof(g)
-    }(
-        reflectance, u_roughness, v_roughness, thickness,
-        eta, albedo, g, Int32(max_depth), Int32(n_samples), remap_roughness
+    CoatedDiffuse(
+        matparam(reflectance), matparam(u_roughness), matparam(v_roughness),
+        matparam(thickness), eta, matparam(albedo), matparam(g),
+        Int32(max_depth), Int32(n_samples), remap_roughness, TexHandle(displacement),
     )
 end
 
@@ -102,7 +97,8 @@ function CoatedDiffuse(;
     g = 0f0,
     max_depth::Int = 10,
     n_samples::Int = 1,
-    remap_roughness::Bool = true
+    remap_roughness::Bool = true,
+    bump = nothing,
 )
     # Handle roughness - can be scalar, (u,v) tuple, or Texture{Float32}
     u_rough, v_rough = if roughness isa Tuple
@@ -112,16 +108,17 @@ function CoatedDiffuse(;
     end
 
     CoatedDiffuse(
-        to_texture(reflectance),
-        to_texture(u_rough),
-        to_texture(v_rough),
-        to_texture(Float32(thickness)),
+        matparam(reflectance),
+        matparam(u_rough),
+        matparam(v_rough),
+        matparam(thickness),
         Float32(eta),
-        to_texture(albedo),
-        to_texture(Float32(g)),
+        matparam(albedo),
+        matparam(g),
         max_depth,
         n_samples,
-        remap_roughness
+        remap_roughness,
+        TexHandle(bump),
     )
 end
 
@@ -172,13 +169,13 @@ end
     mat::CoatedDiffuse, table::RGBToSpectrumTable, textures,
     tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
 )
-    refl_rgb   = eval_tex(textures, mat.reflectance, tfc)
-    albedo_rgb = eval_tex(textures, mat.albedo, tfc)
-    thickness  = max(eval_tex(textures, mat.thickness, tfc), eps(Float32))
-    g_val      = clamp(eval_tex(textures, mat.g, tfc), -0.99f0, 0.99f0)
+    refl_rgb   = eval_handle_spectrum(textures, mat.reflectance, tfc)
+    albedo_rgb = eval_handle_spectrum(textures, mat.albedo, tfc)
+    thickness  = max(eval_handle(textures, mat.thickness, tfc), eps(Float32))
+    g_val      = clamp(eval_handle(textures, mat.g, tfc), -0.99f0, 0.99f0)
 
-    u_roughness = eval_tex(textures, mat.u_roughness, tfc)
-    v_roughness = eval_tex(textures, mat.v_roughness, tfc)
+    u_roughness = eval_handle(textures, mat.u_roughness, tfc)
+    v_roughness = eval_handle(textures, mat.v_roughness, tfc)
     alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
     alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
     if regularize
