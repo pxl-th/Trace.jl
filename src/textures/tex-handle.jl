@@ -92,8 +92,6 @@ Base.convert(::Type{TexHandle}, v::Union{Real, RGBSpectrum, Colorant, Tuple{Real
 # still be folded into a scalar (pbrt's `uroughness` defaults to `roughness`,
 # which is only meaningful when `roughness` is a constant).
 @inline is_const_float(h::TexHandle) = h.kind == TexKind.CONST_FLOAT
-@inline is_inline_constant(h::TexHandle) =
-    h.kind == TexKind.CONST_FLOAT || h.kind == TexKind.CONST_SPECTRUM || h.kind == TexKind.NONE
 
 """
     const_float(h, default) -> Float32

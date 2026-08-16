@@ -285,8 +285,8 @@ end
 
             # Apply BumpMap perturbation here so the path integrator (cos
             # factors, MIS, direct lighting) sees the bumped shading frame.
-            # Without this, BumpMapped only patched the BSDF interior and the
-            # cos_theta = dot(wi, ns) in surface-eval.jl still used the raw
+            # Applying it inside the BSDF instead left the
+            # cos_theta = dot(wi, ns) in surface-eval.jl using the raw
             # interpolated normal, hiding the bump on mirror conductors.
             #
             # Use real ray differentials (pbrt-v4 ComputeDifferentials): the
@@ -354,7 +354,7 @@ end
             geom = vp_compute_surface_geometry(primitive, barycentric, ray.o, ray.d, t_hit)
 
             # See identical block in the medium branch above — the bump
-            # perturbation must happen here, not inside BumpMapped's BSDF
+            # perturbation must happen here, not inside the BSDF
             # wrapper, so cos factors downstream use the bumped normal.
             # pbrt-v4 ComputeDifferentials falls back to the camera-
             # approximated dp/dxy for EVERY hit (interaction.cpp:138), so the
