@@ -1,5 +1,21 @@
 # GPU-safe integer conversion helpers (avoid InexactError)
 u_int32(x) = Base.unsafe_trunc(Int32, x)
+
+# Unchecked unsigned div/rem, for operands known to be non-negative.
+#
+# `div`/`mod` on signed integers emit a div-by-zero guard and an INT_MIN/-1
+# guard. Both are throw paths, and a throw cannot exist on a GPU: it compiles
+# to error-reporting machinery that can never run, and — per Lava's own note in
+# `device/quirks.jl` — the resulting control flow is a pattern NVIDIA's shader
+# compiler miscompiles. So this is a correctness fix as much as a speed one.
+#
+# Every caller feeds a pixel index (>= 0, it is `pixel_index - 1` with
+# `pixel_index >= 1`) and an image width (> 0), so the unsigned reading is the
+# correct one.
+@inline u_div(a::Int32, b::Int32) =
+    Base.bitcast(Int32, Base.udiv_int(Base.bitcast(UInt32, a), Base.bitcast(UInt32, b)))
+@inline u_mod(a::Int32, b::Int32) =
+    Base.bitcast(Int32, Base.urem_int(Base.bitcast(UInt32, a), Base.bitcast(UInt32, b)))
 u_int(x) = Base.unsafe_trunc(Int, x)
 u_uint32(x) = Base.unsafe_trunc(UInt32, x)
 u_uint64(x) = Base.unsafe_trunc(UInt64, x)

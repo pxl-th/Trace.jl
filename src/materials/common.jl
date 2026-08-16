@@ -119,6 +119,35 @@ fresnel_dielectric(cos_θi::Float32, ηi::Float32, ηt::Float32)::Float32 =
 # pbrt-v4 compatible conductor Fresnel with complex IOR:
 
 """
+    complex_sqrt(z::Complex{Float32}) -> Complex{Float32}
+
+Square root of a complex number, following pbrt-v4's `pstd::sqrt` in
+`util/complex.h` rather than Julia's `Base.sqrt(::Complex)`.
+
+This is both the faithful port and the fast one. Base's version is
+overflow-safe: it rescales via `exponent`/`ldexp` before taking the root. On
+the GPU that scaling compiles to two `DomainError` throws ("Cannot be NaN or
+Inf", "Cannot be ±0.0") plus an `InexactError` from the `Int` conversion, and
+each one boxes a `Float32` through `ijl_box_float32` — machinery that can never
+run on a device. Measured in the bump-gold closest-hit shader: 108 of its 218
+error/boxing call sites came from this single `sqrt`, in the Fresnel term that
+evaluates on every conductor hit at every bounce.
+
+pbrt does not rescale, and it does not need to: the arguments here are bounded
+(`cosθ ∈ [0,1]`, measured η/k are order 0.1–10), so there is nothing for the
+overflow protection to protect against.
+"""
+@inline function complex_sqrt(z::Complex{Float32})
+    re, im = reim(z)
+    n = sqrt(re * re + im * im)
+    n == 0f0 && return Complex{Float32}(0f0, 0f0)
+    t1 = sqrt(0.5f0 * (n + abs(re)))
+    t2 = 0.5f0 * im / t1
+    return re >= 0f0 ? Complex{Float32}(t1, t2) :
+                       Complex{Float32}(abs(t2), copysign(t1, im))
+end
+
+"""
     fr_complex(cos_theta_i, eta, k) -> Float32
 
 Compute Fresnel reflectance for a conductor using complex IOR (matches pbrt-v4's FrComplex).
@@ -137,7 +166,7 @@ This uses the exact same formula as pbrt-v4 with complex arithmetic.
     # Complex IOR and Snell's law (pbrt-v4 FrComplex)
     eta_c = Complex{Float32}(eta, k)
     sin2_theta_t = sin2_theta_i / (eta_c * eta_c)
-    cos_theta_t = sqrt(1f0 - sin2_theta_t)
+    cos_theta_t = complex_sqrt(1f0 - sin2_theta_t)
 
     r_parl = (eta_c * cos_theta_i - cos_theta_t) / (eta_c * cos_theta_i + cos_theta_t)
     r_perp = (cos_theta_i - eta_c * cos_theta_t) / (cos_theta_i + eta_c * cos_theta_t)

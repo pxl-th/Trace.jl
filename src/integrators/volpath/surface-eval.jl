@@ -214,8 +214,8 @@ as 58 % of GPU time on killeroo before this refactor.
     # (2D light position).
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
-    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
+    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
     base_dim = Int32(6) + Int32(7) * work.depth
     light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
     u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
@@ -369,8 +369,8 @@ rather than read from a pre-populated per-pixel buffer.  See
     # select), dim+6 (2D direction), dim+7 (RR).
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
-    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
+    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
     base_dim = Int32(6) + Int32(7) * work.depth
     rng = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(4))
     u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))
@@ -656,8 +656,8 @@ calls `evaluate_bsdf_spectral(mat, ...)` directly instead of going through
     # Inline Sobol (matches `surface_direct_lighting_inner!` dim allocation).
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
-    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
+    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
     base_dim = Int32(6) + Int32(7) * work.depth
     light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
     u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
@@ -749,8 +749,8 @@ directly; no `with_index` for materials."""
 
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
-    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
+    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
     base_dim = Int32(6) + Int32(7) * work.depth
     rng = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(4))
     u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))

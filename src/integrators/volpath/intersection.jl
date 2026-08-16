@@ -747,6 +747,23 @@ Returns (T_ray, r_u, r_l) where:
 - T_ray: spectral transmittance estimate
 - r_u, r_l: MIS weight accumulators for combining with path weights
 """
+# Scene with no participating media. `media` is then a statically EMPTY
+# `StaticMultiTypeSet`, and `Raycore.with_index` on one expands to a literal
+# `error("with_index: empty StaticMultiTypeSet")` — a throw that can never run
+# on a GPU, but which the compiler cannot prove dead, so the whole exception
+# path gets emitted into every shader that can reach here. Measured in the
+# bump-gold closest-hit shader: this single call was the last 6 error sites
+# left after the conductor fixes.
+#
+# Answering it by dispatch instead is not a workaround, it is the exact result:
+# with no media there is nothing to attenuate, so transmittance is 1 and both
+# MIS accumulators are 1 — precisely the values `ratio_tracking_dda` initialises
+# and would return after iterating zero segments.
+@propagate_inbounds compute_transmittance_ratio_tracking(
+    rgb2spec_table, media::Raycore.StaticMultiTypeSet{Tuple{}}, medium_idx::SetKey,
+    origin::Point3f, dir::Vec3f, t_max::Float32, lambda::Wavelengths
+) = (SpectralRadiance(1f0), SpectralRadiance(1f0), SpectralRadiance(1f0))
+
 @propagate_inbounds function compute_transmittance_ratio_tracking(
     rgb2spec_table, media, medium_idx::SetKey,
     origin::Point3f, dir::Vec3f, t_max::Float32, lambda::Wavelengths

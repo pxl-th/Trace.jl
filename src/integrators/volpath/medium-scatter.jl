@@ -34,8 +34,8 @@ for the rationale.
     # surface path's `surface_direct_lighting_inner!`).
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
-    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
+    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
     base_dim = Int32(6) + Int32(7) * work.depth
     light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
     u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
@@ -168,8 +168,8 @@ Sobol samples are generated inline; see `surface_direct_lighting_inner!`.
     # Inline Sobol sample generation for phase function direction (dim+6 = 2D).
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_int32(mod(pixel_idx_0, sobol_rng.width)) + Int32(1)
-    py = u_int32(div(pixel_idx_0, sobol_rng.width)) + Int32(1)
+    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
+    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
     base_dim = Int32(6) + Int32(7) * work.depth
     u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))
     u = Point2f(u_x, u_y)
