@@ -456,7 +456,7 @@ end
     bxdf = get_bxdf(mat, rgb2spec_table, materials, tfc_for_bxdf, hit_work.lambda, regularize_for_bxdf)
 
     # Direct lighting + inline shadow trace + accumulate (typed BSDF eval).
-    surface_direct_lighting_inner_typed!(
+    surface_direct_lighting_inner!(
         bxdf,
         pixel_L, accel, media_interfaces, media,
         mat_work, materials, lights, rgb2spec_table,
@@ -468,7 +468,7 @@ end
     )
 
     # BSDF sample + RR + push continuation (typed BSDF sample).
-    evaluate_material_inner_typed!(
+    evaluate_material_inner!(
         bxdf,
         next_ray_queue,
         mat_work, materials, rgb2spec_table, max_depth,

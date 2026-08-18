@@ -99,9 +99,10 @@ function detect_initial_medium(backend, accel::HWAdaptedAccel, mi, pos, vp::VolP
     return Raycore.SetKey()
 end
 
-# vp_trace_rays!(::HWAdaptedAccel, ...) used to do a 4-step dance:
-#   extract_rays → prepare_indirect → cmd_trace_rays_indirect_khr → process.
-# Inline ray queries on `Raycore.closest_hit(::HWAdaptedAccel, ray)` collapse
-# that to a single dispatch — the SW unified path
-# (`vp_trace_rays!(state, accel, mi, mat)` in intersection.jl) covers HW too,
-# so no HW-specific override is needed here.
+# The per-material closest-hit shaders shade a hit before the trace returns.
+shades_surfaces_inline(::HWAdaptedAccel) = true
+
+# Tracing needs no HW override. It used to: extract_rays → prepare_indirect →
+# cmd_trace_rays_indirect_khr → process. Inline ray queries on
+# `Raycore.closest_hit(::HWAdaptedAccel, ray)` collapse that to a single
+# dispatch, so `vp_trace_and_shade!` covers both backends.

@@ -257,169 +257,24 @@ Returns (pi, n, dpdu, dpdv, ns, dpdus, dpdvs, uv).
 end
 
 # ============================================================================
-# Primary Ray Intersection Kernel
-# ============================================================================
-
-@propagate_inbounds function vp_trace_rays_kernel!(
-    work,
-    medium_sample_queue,
-    escaped_queue,
-    hit_surface_queue,
-    accel,
-    media_interfaces,
-    materials,
-    camera,
-    samples_per_pixel::Int32,
-)
-    # Check if ray is currently traveling through a medium
-    if has_medium(work.medium_idx)
-        # Medium case: trace once, push to medium_sample_queue (alpha not handled here yet)
-        hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, work.ray)
-
-        if hit
-            mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
-            mi = media_interfaces[mi_idx]
-            mat_idx = mi.material
-
-            geom = vp_compute_surface_geometry(primitive, barycentric, work.ray.o, work.ray.d, t_hit)
-
-            # Apply BumpMap perturbation here so the path integrator (cos
-            # factors, MIS, direct lighting) sees the bumped shading frame.
-            # Applying it inside the BSDF instead left the
-            # cos_theta = dot(wi, ns) in surface-eval.jl using the raw
-            # interpolated normal, hiding the bump on mirror conductors.
-            #
-            # Use real ray differentials (pbrt-v4 ComputeDifferentials): the
-            # screen-space (u,v) derivatives give BumpMap a per-pixel UV
-            # footprint instead of the BUMP_DEFAULT_DELTA fallback. Without
-            # this, sub-texel sampling produced extreme `dhdu` values that
-            # collapsed the BSDF's shading frame and left coherent mirror
-            # reflections on the bumped gold panels.
-            dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
-            dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
-            tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
-            dndu, dndv = vp_compute_normal_derivatives(primitive)
-            ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
-                                                       geom.ns, geom.dpdus,
-                                                       geom.dpdu, geom.dpdv,
-                                                       dndu, dndv, geom.n, tfc_bump)
-
-            dpdvs_b = cross(ns_b, dpdus_b)
-
-            push!(medium_sample_queue, VPMediumSampleWorkItem(
-                work, t_hit,
-                geom.pi, geom.n, geom.dpdu, geom.dpdv,
-                ns_b, dpdus_b, dpdvs_b,
-                geom.uv, mat_idx, mi,
-                primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
-                primitive.metadata.arealight_flat_idx, Raycore.area(primitive)
-            ))
-        else
-            push!(medium_sample_queue, VPMediumSampleWorkItem(work))
-        end
-    else
-        # Non-medium case: alpha testing loop at intersection level
-        # Following pbrt-v4: alpha-killed surfaces are skipped without consuming depth
-        ray = work.ray
-        for _ in 1:Int32(16)
-            hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, ray)
-
-            if !hit
-                push!(escaped_queue, VPEscapedRayWorkItem(work))
-                return
-            end
-
-            mi_idx = resolve_mi_idx(accel, inst_idx, primitive)
-            mi = media_interfaces[mi_idx]
-            mat_idx = mi.material
-
-            # Stochastic alpha test (deterministic hash, same as shadow rays)
-            uv = vp_compute_uv_barycentric(primitive, barycentric)
-            alpha = get_surface_alpha_dispatch(materials, mat_idx, uv)
-
-            if alpha < 1f0
-                rng = pcg32_init(pbrt_hash(ray.o), pbrt_hash(ray.d))
-                alpha_u, _ = pcg32_uniform_f32(rng)
-                if alpha_u > alpha
-                    # Alpha pass-through: skip this surface, no depth consumed
-                    pi = Point3f(ray.o + ray.d * t_hit)
-                    n = vp_compute_geometric_normal(primitive)
-                    offset = if dot(ray.d, n) > 0f0; n else; -n end
-                    ray = Raycore.Ray(o=Point3f(pi + offset * 1f-4), d=ray.d)
-                    continue
-                end
-            end
-
-            # Valid surface hit - compute geometry and push to queue
-            geom = vp_compute_surface_geometry(primitive, barycentric, ray.o, ray.d, t_hit)
-
-            # See identical block in the medium branch above — the bump
-            # perturbation must happen here, not inside the BSDF
-            # wrapper, so cos factors downstream use the bumped normal.
-            # pbrt-v4 ComputeDifferentials falls back to the camera-
-            # approximated dp/dxy for EVERY hit (interaction.cpp:138), so the
-            # non-medium path must use it too — the BUMP_DEFAULT_DELTA
-            # fallback under-sizes the height-field footprint and biased
-            # shadow_bumpgold_dome_over_velvet 21% dark.
-            dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
-            dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
-            tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
-            dndu, dndv = vp_compute_normal_derivatives(primitive)
-            ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
-                                                       geom.ns, geom.dpdus,
-                                                       geom.dpdu, geom.dpdv,
-                                                       dndu, dndv, geom.n, tfc_bump)
-
-            dpdvs_b = cross(ns_b, dpdus_b)
-
-            push!(hit_surface_queue, VPHitSurfaceWorkItem(
-                work,
-                geom.pi, geom.n, geom.dpdu, geom.dpdv,
-                ns_b, dpdus_b, dpdvs_b,
-                geom.uv, mat_idx, mi,
-                primitive.metadata.primitive_index, SVector{3,Float32}(barycentric),
-            ))
-            return
-        end
-        # Max alpha bounces exceeded (extremely unlikely) - ray absorbed
-    end
-end
-
-# 4-arg version: software BVH (original implementation)
-function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials,
-                       camera, samples_per_pixel::Int32)
-    input_queue = current_ray_queue(state)
-    foreach(vp_trace_rays_kernel!,
-        input_queue,
-        state.medium_sample_queue,
-        state.escaped_queue,
-        state.hit_surface_queue,
-        accel,
-        media_interfaces,
-        materials,
-        camera,
-        samples_per_pixel,
-    )
-    return nothing
-end
-
-# ============================================================================
-# Fused Trace+Shade Kernel
+# Trace + Enqueue Kernel
 # ============================================================================
 #
-# Collapses `vp_trace_rays_kernel!` + `vp_shade_surface_hits_kernel!` into a
-# single dispatch for non-medium rays. Each thread:
-#   1. If the ray is currently inside a medium, behave exactly like the old
-#      trace kernel — push to `medium_sample_queue` and let the medium
-#      pipeline handle it. (Medium-originated surface hits still flow
-#      through `hit_surface_queue` → `vp_shade_surface_hits!` after delta
-#      tracking; the medium half of the integrator is unchanged.)
-#   2. Otherwise, do the alpha-test ray-query loop, then drive the same
-#      `vp_shade_surface_hits_kernel!` body inline using a stack-local
-#      VPHitSurfaceWorkItem. This eliminates the `hit_surface_queue`
-#      materialise/re-read for the non-medium path — roughly 170 MB / bounce
-#      of memory traffic on a 1.4M-pixel render plus one dispatch + barrier
-#      per bounce.
+# Software-BVH counterpart of the hardware closest-hit shaders. Each thread:
+#   1. If the ray is currently inside a medium, push it to
+#      `medium_sample_queue` and let the medium pipeline handle it. Delta
+#      tracking enqueues whatever survives to a surface, through the same
+#      `enqueue_after_intersection!` used below.
+#   2. Otherwise, run the alpha-test ray-query loop, then resolve MixMaterial
+#      and the null-material medium swap HERE — at the push site, so the
+#      per-material queue routes to a concrete type and the shading kernels
+#      never see a material that has no BSDF.
+#   3. Enqueue the hit: its payload once into `hit_surface_queue`, a 4-byte
+#      `TypedHitRef{T}` into the matching per-material queue, and a
+#      `VPHitAreaLightWorkItem` if the triangle emits.
+#
+# Shading itself is `vp_shade_material_kernel!` (surface-eval.jl), the same
+# implementation the closest-hit shaders call.
 
 @propagate_inbounds function vp_trace_and_shade_kernel!(
     work,

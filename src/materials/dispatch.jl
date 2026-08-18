@@ -2,41 +2,6 @@
 # Spectral Material Dispatch (type-stable dispatch over StaticMultiTypeSet)
 # ============================================================================
 
-"""
-    sample_spectral_material(table, materials::StaticMultiTypeSet, idx, wo, ns, tfc, lambda, u, rng, regularize=false)
-
-Type-stable dispatch for spectral BSDF sampling.
-Returns SpectralBSDFSample from the appropriate material type.
-"""
-@propagate_inbounds function sample_spectral_material(
-    table::RGBToSpectrumTable, materials::StaticMultiTypeSet,
-    idx::SetKey,
-    wo::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, u::Point2f, rng::Float32,
-    regularize::Bool = false
-)
-    return with_index(sample_bsdf_spectral, materials, idx, table, materials, wo, ns, dpdus, tfc, lambda, u, rng, regularize)
-end
-
-"""
-    evaluate_spectral_material(table, materials::StaticMultiTypeSet, idx, wo, wi, ns, tfc, lambda, regularize=false)
-
-Type-stable dispatch for spectral BSDF evaluation.
-Returns (f::SpectralRadiance, pdf::Float32).
-
-The `regularize` parameter must match the regularization state used during sampling.
-In pbrt-v4, Regularize() modifies the BxDF in-place, so f()/PDF() automatically use
-regularized alphas. Here we pass the flag explicitly to achieve the same effect.
-"""
-@propagate_inbounds function evaluate_spectral_material(
-    table::RGBToSpectrumTable, materials::StaticMultiTypeSet,
-    idx::SetKey,
-    wo::Vec3f, wi::Vec3f, ns::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths,
-    regularize::Bool = false
-)
-    return with_index(evaluate_bsdf_spectral, materials, idx, table, materials, wo, wi, ns, dpdus, tfc, lambda, regularize)
-end
 
 """
     get_perturbed_shading_frame(materials, idx, ns, dpdus, tfc) -> (ns', dpdus')
@@ -132,6 +97,42 @@ Returns alpha ∈ [0, 1] where 0 = fully transparent, 1 = fully opaque.
     return with_index(get_surface_alpha, materials, idx, materials, uv)
 end
 
+
+# ============================================================================
+# The materials that have no BSDF of their own
+# ============================================================================
+#
+# `foreach_type` generates a `vp_shade_material_kernel!{T}` for every concrete
+# type in the scene's material set, so every one of them needs BSDF methods to
+# compile — including the types that never actually shade a hit:
+#
+#   * `MixMaterial` is re-pointed at one of its sub-materials at the PUSH site
+#     (`resolve_mix_material` in `vp_trace_and_shade_kernel!` and in delta
+#     tracking), so a `TypedHitRef{MixMaterial}` is never produced.
+#   * `Emissive` lives in `MediumInterface.emission`, not in the material slot;
+#     it only reaches the material set if something pushes it directly.
+#
+# These return no sample and no contribution rather than something plausible.
+# The previous version was a gray Lambertian with albedo 0.5, dispatched on
+# `::Material` — as a catch-all it silently absorbed every material converted to
+# the pbrt-v4 `Material::GetBxDF` pattern, whose BSDF methods had moved onto the
+# BxDF carrier, and turned a specular dielectric medium boundary into a diffuse
+# wall. That took two months to notice precisely because a gray surface looks
+# like a surface. A black one does not.
+const BSDFLessMaterial = Union{Emissive, MixMaterial}
+
+@propagate_inbounds sample_bsdf_spectral(
+    ::BSDFLessMaterial, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng::Float32,
+    regularize::Bool = false,
+) = SpectralBSDFSample()
+
+@propagate_inbounds evaluate_bsdf_spectral(
+    ::BSDFLessMaterial, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, regularize::Bool = false,
+) = (SpectralRadiance(), 0f0)
 
 # ============================================================================
 # Push-time conversion hook

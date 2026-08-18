@@ -148,47 +148,74 @@ is_emissive(::ThinDielectric) = false
 end
 
 # ============================================================================
+# DielectricEvaluated — pbrt-v4 DielectricBxDF analogue
+# ============================================================================
+#
+# pbrt-v4's `DielectricMaterial::GetBxDF` resolves eta and the microfacet
+# distribution once per hit and hands `DielectricBxDF` only those. Hikari adds
+# the Kr/Kt tints, which are texture reads, so they belong here too: direct
+# lighting calls `evaluate_bsdf_spectral` once per light sample, and each call
+# used to redo both texture reads, the IOR lookup, and the roughness remap for
+# values that cannot change within one hit.
+
+struct DielectricEvaluated
+    kr::SpectralRadiance     # already uplifted to the 4 wavelengths
+    kt::SpectralRadiance
+    ior::Float32
+    alpha_x::Float32         # already remapped and regularized
+    alpha_y::Float32
+    is_dispersive::Bool      # spectral IOR → secondary wavelengths terminate
+end
+
+@propagate_inbounds function get_bxdf(
+    mat::Dielectric, table::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, regularize::Bool,
+)
+    # pbrt-v4 DielectricMaterial::GetBxDF:
+    # Float sampledEta = eta(lambda[0]);
+    # if (!eta.Is<ConstantSpectrum>()) lambda.TerminateSecondary();
+    ior, is_dispersive = eval_dielectric_ior(textures, mat.index, tfc, lambda)
+    # Handle edge case where IOR is 0 (matches pbrt-v4 DielectricMaterial)
+    ior == 0f0 && (ior = 1f0)
+
+    u_roughness = eval_handle(textures, mat.u_roughness, tfc)
+    v_roughness = eval_handle(textures, mat.v_roughness, tfc)
+    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
+    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
+    if regularize
+        alpha_x = regularize_alpha(alpha_x)
+        alpha_y = regularize_alpha(alpha_y)
+    end
+
+    kr_rgb = eval_handle_spectrum(textures, mat.Kr, tfc)
+    kt_rgb = eval_handle_spectrum(textures, mat.Kt, tfc)
+    return DielectricEvaluated(uplift_rgb(table, kr_rgb, lambda),
+                               uplift_rgb(table, kt_rgb, lambda),
+                               ior, alpha_x, alpha_y, is_dispersive)
+end
+
+# ============================================================================
 # Dielectric spectral BSDF sampling
 # ============================================================================
 
 """
-    sample_bsdf_spectral(table, mat::Dielectric, textures, wo, n, uv, lambda, sample_u, rng) -> SpectralBSDFSample
+    sample_bsdf_spectral(bxdf::DielectricEvaluated, table, textures, wo, n, dpdus, tfc, lambda, sample_u, rng) -> SpectralBSDFSample
 
 Sample glass BSDF with reflection or refraction.
 Uses Fresnel to choose between reflection and transmission.
 """
 @propagate_inbounds function sample_bsdf_spectral(
-    mat::Dielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
+    bxdf::DielectricEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng::Float32,
+    ::Bool = false,
 )
-    # Get material properties
-    kr_rgb = eval_handle_spectrum(textures, mat.Kr, tfc)
-    kt_rgb = eval_handle_spectrum(textures, mat.Kt, tfc)
-
-    # Evaluate IOR — pbrt-v4 DielectricMaterial::GetBxDF:
-    # Float sampledEta = eta(lambda[0]);
-    # if (!eta.Is<ConstantSpectrum>()) lambda.TerminateSecondary();
-    ior, is_dispersive = eval_dielectric_ior(textures, mat.index, tfc, lambda)
-
-    # Handle edge case where IOR is 0 (matches pbrt-v4 DielectricMaterial)
-    ior == 0f0 && (ior = 1f0)
-
-    kr_spectral = uplift_rgb(table, kr_rgb, lambda)
-    kt_spectral = uplift_rgb(table, kt_rgb, lambda)
-
-    # Get roughness and compute alpha
-    u_roughness = eval_handle(textures, mat.u_roughness, tfc)
-    v_roughness = eval_handle(textures, mat.v_roughness, tfc)
-    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
-    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
-
-    # Apply regularization if requested
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
+    kr_spectral = bxdf.kr
+    kt_spectral = bxdf.kt
+    ior = bxdf.ior
+    alpha_x = bxdf.alpha_x
+    alpha_y = bxdf.alpha_y
+    is_dispersive = bxdf.is_dispersive
 
     # Determine if entering or exiting
     cos_theta_o = dot(wo, n)
@@ -257,23 +284,13 @@ end
 # ============================================================================
 
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::Dielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    bxdf::DielectricEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
-    ior, _ = eval_dielectric_ior(textures, mat.index, tfc, lambda)
-    ior == 0f0 && (ior = 1f0)
-
-    u_roughness = eval_handle(textures, mat.u_roughness, tfc)
-    v_roughness = eval_handle(textures, mat.v_roughness, tfc)
-    alpha_x = mat.remap_roughness ? roughness_to_α(u_roughness) : u_roughness
-    alpha_y = mat.remap_roughness ? roughness_to_α(v_roughness) : v_roughness
-
-    # Apply regularization to match the state used during sampling
-    if regularize
-        alpha_x = regularize_alpha(alpha_x)
-        alpha_y = regularize_alpha(alpha_y)
-    end
+    ior = bxdf.ior
+    alpha_x = bxdf.alpha_x
+    alpha_y = bxdf.alpha_y
 
     if trowbridge_reitz_effectively_smooth(alpha_x, alpha_y) || ior == 1f0
         # Specular: zero for non-delta directions
@@ -281,10 +298,8 @@ end
     end
 
     # Delegate to eval_dielectric_interface (same code used by CoatedDiffuse/CoatedConductor)
-    kr_rgb = eval_handle_spectrum(textures, mat.Kr, tfc)
-    kt_rgb = eval_handle_spectrum(textures, mat.Kt, tfc)
-    kr_spectral = uplift_rgb(table, kr_rgb, lambda)
-    kt_spectral = uplift_rgb(table, kt_rgb, lambda)
+    kr_spectral = bxdf.kr
+    kt_spectral = bxdf.kt
 
     cos_theta_o = dot(wo, n)
     entering = cos_theta_o > 0f0
@@ -301,6 +316,27 @@ end
     is_reflect = wo_local[3] * wi_local[3] > 0f0
     f_val = is_reflect ? kr_spectral * f_raw : kt_spectral * f_raw
     return (f_val, pdf)
+end
+
+# ============================================================================
+# ThinDielectricEvaluated — pbrt-v4 ThinDielectricBxDF analogue
+# ============================================================================
+#
+# `ThinDielectricMaterial::GetBxDF` resolves eta once per hit; the IOR read is
+# a texture/spectrum lookup, and direct lighting would otherwise repeat it for
+# every light sample.
+
+struct ThinDielectricEvaluated
+    eta::Float32
+    is_dispersive::Bool      # spectral IOR → secondary wavelengths terminate
+end
+
+@propagate_inbounds function get_bxdf(
+    mat::ThinDielectric, ::RGBToSpectrumTable, textures,
+    tfc::TextureFilterContext, lambda::Wavelengths, ::Bool,
+)
+    eta, is_dispersive = eval_dielectric_ior(textures, mat.eta, tfc, lambda)
+    return ThinDielectricEvaluated(eta, is_dispersive)
 end
 
 # ============================================================================
@@ -323,10 +359,10 @@ Key physics (pbrt-v4 lines 225-230):
 - Reflected direction: wi = (-wo.x, -wo.y, wo.z) (mirror reflection in local coords)
 """
 @propagate_inbounds function sample_bsdf_spectral(
-    mat::ThinDielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext,
-    lambda::Wavelengths, sample_u::Point2f, rng::Float32,
-    regularize::Bool = false
+    bxdf::ThinDielectricEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext,
+    ::Wavelengths, sample_u::Point2f, rng::Float32,
+    ::Bool = false,
 )
     # Check for grazing angle
     wo_dot_n = dot(wo, n)
@@ -334,8 +370,9 @@ Key physics (pbrt-v4 lines 225-230):
         return SpectralBSDFSample()
     end
 
-    # Evaluate IOR — pbrt-v4: sample at hero wavelength, terminate secondaries if dispersive
-    eta, is_dispersive = eval_dielectric_ior(textures, mat.eta, tfc, lambda)
+    # eta was sampled at the hero wavelength once in `get_bxdf`.
+    eta = bxdf.eta
+    is_dispersive = bxdf.is_dispersive
 
     # Build local coordinate frame
     tangent, bitangent = shading_frame(n, dpdus)
@@ -398,9 +435,9 @@ Evaluate thin dielectric BSDF - returns zero for non-delta directions.
 ThinDielectric is purely specular, so f() and PDF() both return 0.
 """
 @propagate_inbounds function evaluate_bsdf_spectral(
-    mat::ThinDielectric, table::RGBToSpectrumTable, textures,
-    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, tfc::TextureFilterContext, lambda::Wavelengths,
-    regularize::Bool = false
+    ::ThinDielectricEvaluated, ::RGBToSpectrumTable, textures,
+    wo::Vec3f, wi::Vec3f, n::Vec3f, dpdus::Vec3f, ::TextureFilterContext, ::Wavelengths,
+    ::Bool = false,
 )
     # ThinDielectric is purely specular - f() returns 0 for all non-delta directions
     return (SpectralRadiance(), 0f0)

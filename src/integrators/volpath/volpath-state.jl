@@ -198,7 +198,7 @@ function VolPathState(
     accumulation_eltype::DataType = Float32,  # Element type for accumulators (Float32 for OpenCL)
     sensor::PixelSensor = PixelSensor(),  # Pixel sensor for spectral → RGB conversion
     # When HW per-material chit slots own the shading, the post-hoc
-    # `vp_handle_emitters!` and `vp_shade_typed!` kernels never run, so the
+    # `vp_handle_emitters!` and `vp_shade_surfaces!` kernels never run, so the
     # `hit_area_light_queue`, the shared `hit_surface_queue` and the typed
     # per-material queues are unused. `hw_accel=true` allocates them with
     # capacity=1 (placeholder slots that the chit body never touches) so the

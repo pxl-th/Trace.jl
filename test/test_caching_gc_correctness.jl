@@ -85,7 +85,7 @@ end
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            baseline = length(Lava.LIVE_BUFFERS)
+            baseline = Lava.live_buffer_count()
 
             scene = _make_test_scene()
             # Create a VolPathState directly
@@ -96,7 +96,7 @@ end
             Lava.vk_flush!(Lava.vk_context())
 
             # State should have allocated many GPU buffers
-            after_alloc = length(Lava.LIVE_BUFFERS)
+            after_alloc = Lava.live_buffer_count()
             @test after_alloc > baseline + 10  # At least 10+ buffers (queues + pixel buffers + tables)
 
             # Free state
@@ -106,7 +106,7 @@ end
             GC.gc(true)
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
 
-            after_free = length(Lava.LIVE_BUFFERS)
+            after_free = Lava.live_buffer_count()
             # finalize() defers to GC which may not run immediately,
             # so we allow a small tolerance for pending frees
             @test after_free <= baseline + 10
@@ -179,16 +179,16 @@ end
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            baseline = length(Lava.LIVE_BUFFERS)
+            baseline = Lava.live_buffer_count()
 
             queue = Hikari.WorkQueue{Int32}(backend, 128)
             Lava.vk_flush!(Lava.vk_context())
-            @test length(Lava.LIVE_BUFFERS) > baseline
+            @test Lava.live_buffer_count() > baseline
 
             Hikari.free!(queue)
             Lava.vk_flush!(Lava.vk_context())
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            @test length(Lava.LIVE_BUFFERS) == baseline
+            @test Lava.live_buffer_count() == baseline
         end
     end
 
@@ -319,7 +319,7 @@ end
             Lava.vk_flush!(Lava.vk_context())
             GC.gc(true)
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            baseline = length(Lava.LIVE_BUFFERS)
+            baseline = Lava.live_buffer_count()
 
             # Multiple renders — buffer count should not grow
             for _ in 1:5
@@ -329,7 +329,7 @@ end
             end
             GC.gc(true)
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            after = length(Lava.LIVE_BUFFERS)
+            after = Lava.live_buffer_count()
 
             @test after == baseline
 
@@ -344,25 +344,25 @@ end
         GC.gc(true)
         Lava.vk_flush!(Lava.vk_context())
         Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-        baseline = length(Lava.LIVE_BUFFERS)
+        baseline = Lava.live_buffer_count()
 
         # Pre-pool-block test bookkeeping: a tiny LavaArray comes out of an
         # existing 64-MiB pool block (no new `VkManagedBuffer`) — only allocs
         # larger than `Lava.POOL_LARGE_THRESHOLD` (= POOL_BLOCK_SIZE = 64 MiB)
-        # bypass the pool. So `LIVE_BUFFERS` may stay flat or grow by at most
+        # bypass the pool. So `live_buffer_count` may stay flat or grow by at most
         # one (if the pool runs out and a new block is allocated). The test
         # invariant is "no leak": the count must NEVER grow past `baseline +
         # 1` no matter how many resize!s we do.
 
         a = Lava.LavaArray{Int32}(undef, 10)
         Lava.vk_flush!(Lava.vk_context())
-        after_alloc = length(Lava.LIVE_BUFFERS)
+        after_alloc = Lava.live_buffer_count()
         @test after_alloc <= baseline + 1
 
         resize!(a, 100)
         Lava.vk_flush!(Lava.vk_context())
         Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-        after_resize = length(Lava.LIVE_BUFFERS)
+        after_resize = Lava.live_buffer_count()
         @test after_resize <= baseline + 1
 
         # Multiple resizes should not accumulate
@@ -371,14 +371,14 @@ end
         end
         Lava.vk_flush!(Lava.vk_context())
         Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-        after_multi = length(Lava.LIVE_BUFFERS)
+        after_multi = Lava.live_buffer_count()
         @test after_multi <= baseline + 1
 
         # Free the array itself
         finalize(a)
         Lava.vk_flush!(Lava.vk_context())
         Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-        after_free = length(Lava.LIVE_BUFFERS)
+        after_free = Lava.live_buffer_count()
         @test after_free <= baseline + 1
     end
 

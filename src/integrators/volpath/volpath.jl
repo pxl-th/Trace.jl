@@ -164,13 +164,8 @@ function Base.close(vp::VolPath)
     return nothing
 end
 
-# Dispatch wrappers: pass `vp` so external packages (e.g. hikari_integration.jl)
+# Dispatch wrapper: pass `vp` so external packages (e.g. hikari_integration.jl)
 # can overload based on accel type.
-# Default (software BVH): delegate to the existing implementation.
-function vp_trace_rays!(state::VolPathState, accel, media_interfaces, materials,
-                        camera, samples_per_pixel::Int32, ::VolPath)
-    vp_trace_rays!(state, accel, media_interfaces, materials, camera, samples_per_pixel)
-end
 function vp_trace_shadow_rays!(state::VolPathState, accel, media_interfaces, media, materials, ::VolPath)
     vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials)
 end
@@ -181,6 +176,20 @@ adapt_scene_for_render(backend, scene, ::VolPath) = Adapt.adapt(backend, scene)
 # Camera medium detection dispatch — overridden for HWAdaptedAccel in hikari_integration.jl
 detect_initial_medium(backend, accel, media_interfaces, camera_pos, ::VolPath) =
     detect_camera_medium(backend, accel, media_interfaces, camera_pos)
+
+"""
+    shades_surfaces_inline(accel) -> Bool
+
+Does tracing already shade the surfaces it hits? The hardware RT path runs
+per-material closest-hit shaders, so a hit is fully shaded by the time the
+trace returns; the software BVH only records hits and leaves shading to the
+post-hoc kernels. Only true for rays that never enter a medium — see
+`chit_owns_surface` in `render!`.
+
+The `HWAdaptedAccel` method lives in `hw-rt.jl`, with the other overrides on
+the accel axis.
+"""
+shades_surfaces_inline(accel) = false
 
 """
     clear!(integrator::VolPath)
@@ -509,7 +518,7 @@ function render!(
     # (`delta-tracking.jl`'s `vp_sample_medium_kernel!`) still uses
     # `enqueue_after_intersection!` to push hits into both queues, so they
     # must be full-capacity even on HW.
-    chit_owns_surface = (accel isa Lava.HWAdaptedAccel) && isempty(media)
+    chit_owns_surface = shades_surfaces_inline(accel) && isempty(media)
 
     has_media = !isempty(media)
     if vp.state === nothing ||
@@ -644,8 +653,8 @@ function render!(
         # Trace + shade in one dispatch for non-medium rays. Medium rays still
         # take the old path: the fused kernel pushes them to medium_sample_queue
         # and the medium pipeline below drains it (and any medium-originated
-        # surface escapes onto `hit_surface_queue`, which `vp_shade_surface_hits!`
-        # handles after the medium kernels run). Surface-only scenes (the
+        # surface escapes into the per-material queues, which `vp_shade_surfaces!`
+        # drains after the medium kernels run). Surface-only scenes (the
         # common case) bypass `hit_surface_queue` entirely — saves one dispatch
         # + barrier per bounce plus ~170 MB of work-item materialization on a
         # 1.4M-pixel render.
@@ -659,7 +668,7 @@ function render!(
         end
 
         # NOTE on grouping: only the per-material shading dispatches share a
-        # deferred indirect group (inside `vp_shade_typed!`). Grouping the
+        # deferred indirect group (inside `vp_shade_surfaces!`). Grouping the
         # medium DL/scatter + escaped + emitters stages in with the shading
         # was tried (2026-06-10) and BENCHMARKED WORSE on volume/trace-heavy
         # scenes (bunny SW +25%, killeroo SW +22%) even though it removes
@@ -684,7 +693,7 @@ function render!(
         # DL / RR / continuation already ran INSIDE each material's chit
         # shader during `vp_trace_and_shade!`. `hit_area_light_queue` and
         # `per_material_queue` are unused on this path, so we skip both
-        # `vp_handle_emitters!` and `vp_shade_typed!`. The SW BVH path
+        # `vp_handle_emitters!` and `vp_shade_surfaces!`. The SW BVH path
         # still drains them — the post-hoc kernels are the only place
         # surface shading runs there. Medium-bearing HW scenes also still
         # need them: the medium-survives-to-surface path
@@ -698,32 +707,18 @@ function render!(
                 vp_handle_emitters!(state, lights)
             end
 
-            if accel isa Lava.HWAdaptedAccel
-                # HW + media: the per-material chit already shaded every
-                # surface hit of a NON-medium ray inline; the only items in
-                # `hit_surface_queue` come from the medium delta-tracking
-                # survive-to-surface path — a tiny, usually-empty population.
-                # Shade them with ONE monolithic dispatch (with_index inside)
-                # instead of 12 per-material dispatches.
-                vp_shade_surface_hits!(state, accel, media_interfaces, media,
-                                       materials, lights,
-                                       sample_idx,
-                                       camera,
-                                       Int32(vp.samples_per_pixel), vp.regularize)
-            else
-                # SW BVH: per-material shading — drains the typed index
-                # queues populated by both the surface trace (non-medium)
-                # AND the medium delta-tracking surface-survive path. One
-                # dispatch per concrete material type; each kernel contains
-                # only one material's BSDF, so SPIR-V is small and the
-                # register cliff (128 regs/thread) is avoided. The dispatches
-                # share a fused-prepare deferred group inside.
-                vp_shade_typed!(state, accel, media_interfaces, media,
-                                materials, lights,
-                                sample_idx,
-                                camera,
-                                Int32(vp.samples_per_pixel), vp.regularize)
-            end
+            # Per-material shading — drains the typed index queues. Both
+            # producers fill them: the surface trace for non-medium rays and
+            # delta tracking's survive-to-surface path, through the same
+            # `enqueue_after_intersection!`. One dispatch per concrete
+            # material type; each kernel contains only one material's BSDF, so
+            # SPIR-V stays small and the register cliff (128 regs/thread) is
+            # avoided. The dispatches share a fused-prepare deferred group.
+            vp_shade_surfaces!(state, accel, media_interfaces, media,
+                               materials, lights,
+                               sample_idx,
+                               camera,
+                               Int32(vp.samples_per_pixel), vp.regularize)
         end
 
         vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)

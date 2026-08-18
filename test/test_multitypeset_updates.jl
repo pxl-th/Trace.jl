@@ -133,8 +133,8 @@ end
 @testset "J3: RGBGridMedium animation loop is bounded" begin
     scene, handle = _make_grid_volume_scene(; σ_s=0.3f0)
 
-    bytes_before    = Lava.GPU_LIVE_BYTES[]
-    bufs_before     = length(Lava.LIVE_BUFFERS)
+    bytes_before    = Lava.gpu_live_bytes()
+    bufs_before     = Lava.live_buffer_count()
     media_before    = length(scene.media)
     texarrs_before  = length(scene.media.texture_gpu_arrays)
 
@@ -152,13 +152,13 @@ end
     end
     GC.gc(true)
 
-    @info "J3: post-animation state" media=length(scene.media) texarrs=length(scene.media.texture_gpu_arrays) bytes=Lava.GPU_LIVE_BYTES[] bufs=length(Lava.LIVE_BUFFERS)
+    @info "J3: post-animation state" media=length(scene.media) texarrs=length(scene.media.texture_gpu_arrays) bytes=Lava.gpu_live_bytes() bufs=Lava.live_buffer_count()
 
     @test length(scene.media)                       == media_before
     @test length(scene.media.texture_gpu_arrays)    == texarrs_before
     # GPU memory may shift slightly due to deferred-free timing; bound the
     # delta tightly so a real leak is visible.
-    @test Lava.GPU_LIVE_BYTES[] - bytes_before <= 32 * 1024 * 1024  # +32 MiB ceiling
+    @test Lava.gpu_live_bytes() - bytes_before <= 32 * 1024 * 1024  # +32 MiB ceiling
 end
 
 # ── J4. HW RT picks up material updates the same as SW ─────────────────────
@@ -197,8 +197,8 @@ end
     scene, handle = _make_sphere_scene(; hw_accel=false)
     ctx = Lava.vk_context()
 
-    bytes_before = Lava.GPU_LIVE_BYTES[]
-    bufs_before  = length(Lava.LIVE_BUFFERS)
+    bytes_before = Lava.gpu_live_bytes()
+    bufs_before  = Lava.live_buffer_count()
 
     for k in 1:20
         # Cycle the material colour each iteration.
@@ -221,8 +221,8 @@ end
     # tighter contract on RADV doesn't quietly slip.
     is_llvmpipe = occursin("llvmpipe", lowercase(ctx.device_name))
     bytes_budget = is_llvmpipe ? 256 * 1024 * 1024 : 64 * 1024 * 1024
-    @test Lava.GPU_LIVE_BYTES[] - bytes_before <= bytes_budget
-    @test length(Lava.LIVE_BUFFERS) - bufs_before <= 16              # +16 bufs
+    @test Lava.gpu_live_bytes() - bytes_before <= bytes_budget
+    @test Lava.live_buffer_count() - bufs_before <= 16              # +16 bufs
 end
 
 # ── J6. Adapted-snapshot freshness contract ────────────────────────────────

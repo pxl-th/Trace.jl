@@ -158,476 +158,55 @@ Uses approximate screen-space derivatives for proper mipmap selection.
     return TextureFilterContext(work.uv, dudx, dudy, dvdx, dvdy, work.face_idx, work.bary)
 end
 
-# (vp_process_surface_hits! and its kernel were deleted: the fused
-# trace-and-shade path made them dead, and with them the intermediate
-# `material_queue` — 379 MiB of vestigial allocation on a 1.4 Mpx render.)
-
 # ============================================================================
-# Direct Lighting Inner Function
-# ============================================================================
-
-"""Inner function for surface direct lighting - can use return statements.
-
-Uses BVH light sampler for spatially-aware importance sampling.
-Nearby lights get higher probability than distant ones (pbrt-v4's BVHLightSampler).
-
-Sobol samples are generated inline from `(px, py, sample_idx, base_dim+dim)`
-rather than read from a pre-populated per-pixel buffer. Eliminates the
-separate `vp_generate_ray_samples_kernel!` dispatch + barrier, plus the
-SOA write/read of two `pixel_samples_direct_*` arrays per bounce — measured
-as 58 % of GPU time on killeroo before this refactor.
-"""
-@propagate_inbounds function surface_direct_lighting_inner!(
-    pixel_L,
-    accel,
-    media_interfaces,
-    media,
-    work::VPMaterialEvalWorkItem,
-    materials,
-    lights,
-    rgb2spec_table,
-    bvh_nodes,
-    infinite_light_indices,
-    num_infinite_lights::Int32,
-    num_bvh_lights::Int32,
-    num_lights::Int32,
-    sobol_rng,           # SobolRNG — samples are generated on demand inline
-    sample_idx::Int32,   # which sample of samples_per_pixel we're on
-    # Camera for texture filtering (pbrt-v4 style)
-    camera,
-    samples_per_pixel::Int32,
-    do_regularize::Bool
-)
-    # Skip if no lights
-    num_lights < Int32(1) && return
-
-    # Skip null-material boundaries (pbrt `Material "interface"` / nullptr):
-    # no BSDF to evaluate, no direct lighting contribution at this surface.
-    # `evaluate_material_inner!` advances the ray past the boundary.
-    if !Raycore.is_valid(work.material_idx) && is_medium_transition(work.interface)
-        return
-    end
-
-    # Inline Sobol sample generation.  Dimension allocation matches the
-    # original `vp_generate_ray_samples_kernel!`: 6 (camera) + 7 * depth +
-    # dim-offset.  Direct lighting uses dim+1 (1D light select) and dim+3
-    # (2D light position).
-    pixel_idx = work.pixel_index
-    pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
-    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
-    base_dim = Int32(6) + Int32(7) * work.depth
-    light_select = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(1))
-    u_light_x, u_light_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(3))
-    u_light = Point2f(u_light_x, u_light_y)
-
-    # Select light using BVH importance-weighted sampling
-    # Returns (1-based flat index, PMF for that light)
-    light_idx, light_pmf = bvh_sample_light(
-        bvh_nodes, infinite_light_indices,
-        num_infinite_lights, num_bvh_lights,
-        work.pi, work.ns, light_select
-    )
-
-    # Validate index (should always be valid if sampler was built correctly)
-    if light_idx < Int32(1) || light_idx > num_lights || light_pmf <= 0f0
-        return
-    end
-
-    # Sample the light (works with both Tuple and StaticMultiTypeSet)
-    light_sample = sample_light_spectral(
-        rgb2spec_table, lights, light_idx, work.pi, work.lambda, u_light
-    )
-
-    if light_sample.pdf > 0f0 && !is_black(light_sample.Li)
-        # Compute texture filter context with proper screen-space derivatives (pbrt-v4 style)
-        tfc = compute_texture_filter_context(work, camera, samples_per_pixel)
-
-        # Apply regularization if enabled and we've had a non-specular bounce
-        # Must match the state used during BSDF sampling (pbrt-v4: Regularize() modifies BxDF in-place)
-        regularize = do_regularize && work.any_non_specular_bounces
-
-        # Evaluate BSDF for light direction
-        bsdf_f, bsdf_pdf = evaluate_spectral_material(
-            rgb2spec_table, materials, work.material_idx,
-            work.wo, light_sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize
-        )
-
-        if !is_black(bsdf_f)
-            # Compute direct lighting contribution with MIS
-            result = compute_direct_lighting_spectral(
-                work.pi, work.n, work.ns, work.wo, work.beta, work.r_u, work.lambda,
-                light_sample, bsdf_f, bsdf_pdf
-            )
-
-            if result.valid
-                # Following pbrt-v4 (surfscatter.cpp lines 299-315):
-                # - Ld = beta * f * Li (no PDF division - that happens at shadow ray resolution)
-                # - r_l = r_u * lightPDF where lightPDF = ls.pdf * light_pmf
-                # compute_direct_lighting_spectral already sets r_l = r_u * ls.pdf
-                # So we multiply by light_pmf to get the full light PDF in r_l
-                scaled_r_l = result.r_l * light_pmf
-
-                # Determine medium for shadow ray based on direction at medium transitions
-                # (mirrors pbrt-v4 SurfaceInteraction::GetMedium(w))
-                shadow_medium = if is_medium_transition(work.interface)
-                    get_medium_index(work.interface, result.ray_direction, work.n)
-                else
-                    work.current_medium
-                end
-
-                # ── Inline shadow trace + accumulate (was: push to shadow_queue, run
-                # vp_trace_shadow_rays! as a separate dispatch). Body mirrors
-                # vp_trace_shadow_rays_kernel! exactly: trace transmittance, combine
-                # path MIS weights with transmittance MIS weights, accumulate to
-                # pixel_L. Eliminates the queue write + read + per-bounce shadow
-                # dispatch + barrier for every surface direct-lighting contribution.
-                T_ray, tr_r_u, tr_r_l, visible = trace_shadow_transmittance(
-                    accel, media_interfaces, media, materials, rgb2spec_table,
-                    result.ray_origin, result.ray_direction, result.t_max,
-                    work.lambda, shadow_medium,
-                )
-
-                if visible && !is_black(T_ray)
-                    mis_weight = result.r_u * tr_r_u + scaled_r_l * tr_r_l
-                    mis_denom = average(mis_weight)
-                    if mis_denom > 1f-10
-                        final_L = result.Ld * T_ray / mis_denom
-                        if !is_black(final_L)
-                            base_idx = (work.pixel_index - Int32(1)) * Int32(4)
-                            accumulate_spectrum!(pixel_L, base_idx, final_L)
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return
-end
-
-# `vp_sample_surface_direct_lighting!` was deleted by commit cb3d08f's
-# fusion (process_hits + direct_light + evaluate_materials → one kernel),
-# and the inline-shadow-trace optimisation in this commit folded the shadow
-# tracing into the same kernel too, so there's no longer any standalone
-# direct-lighting dispatch on the surface path. Light sampling + BSDF eval
-# for direct lighting + shadow trace + pixel_L accumulation all happen
-# inside `vp_shade_surface_hits_kernel!`'s call to
-# `surface_direct_lighting_inner!`.
-
-# ============================================================================
-# BSDF Sampling Inner Function
-# ============================================================================
-
-"""Inner function for material evaluation - can use return statements.
-
-Sobol samples are generated inline from `(px, py, sample_idx, base_dim+dim)`
-rather than read from a pre-populated per-pixel buffer.  See
-`surface_direct_lighting_inner!` for the same change on the direct path.
-"""
-@propagate_inbounds function evaluate_material_inner!(
-    next_ray_queue,
-    work::VPMaterialEvalWorkItem,
-    materials,
-    rgb2spec_table,
-    max_depth::Int32,
-    do_regularize::Bool,
-    sobol_rng,           # SobolRNG — samples generated on demand inline
-    sample_idx::Int32,
-    # Camera for texture filtering (pbrt-v4 style)
-    camera,
-    samples_per_pixel::Int32,
-    rr_depth::Int32
-)
-    # ── Null-material skip (pbrt `Material "interface"` / nullptr) ──
-    # No BSDF; rays pass through with medium swap only and consume no path depth.
-    # Mirrors pbrt cpu/integrators.cpp:420,568,681 `if (!bsdf) SkipIntersection(...)`.
-    if !Raycore.is_valid(work.material_idx) && is_medium_transition(work.interface)
-        ray_d = -work.wo
-        new_medium = get_medium_index(work.interface, ray_d, work.n)
-        offset_dir = if dot(ray_d, work.n) > 0f0; work.n; else; -work.n; end
-        ray_origin = Point3f(work.pi + offset_dir * 1f-4)
-        new_ray = Raycore.Ray(o=ray_origin, d=ray_d, t_max=Inf32, time=0f0)
-        ray_item = VPRayWorkItem(
-            new_ray, work.depth,                    # depth NOT incremented
-            work.lambda, work.pixel_index,
-            work.beta, work.r_u, work.r_l,
-            work.prev_intr_p, work.prev_intr_n,
-            work.eta_scale,
-            work.specular_bounce, work.any_non_specular_bounces,
-            new_medium)
-        push!(next_ray_queue, ray_item)
-        return
-    end
-
-    # Check depth limit
-    new_depth = work.depth + Int32(1)
-    if new_depth >= max_depth
-        return
-    end
-
-    # Inline Sobol sample generation.  Indirect uses dim+4 (BSDF component
-    # select), dim+6 (2D direction), dim+7 (RR).
-    pixel_idx = work.pixel_index
-    pixel_idx_0 = pixel_idx - Int32(1)
-    px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
-    py = u_div(pixel_idx_0, sobol_rng.width) + Int32(1)
-    base_dim = Int32(6) + Int32(7) * work.depth
-    rng = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(4))
-    u_x, u_y = sample_2d(sobol_rng, px, py, sample_idx, base_dim + Int32(6))
-    u = Point2f(u_x, u_y)
-    rr_sample = sample_1d(sobol_rng, px, py, sample_idx, base_dim + Int32(7))
-
-    # Apply regularization if enabled and we've had a non-specular bounce
-    # (pbrt-v4: regularize && anyNonSpecularBounces)
-    regularize = do_regularize && work.any_non_specular_bounces
-
-    # Compute texture filter context with proper screen-space derivatives (pbrt-v4 style)
-    tfc = compute_texture_filter_context(work, camera, samples_per_pixel)
-
-    # Sample BSDF
-    sample = sample_spectral_material(
-        rgb2spec_table, materials, work.material_idx,
-        work.wo, work.ns, work.dpdus, tfc, work.lambda, u, rng, regularize
-    )
-
-    # Check if valid sample
-    if sample.pdf > 0f0 && !is_black(sample.f)
-        # pbrt surfscatter.cpp:190-203
-        # beta always uses sample.pdf (proportional or exact)
-        # r_l uses re-evaluated PDF when pdfIsProportional
-        cos_theta = abs(dot(sample.wi, work.ns))
-        new_beta = work.beta * sample.f * cos_theta / sample.pdf
-
-        # Update eta scale for refraction — pbrt-v4 surfscatter.cpp:206-208
-        # etaScale *= Sqr(bsdfSample->eta) only for transmission
-        new_eta_scale = if is_transmissive(sample.flags)
-            work.eta_scale * sample.eta * sample.eta
-        else
-            work.eta_scale
-        end
-
-        # Update MIS weights — pbrt surfscatter.cpp:200-203
-        # pdfIsProportional: use re-evaluated PDF for MIS weight
-        # otherwise: use sample.pdf
-        r_l_pdf = if sample.pdf_is_proportional
-            _, p = evaluate_spectral_material(
-                rgb2spec_table, materials, work.material_idx,
-                work.wo, sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize)
-            max(p, 1f-10)
-        else
-            sample.pdf
-        end
-        new_r_l = work.r_u / r_l_pdf
-
-        # Russian roulette
-        should_continue, final_beta = russian_roulette_spectral(
-            new_beta, work.r_u, new_eta_scale, new_depth, rr_sample, rr_depth
-        )
-
-        if should_continue
-            # Determine medium for continuation ray using MediumInterfaceIdx
-            # Following pbrt-v4: use ray direction relative to surface normal
-            # to determine which medium the ray enters
-            new_medium = if is_medium_transition(work.interface)
-                # Surface defines a medium boundary - get medium based on ray direction
-                # If wi · n > 0, ray goes "outside" the surface
-                # If wi · n < 0, ray goes "inside" the surface
-                get_medium_index(work.interface, sample.wi, work.n)
-            else
-                # No medium transition at this surface
-                # Stay in current medium (reflection or transmission through regular material)
-                work.current_medium
-            end
-
-            # Create continuation ray
-            # Offset origin slightly to avoid self-intersection
-            offset_dir = if dot(sample.wi, work.n) > 0f0
-                work.n
-            else
-                -work.n
-            end
-            ray_origin = Point3f(work.pi + offset_dir * 1f-4)
-
-            new_ray = Raycore.Ray(
-                o = ray_origin,
-                d = sample.wi,
-                t_max = Inf32,
-                time = 0f0
-            )
-
-            # Terminate secondary wavelengths for dispersive refraction (pbrt-v4)
-            new_lambda = if sample.secondary_terminated
-                terminate_secondary_wavelengths(work.lambda)
-            else
-                work.lambda
-            end
-
-            ray_item = VPRayWorkItem(
-                new_ray,
-                new_depth,
-                new_lambda,
-                work.pixel_index,
-                final_beta,
-                work.r_u,  # r_u unchanged
-                new_r_l,
-                work.pi,   # prev_intr_p
-                work.ns,   # prev_intr_n
-                new_eta_scale,
-                is_specular(sample.flags),
-                work.any_non_specular_bounces || !is_specular(sample.flags),
-                new_medium
-            )
-
-            push!(next_ray_queue, ray_item)
-        end
-    end
-    return
-end
-
-# (vp_evaluate_materials! and its kernel were deleted along with
-# `material_queue` — the fused trace-and-shade path made them dead.)
-
-# ============================================================================
-# Fused Surface Shading Kernel
+# Surface Shading (pbrt-v4 wavefront/surfscatter.cpp:41 pattern)
 # ============================================================================
 #
-# Fuses `vp_process_surface_hits` + `vp_sample_surface_direct_lighting` +
-# `vp_evaluate_materials` into a single dispatch. Each thread reads one
-# `VPHitSurfaceWorkItem`, computes wo + material_idx, accumulates emission,
-# then drives both `surface_direct_lighting_inner!` (pushes shadow ray) and
-# `evaluate_material_inner!` (pushes continuation ray) with a stack-local
-# `VPMaterialEvalWorkItem`. The intermediate `material_queue` is bypassed,
-# eliminating ~170 MB of memory traffic per bounce on a 1.4M-pixel scene.
-
-@propagate_inbounds function vp_shade_surface_hits_kernel!(
-    work,
-    next_ray_queue,
-    pixel_L,
-    accel,
-    media_interfaces,
-    media,
-    materials,
-    lights,
-    rgb2spec_table,
-    bvh_nodes,
-    infinite_light_indices,
-    light_to_bit_trail,
-    num_infinite_lights::Int32,
-    num_bvh_lights::Int32,
-    num_lights::Int32,
-    max_depth::Int32,
-    do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera,
-    samples_per_pixel::Int32,
-    rr_depth::Int32,
-)
-    wo = -work.ray.d
-
-    material_idx = resolve_mix_material(
-        materials, work.material_idx,
-        work.pi, wo, work.uv
-    )
-
-    # HandleEmissiveIntersection moved to `vp_handle_emitters_kernel!`
-    # (matches pbrt-v4 hitAreaLightQueue). This kernel is now dead in the
-    # live volpath loop — the fused trace-and-shade path bypasses it.
-
-    # Synthesize stack-local material eval work item. This is the same shape
-    # that used to be pushed into `material_queue` and re-read by both kernels.
-    mat_work = VPMaterialEvalWorkItem(work, wo, material_idx)
-
-    # ── Direct lighting + inline shadow trace + accumulate
-    surface_direct_lighting_inner!(
-        pixel_L, accel, media_interfaces, media,
-        mat_work, materials, lights, rgb2spec_table,
-        bvh_nodes, infinite_light_indices,
-        num_infinite_lights, num_bvh_lights, num_lights,
-        sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        do_regularize,
-    )
-
-    # ── BSDF sample + RR + push continuation (was vp_evaluate_materials) ──
-    evaluate_material_inner!(
-        next_ray_queue,
-        mat_work, materials, rgb2spec_table, max_depth,
-        do_regularize,
-        sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        rr_depth,
-    )
-    return
-end
-
-function vp_shade_surface_hits!(state::VolPathState, accel, media_interfaces, media,
-                                materials, lights,
-                                sample_idx::Int32,
-                                camera, samples_per_pixel::Int32,
-                                regularize::Bool = true)
-    foreach(vp_shade_surface_hits_kernel!,
-        state.hit_surface_queue,
-        next_ray_queue(state),
-        state.pixel_L,
-        accel,
-        media_interfaces,
-        media,
-        materials,
-        lights,
-        state.rgb2spec_table,
-        state.bvh_nodes,
-        state.infinite_light_indices,
-        state.light_to_bit_trail,
-        state.num_infinite_lights,
-        state.num_bvh_lights,
-        state.num_lights,
-        state.max_depth,
-        regularize,
-        state.sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        state.rr_depth,
-    )
-    return nothing
-end
-
-
-# ============================================================================
-# Per-material-type Shading (pbrt-v4 wavefront/surfscatter.cpp:41 pattern)
-# ============================================================================
+# One kernel per concrete material type, monomorphised via `ForEachType`, so
+# a kernel's SPIR-V contains exactly one material's BSDF. The alternative — a
+# single kernel with every material's BSDF behind a `with_index` switch —
+# measured 128 registers on RTX 4000 Ada, right at the occupancy cliff (above
+# 128 the per-SM thread count drops from 512 to 256).
 #
-# `vp_shade_surface_hits_kernel!` above includes every concrete material's
-# BSDF code (via `with_index(materials, ...)`) inside a single monolithic
-# SPIR-V module.  Driver-reported register count was 128 on RTX 4000 Ada —
-# right at the occupancy cliff (above 128 the per-SM thread count drops
-# from 512 to 256).  pbrt-v4 sidesteps this by splitting shading into one
-# kernel per concrete material type via `ForEachType`; each kernel is
-# monomorphised on a single `ConcreteMaterial`, so its SPIR-V only contains
-# that one material's BSDF.
+# This is the ONLY surface-shading implementation, and the closest-hit shaders
+# call the same two inner functions. A second, `with_index`-based copy used to
+# live here and was dispatched for exactly one configuration (hardware RT on a
+# scene with media), which is how it drifted: Phase 1 moved every BSDF onto a
+# `get_bxdf` carrier, this copy was updated, the other kept calling the raw
+# material and silently matched a gray-Lambertian `::Material` catch-all — a
+# specular medium boundary became a diffuse wall and `medium_smoke_point`
+# rendered at 0.037 of reference on HW while SW was correct. Everything that
+# copy did beyond shading — MixMaterial resolution, the null-material medium
+# swap — already happens at the push site for both producers
+# (`vp_trace_and_shade_kernel!` and delta tracking's `vp_sample_medium_kernel!`),
+# so it was redundant as well as divergent.
 #
 # Pieces:
-#   * `surface_direct_lighting_inner_typed!` / `evaluate_material_inner_typed!`
-#     — same logic as the `_inner!` variants above but take the concrete
-#     material `mat::M` and call `evaluate_bsdf_spectral(mat, ...)` /
-#     `sample_bsdf_spectral(mat, ...)` directly.  No `with_index` for the
-#     material axis.  Sobol inlined + shadow trace inlined, just like the
-#     non-typed versions.
+#   * `surface_direct_lighting_inner!` / `evaluate_material_inner!` — take the
+#     BxDF carrier `get_bxdf` built for this hit and call
+#     `evaluate_bsdf_spectral` / `sample_bsdf_spectral` on it directly. Sobol
+#     inlined, shadow trace inlined.
 #   * `vp_shade_material_kernel!` — reads `TypedHitRef{T}`, loads the hit from
 #     the shared `hit_surface_queue`, looks up the
 #     concrete instance via `material_of_type(materials, T, vec_idx)` (one
 #     array load resolved at compile time), accumulates emission, runs DL
 #     + indirect path.
-#   * `vp_shade_typed!` — `foreach_type` over the `MultiTypeMaterialQueue`,
+#   * `vp_shade_surfaces!` — `foreach_type` over the `MultiTypeMaterialQueue`,
 #     wrapped in `Lava.concurrent_dispatch_group` so per-type kernels can
 #     overlap on idle SMs (otherwise serialized by the per-dispatch
 #     barriers — each per-type kernel writes to disjoint slots of the
 #     shared `next_ray_queue` + atomic `pixel_L`).
 
-"""Typed counterpart to `surface_direct_lighting_inner!`.  Same body but
-calls `evaluate_bsdf_spectral(mat, ...)` directly instead of going through
-`with_index`.  Caller passes the concrete material instance picked up via
-`material_of_type` in the per-type kernel."""
-@propagate_inbounds function surface_direct_lighting_inner_typed!(
-    mat::M,
+"""Direct lighting for one surface hit: BVH light sample, BSDF evaluation on
+the already-resolved `bxdf` carrier, MIS weight, shadow ray pushed inline.
+
+Sobol samples are generated inline from `(px, py, sample_idx, base_dim+dim)`
+rather than read from a pre-populated per-pixel buffer. That eliminates the
+separate `vp_generate_ray_samples_kernel!` dispatch + barrier and the SOA
+write/read of two `pixel_samples_direct_*` arrays per bounce — measured as
+58 % of GPU time on killeroo before the change."""
+@propagate_inbounds function surface_direct_lighting_inner!(
+    bxdf::B,
     pixel_L,
     accel,
     media_interfaces,
@@ -646,14 +225,17 @@ calls `evaluate_bsdf_spectral(mat, ...)` directly instead of going through
     camera,
     samples_per_pixel::Int32,
     do_regularize::Bool,
-) where M
+) where B
     num_lights < Int32(1) && return
 
-    # Null-material boundaries are routed away from the typed queues at the
-    # push site (`vp_trace_kernel!` handles the medium swap inline).  A
-    # concrete `mat::M` here is always a real BSDF.
+    # Null-material boundaries never reach a per-material queue: both push
+    # sites (`vp_trace_and_shade_kernel!` and delta tracking's
+    # `vp_sample_medium_kernel!`) handle the medium swap inline and return, so
+    # a `bxdf` here always came from a real material.
 
-    # Inline Sobol (matches `surface_direct_lighting_inner!` dim allocation).
+    # Inline Sobol. Dimension allocation matches the original
+    # `vp_generate_ray_samples_kernel!`: 6 (camera) + 7 * depth + dim-offset;
+    # direct lighting uses dim+1 (1D light select) and dim+3 (2D light pos).
     pixel_idx = work.pixel_index
     pixel_idx_0 = pixel_idx - Int32(1)
     px = u_mod(pixel_idx_0, sobol_rng.width) + Int32(1)
@@ -682,7 +264,7 @@ calls `evaluate_bsdf_spectral(mat, ...)` directly instead of going through
 
         # Direct call into the concrete material — Julia inlines.
         bsdf_f, bsdf_pdf = evaluate_bsdf_spectral(
-            mat, rgb2spec_table, materials,
+            bxdf, rgb2spec_table, materials,
             work.wo, light_sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize,
         )
 
@@ -724,11 +306,10 @@ calls `evaluate_bsdf_spectral(mat, ...)` directly instead of going through
     return
 end
 
-"""Typed counterpart to `evaluate_material_inner!`.  Uses
-`sample_bsdf_spectral(mat, ...)` and `evaluate_bsdf_spectral(mat, ...)`
-directly; no `with_index` for materials."""
-@propagate_inbounds function evaluate_material_inner_typed!(
-    mat::M,
+"""BSDF sample for one surface hit: samples the already-resolved `bxdf`
+carrier, applies Russian roulette, pushes the continuation ray."""
+@propagate_inbounds function evaluate_material_inner!(
+    bxdf::B,
     next_ray_queue,
     work::VPMaterialEvalWorkItem,
     materials,
@@ -740,7 +321,7 @@ directly; no `with_index` for materials."""
     camera,
     samples_per_pixel::Int32,
     rr_depth::Int32,
-) where M
+) where B
     # Null material → never sees a typed kernel (routed at push site).
     new_depth = work.depth + Int32(1)
     if new_depth >= max_depth
@@ -761,7 +342,7 @@ directly; no `with_index` for materials."""
     tfc = compute_texture_filter_context(work, camera, samples_per_pixel)
 
     sample = sample_bsdf_spectral(
-        mat, rgb2spec_table, materials,
+        bxdf, rgb2spec_table, materials,
         work.wo, work.ns, work.dpdus, tfc, work.lambda, u, rng, regularize,
     )
 
@@ -777,7 +358,7 @@ directly; no `with_index` for materials."""
 
         r_l_pdf = if sample.pdf_is_proportional
             _, p = evaluate_bsdf_spectral(
-                mat, rgb2spec_table, materials,
+                bxdf, rgb2spec_table, materials,
                 work.wo, sample.wi, work.ns, work.dpdus, tfc, work.lambda, regularize,
             )
             max(p, 1f-10)
@@ -881,7 +462,7 @@ concern from materials)."""
     bxdf = get_bxdf(mat, rgb2spec_table, materials, tfc_for_bxdf, work.lambda, regularize_for_bxdf)
 
     # Direct lighting + inline shadow + accumulate (typed BSDF eval).
-    surface_direct_lighting_inner_typed!(
+    surface_direct_lighting_inner!(
         bxdf,
         pixel_L, accel, media_interfaces, media,
         mat_work, materials, lights, rgb2spec_table,
@@ -893,7 +474,7 @@ concern from materials)."""
     )
 
     # BSDF sample + RR + push continuation (typed BSDF sample).
-    evaluate_material_inner_typed!(
+    evaluate_material_inner!(
         bxdf,
         next_ray_queue,
         mat_work, materials, rgb2spec_table, max_depth,
@@ -908,7 +489,7 @@ end
 """Drain `hit_area_light_queue`: applies emission-MIS to each surface hit
 that landed on an area-light triangle. Direct port of pbrt-v4's
 "Handle emitters hit by indirect rays" kernel
-(wavefront/integrator.cpp:540-572). Runs in parallel with `vp_shade_typed!`
+(wavefront/integrator.cpp:540-572). Runs in parallel with `vp_shade_surfaces!`
 because both write only to per-pixel atomic `pixel_L` accumulators (the
 emitter kernel writes only `pixel_L`; the material kernels also write
 `next_ray_queue` but that's disjoint from `pixel_L`)."""
@@ -959,7 +540,7 @@ end
 """Drain the per-bounce `hit_area_light_queue` produced by
 `enqueue_after_intersection!`. Matches pbrt-v4's split between
 `hitAreaLightQueue` (this kernel) and `MaterialEvalQueue` (the
-per-material `vp_shade_typed!` kernels)."""
+per-material `vp_shade_surfaces!` kernels)."""
 function vp_handle_emitters!(state::VolPathState, lights)
     num_lights = state.num_lights
     num_lights < Int32(1) && return nothing
@@ -981,7 +562,7 @@ share one fused multi-prepare + barrier and overlap on idle SMs.  The
 per-type kernels write to atomically-claimed slots in the shared
 `next_ray_queue` and to per-pixel atomic `pixel_L` accumulators, so
 overlap is safe."""
-function vp_shade_typed!(
+function vp_shade_surfaces!(
     state::VolPathState, accel, media_interfaces, media,
     materials, lights,
     sample_idx::Int32,
