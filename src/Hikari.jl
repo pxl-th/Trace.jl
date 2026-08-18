@@ -19,6 +19,10 @@ import KernelAbstractions as KA
 using GPUArraysCore: @allowscalar
 # Lava is a weak dependency — hw-rt.jl is loaded via ext/HikariLavaExt.jl
 
+# Unexported but API: RayMakie's pbrt bridge calls it, so it is not free to
+# change shape. `public` says that without putting it in every `using`'s scope.
+public attach_bump
+
 # Re-export Raycore types and functions that Trace uses
 import Raycore: AbstractRay, Ray, RayDifferentials, apply, check_direction, scale_differentials
 import Raycore: Bounds2, Bounds3, area, surface_area, diagonal, maximum_extent, offset, is_valid, inclusive_sides, expand

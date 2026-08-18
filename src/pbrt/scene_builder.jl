@@ -171,7 +171,7 @@ function build_hikari_scene(pbrt::PBRTScene;
             is_mix = lowercase(entity.type) == "mix"
             is_mix == pass || continue
             haskey(mat_cache, name) && continue
-            mat_cache[name] = _attach_bump(
+            mat_cache[name] = attach_bump(
                 build_pbrt_material(entity, pbrt, hikari_textures, mat_cache),
                 entity, hikari_textures)
         end
@@ -562,10 +562,18 @@ uploading the same image map once per material that references it.
 """
 store_texture_handle(scene, tex) = device_param(scene.materials, tex)
 
-# Attach the entity's height field to the material's `displacement` field.
-# pbrt-v4 master uses `displacement`; older `.pbrt` files use `bumpmap`. Both
-# are float height fields read via finite differences at intersection time.
-function _attach_bump(mat::Material, entity::PBRTEntity, textures::AbstractDict{String})
+"""
+    attach_bump(mat, entity, textures) -> mat
+
+Attach `entity`'s height field to `mat`'s `displacement`. pbrt-v4 master spells
+it `displacement`; older `.pbrt` files use `bumpmap`. Both are float height
+fields, read by finite differences at intersection time.
+
+Public because RayMakie's pbrt bridge builds materials before any Hikari scene
+exists and needs the same attachment — it called this through the underscore
+when it was private, which is how a rename here became a rename there.
+"""
+function attach_bump(mat::Material, entity::PBRTEntity, textures::AbstractDict{String})
     for key in ("displacement", "bumpmap", "normalmap")
         haskey(entity.params, key) || continue
         p = entity.params[key]
@@ -794,7 +802,7 @@ function resolve_pbrt_material(srec::PBRTShapeRecord, mat_cache::Dict{String, Ma
 
     mat = build_pbrt_material(entity, pbrt, textures, mat_cache)
     if mat !== nothing
-        return _attach_bump(mat, entity, textures)
+        return attach_bump(mat, entity, textures)
     end
     return Diffuse(Kd=(0.5, 0.5, 0.5))
 end
