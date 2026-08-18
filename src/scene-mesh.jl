@@ -222,12 +222,46 @@ end
 # ============================================================================
 # register_face_area_lights! — creates DiffuseAreaLight per emissive face
 # ============================================================================
+#
+# The lights are collected on the host and appended to `scene.lights` in ONE
+# call. `push!` on a `MultiTypeSet` resizes the GPU slot and writes one element
+# per call, so pushing per face cost a `vkAllocateMemory`/`vkFreeMemory` pair
+# and a host→device copy per face — ~150 s for a mesh whose emissive surface is
+# a tessellated sphere (261 120 faces), which was ~95 % of the time to build
+# `RayDemo/Materials/materials.pbrt`.
+
+"""Append the collected `lights`, then stamp each emissive face's `TriangleMeta`
+with the light's flat index. `emissive_faces[k]` is the face that produced the
+k-th light, and the flat index is the set's length before the append plus k —
+`Raycore.append!` assigns exactly that order.
+
+`face_material` is the material index for a face: one value shared by the whole
+mesh, or one per face."""
+face_material(mat_idx::UInt32, ::Int) = mat_idx
+face_material(mat_indices::AbstractVector{UInt32}, face_i::Int) = mat_indices[face_i]
+
+function flush_face_area_lights!(scene, face_meta, lights, emissive_faces, mat)
+    isempty(lights) && return face_meta
+    base = length(scene.lights)
+    append!(scene.lights, lights)
+    for (k, face_i) in pairs(emissive_faces)
+        face_meta[face_i] = TriangleMeta(face_material(mat, face_i),
+                                         UInt32(face_i), UInt32(base + k))
+    end
+    return face_meta
+end
 
 # Single material (all faces share one material + emission)
 function register_face_area_lights!(scene, mesh, face_meta, mat_idx::UInt32, emission)
     verts = GeometryBasics.coordinates(mesh)
     gb_faces = GeometryBasics.faces(mesh)
     has_uv = hasproperty(mesh, :uv)
+    # Every face of this mesh shares `emission`, so the emitted-radiance type is
+    # fixed and the staging vector can be concrete.
+    Le_type = typeof(evaluate_face_emission(emission.Le,
+                                            SVector(Point2f(0f0), Point2f(1f0, 0f0), Point2f(1f0, 1f0))))
+    lights = DiffuseAreaLight{Le_type}[]
+    emissive_faces = Int[]
 
     for (i, face) in enumerate(gb_faces)
         vs = SVector(Point3f(verts[face[1]]), Point3f(verts[face[2]]), Point3f(verts[face[3]]))
@@ -253,11 +287,12 @@ function register_face_area_lights!(scene, mesh, face_meta, mat_idx::UInt32, emi
 
         normal = Raycore.Normal3f(cross_product / twice_area)
         tri_area = 0.5f0 * twice_area
-        light = DiffuseAreaLight(vs, normal, tri_area, face_uv, Le, emission.scale, emission.two_sided)
-        push!(scene.lights, light)
-        face_meta[i] = TriangleMeta(mat_idx, UInt32(i), UInt32(length(scene.lights)))
+        push!(lights, DiffuseAreaLight(vs, normal, tri_area, face_uv, Le,
+                                       emission.scale, emission.two_sided))
+        push!(emissive_faces, i)
     end
 
+    flush_face_area_lights!(scene, face_meta, lights, emissive_faces, mat_idx)
 end
 
 # Per-face materials (different materials per face, some may be emissive)
@@ -267,6 +302,10 @@ function register_face_area_lights!(scene, mesh, face_meta,
     verts = GeometryBasics.coordinates(mesh)
     gb_faces = GeometryBasics.faces(mesh)
     has_uv = hasproperty(mesh, :uv)
+    # Faces may carry different materials here, so the emitted-radiance type is
+    # not fixed across the mesh; `Raycore.append!` groups by stored type anyway.
+    lights = DiffuseAreaLight[]
+    emissive_faces = Int[]
 
     for (i, face) in enumerate(gb_faces)
         emission = get_emission_info(materials[i])
@@ -298,9 +337,10 @@ function register_face_area_lights!(scene, mesh, face_meta,
 
         normal = Raycore.Normal3f(cross_product / twice_area)
         tri_area = 0.5f0 * twice_area
-        light = DiffuseAreaLight(vs, normal, tri_area, face_uv, Le, emission.scale, emission.two_sided)
-        push!(scene.lights, light)
-        face_meta[i] = TriangleMeta(mat_indices[i], UInt32(i), UInt32(length(scene.lights)))
+        push!(lights, DiffuseAreaLight(vs, normal, tri_area, face_uv, Le,
+                                       emission.scale, emission.two_sided))
+        push!(emissive_faces, i)
     end
 
+    flush_face_area_lights!(scene, face_meta, lights, emissive_faces, mat_indices)
 end
