@@ -11,4 +11,4 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 [sources]
 Hikari = {path = "../.."}
 Lava = {url = "https://github.com/SimonDanisch/Lava.jl", rev = "sd/nvidia"}
-Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "master"}
+Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "sd/with-texture"}
