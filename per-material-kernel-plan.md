@@ -1,5 +1,12 @@
 # Per-Material Kernel Split — Plan
 
+> **2026-08-19.** The split landed; what is dated here is how it is
+> *dispatched*. `foreach_type` inside a `Lava.concurrent_dispatch_group` is
+> gone — the per-type kernels are one `compute!` pass of the round graph
+> (`src/integrators/volpath/graph.jl`), which is what says they are independent,
+> and the backend fuses their prepare-indirect kernels. Read the rest as the
+> record of a decision, not as the current API.
+
 Status: **on hold pending data showing this is actually the bottleneck**.
 Per-kernel GPU timing on killeroo (see `profiling-and-orthogonal-mwes.md`
 Phase 5 results, 2026-06-03) shows shading kernels collectively run for
