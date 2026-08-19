@@ -134,6 +134,10 @@ function Adapt.adapt_structure(to, film::Film)
         film.iteration_index,
         film.aux_rays,
         film.aux_results,
+        # A fresh slot, not the source film's: the plan names the buffers it
+        # filters, and this film's are the adapted ones. Sharing the ref would
+        # hand a device film the plan compiled for a host film's arrays.
+        Ref{Any}(nothing),
     )
 end
 

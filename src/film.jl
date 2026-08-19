@@ -62,6 +62,11 @@ struct Film{
     # `Any` to avoid leaking RTRay/RTHitResult types into Film's type parameters.
     aux_rays::Base.RefValue{Any}
     aux_results::Base.RefValue{Any}
+
+    # The denoiser's compiled plan and its ping-pong scratch (see `denoise!`).
+    # Same reason as the two above: kept across frames rather than rebuilt per
+    # call, and `Any` so the plan's type stays out of `Film`'s.
+    denoise_plan::Base.RefValue{Any}
 end
 
 """
@@ -116,6 +121,7 @@ function Film(
         depth,
         postprocess,
         Ref(Int32(0)),
+        Ref{Any}(nothing),
         Ref{Any}(nothing),
         Ref{Any}(nothing),
     )
@@ -222,6 +228,14 @@ function free!(film::Film)
     if film.aux_results[] !== nothing
         finalize(film.aux_results[])
         film.aux_results[] = nothing
+    end
+    dp = film.denoise_plan[]
+    if dp !== nothing
+        # The plan gives its pool regions back; the scratch is an ordinary
+        # allocation of this film's and goes the way the buffers above do.
+        Mantle.free!(dp.plan)
+        finalize(dp.scratch)
+        film.denoise_plan[] = nothing
     end
     return nothing
 end

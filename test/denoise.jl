@@ -30,7 +30,6 @@ using GeometryBasics: normal_mesh, Tesselation
         @test config.sigma_color == 1.0f0
         @test config.sigma_normal == 64.0f0
         @test config.sigma_depth == 0.1f0
-        @test config.use_variance == false
     end
 
     @testset "denoise! runs without error" begin
@@ -101,10 +100,44 @@ using GeometryBasics: normal_mesh, Tesselation
         scene = make_noisy_scene()
         film, _ = render_noisy(scene)
 
-        # Test with different parameters
-        config = Hikari.DenoiseConfig(iterations=3, sigma_color=2.0f0, use_variance=false)
+        # An ODD iteration count, so the writeback pass runs: the result of the
+        # last à-trous pass lands in the scratch, and the film has to end up
+        # holding it.
+        config = Hikari.DenoiseConfig(iterations=3, sigma_color=2.0f0)
         Hikari.denoise!(film; config=config)
         fb = Array(film.framebuffer)
         @test !any(px -> isnan(px.r) || isnan(px.g) || isnan(px.b), fb)
+    end
+
+    @testset "the plan and its scratch are kept, not rebuilt per call" begin
+        scene = make_noisy_scene()
+        film, _ = render_noisy(scene)
+        Hikari.denoise!(film)
+        plan = film.denoise_plan[]
+        @test plan !== nothing
+        Hikari.denoise!(film)
+        # A full-resolution scratch allocation and a plan compile per frame is
+        # what this replaced; same config must reuse both.
+        @test film.denoise_plan[] === plan
+        # A different iteration count is a different number of passes.
+        Hikari.denoise!(film; config = Hikari.DenoiseConfig(iterations = 2))
+        @test film.denoise_plan[] !== plan
+    end
+
+    @testset "sigmas are read per run" begin
+        # They ride `Ref`s, so turning the filter up must not recompile — and
+        # must not be ignored either.
+        scene = make_noisy_scene()
+        film, _ = render_noisy(scene)
+        Hikari.denoise!(film; config = Hikari.DenoiseConfig(sigma_color = 0.01f0))
+        plan = film.denoise_plan[]
+        sharp = copy(Array(film.framebuffer))
+
+        film2, _ = render_noisy(scene)
+        Hikari.denoise!(film2; config = Hikari.DenoiseConfig(sigma_color = 8.0f0))
+        blurry = Array(film2.framebuffer)
+
+        @test film.denoise_plan[] === plan
+        @test sharp != blurry
     end
 end

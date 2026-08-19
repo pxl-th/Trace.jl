@@ -23,19 +23,17 @@ Configuration parameters for the à-trous wavelet denoiser.
 - `sigma_color`: Color edge-stopping threshold (luminance sensitivity)
 - `sigma_normal`: Normal edge-stopping threshold (angular sensitivity)
 - `sigma_depth`: Depth edge-stopping threshold (distance sensitivity)
-- `use_variance`: Whether to use per-pixel variance to guide filtering
 """
 struct DenoiseConfig
     iterations::Int32       # Number of à-trous iterations (typically 4-5)
     sigma_color::Float32    # Color/luminance edge-stopping
     sigma_normal::Float32   # Normal edge-stopping (higher = more blur across normals)
     sigma_depth::Float32    # Depth edge-stopping (higher = more blur across depth)
-    use_variance::Bool      # Use variance-guided filtering (SVGF style)
 end
 
 """
     DenoiseConfig(; iterations=4, sigma_color=1.0, sigma_normal=64.0,
-                    sigma_depth=0.1, use_variance=false)
+                    sigma_depth=0.1)
 
 Create a denoiser configuration with sensible defaults.
 
@@ -46,21 +44,25 @@ Units (post log-luminance / relative-depth fix):
   more sensitive to normal differences.
 - `sigma_depth` is **relative** depth tolerance (fraction of local depth) —
   0.1 means a 10% depth diff per filter step weighted at `exp(-1)`.
-- `use_variance` is currently a no-op (see `weight_color` doc).
+
+There is no `use_variance`: real SVGF needs *temporal* variance from sample
+history, which a `Film` does not store, and the spatial substitute was actively
+harmful — it mistakes texture for noise. See `weight_color`. It used to be a
+field that did nothing, plus a kernel argument that had to be a zero-length
+device array to keep the signature; that array was freed under the running
+dispatch, so the GPU denoiser could not run at all.
 """
 function DenoiseConfig(;
     iterations::Int=4,
     sigma_color::Real=1.0f0,
     sigma_normal::Real=64.0f0,
     sigma_depth::Real=0.1f0,
-    use_variance::Bool=false
 )
     return DenoiseConfig(
         Int32(iterations),
         Float32(sigma_color),
         Float32(sigma_normal),
         Float32(sigma_depth),
-        use_variance
     )
 end
 
@@ -78,7 +80,7 @@ Compute luminance from RGB using Rec. 709 coefficients.
 end
 
 """
-    weight_color(lum_p, lum_q, sigma, variance) -> Float32
+    weight_color(lum_p, lum_q, sigma) -> Float32
 
 Color/luminance edge-stopping weight in **log-luminance space** (HDR-safe).
 `sigma` is in *stops* (log2 luminance ratio) — a 2^sigma ratio between p and q
@@ -91,15 +93,15 @@ stay strict so genuine edges viewed from the dim side are preserved. This is
 the standard fix for à-trous's intrinsic inability to remove fireflies via a
 purely symmetric bilateral weight — a firefly otherwise looks like an edge.
 
-`variance` is ignored (kept for API): real SVGF needs *temporal* variance
-from sample history, which this `Film` does not store. Using spatial variance
-instead was actively harmful (it mistakes texture for noise).
+There is deliberately no variance term: real SVGF needs *temporal* variance from
+sample history, which this `Film` does not store, and the spatial substitute was
+actively harmful — it mistakes texture for noise.
 """
 const FIREFLY_RATIO = 0.1f0
 
 @propagate_inbounds function weight_color(
     lum_p::Float32, lum_q::Float32,
-    sigma::Float32, _variance::Float32
+    sigma::Float32
 )::Float32
     log_p = log2(max(lum_p, 0.0f0) + 1.0f-4)
     log_q = log2(max(lum_q, 0.0f0) + 1.0f-4)
@@ -155,8 +157,9 @@ end
 end
 
 """
-    atrous_denoise_kernel!(output, input, normals, depth, variance,
-                           width, height, step_size, config)
+    atrous_denoise_kernel!(output, input, normals, depth,
+                           width, height, step_size,
+                           sigma_color, sigma_normal, sigma_depth)
 
 Single pass of the à-trous wavelet filter.
 Applies a 5x5 filter with edge-stopping weights.
@@ -166,13 +169,11 @@ Applies a 5x5 filter with edge-stopping weights.
     @Const(input),   # RGB{Float32} matrix
     @Const(normals), # Vec3f matrix
     @Const(depth),   # Float32 matrix
-    @Const(variance), # Float32 matrix (can be nothing-like placeholder)
     @Const(width::Int32), @Const(height::Int32),
     @Const(step_size::Int32),
     @Const(sigma_color::Float32),
     @Const(sigma_normal::Float32),
-    @Const(sigma_depth::Float32),
-    @Const(use_variance::Bool)
+    @Const(sigma_depth::Float32)
 )
     idx = @index(Global)
     num_pixels = width * height
@@ -189,7 +190,6 @@ Applies a 5x5 filter with edge-stopping weights.
 
         n_p = normals[row, col]
         d_p = depth[row, col]
-        var_p = use_variance ? variance[row, col] : 0.0f0
 
         # Accumulate filtered result
         sum_r = 0.0f0
@@ -225,7 +225,7 @@ Applies a 5x5 filter with edge-stopping weights.
                 w_spatial = k_x * k_y
 
                 # Edge-stopping weights
-                w_color = weight_color(lum_p, lum_q, sigma_color, var_p)
+                w_color = weight_color(lum_p, lum_q, sigma_color)
                 w_norm = weight_normal(n_p, n_q, sigma_normal)
                 w_depth = weight_depth(d_p, d_q, sigma_depth, Float32(step_size))
 
@@ -251,64 +251,99 @@ Applies a 5x5 filter with edge-stopping weights.
     end
 end
 
-# =============================================================================
-# Variance Computation
-# =============================================================================
-
-"""
-    compute_variance_kernel!(variance, input, width, height)
-
-Compute per-pixel variance from RGB framebuffer.
-Uses spatial 3x3 neighborhood for variance estimation.
-"""
-@kernel inbounds=true function compute_variance_kernel!(
-    variance,  # Float32 matrix
-    @Const(input),  # RGB{Float32} matrix
-    @Const(width::Int32), @Const(height::Int32)
-)
-    idx = @index(Global)
-    num_pixels = width * height
-
-     if idx <= num_pixels
-        # Convert linear index to 2D
-        row = ((idx - Int32(1)) % height) + Int32(1)
-        col = ((idx - Int32(1)) ÷ height) + Int32(1)
-
-        # Compute spatial variance over 3x3 neighborhood
-        sum_lum = 0.0f0
-        sum_lum_sq = 0.0f0
-        count = Int32(0)
-
-        for dy in Int32(-1):Int32(1)
-            for dx in Int32(-1):Int32(1)
-                q_row = row + dy
-                q_col = col + dx
-
-                if q_row >= Int32(1) && q_row <= height && q_col >= Int32(1) && q_col <= width
-                    pixel = input[q_row, q_col]
-                    lum = denoise_luminance(pixel.r, pixel.g, pixel.b)
-                    sum_lum += lum
-                    sum_lum_sq += lum * lum
-                    count += Int32(1)
-                end
-            end
-        end
-
-        # Variance = E[X²] - E[X]²
-        if count > Int32(0)
-            mean = sum_lum / Float32(count)
-            mean_sq = sum_lum_sq / Float32(count)
-            var = max(0.0f0, mean_sq - mean * mean)
-            variance[row, col] = var
-        else
-            variance[row, col] = 0.0f0
-        end
-    end
-end
+# `compute_variance_kernel!` used to live here: a 3x3 spatial variance nobody
+# dispatched, for a `weight_color` argument that ignored it. Deleted with the
+# `use_variance` field and the zero-length placeholder array that had to be
+# passed to keep the kernel signature — see `weight_color` for why spatial
+# variance is the wrong quantity in the first place.
 
 # =============================================================================
 # High-Level Denoising API (works with Film)
 # =============================================================================
+
+# One pass of the filter writes what the next reads, so the chain is exactly what
+# a graph derives — and it used to be spelled `KA.synchronize(backend)` after
+# every iteration, which drains the whole device to express a dependency between
+# two dispatches. The scratch buffer is the other half: `similar(framebuffer)` is
+# a full-resolution allocation per CALL, i.e. per frame in a live preview. Here it
+# is allocated once and kept on the film beside the other scratch.
+
+"""
+What `denoise!` keeps between calls: the ping-pong partner of the framebuffer,
+and the compiled plan that filters into it.
+
+Keyed on the film's framebuffer and the iteration count, because both are baked
+when the plan is compiled — the passes name the buffers, and how many there are
+is `config.iterations`. The sigmas are not: they ride `Ref`s and are read at
+record time, so turning the filter up mid-session costs nothing.
+"""
+struct DenoisePlan{P,S,R}
+    framebuffer::Any
+    iterations::Int32
+    scratch::S
+    refs::R
+    plan::P
+end
+
+"""The plan for this film and iteration count, compiled if there is not one."""
+function denoise_plan!(film::Film, config::DenoiseConfig)
+    cached = film.denoise_plan[]
+    if cached isa DenoisePlan &&
+       cached.framebuffer === film.framebuffer &&
+       cached.iterations == config.iterations
+        cached.refs.sigma_color[] = config.sigma_color
+        cached.refs.sigma_normal[] = config.sigma_normal
+        cached.refs.sigma_depth[] = config.sigma_depth
+        return cached
+    end
+    backend = KA.get_backend(film.framebuffer)
+    height, width = size(film.framebuffer)
+    n_pixels = width * height
+    scratch = similar(film.framebuffer)
+    refs = (sigma_color = Ref(config.sigma_color),
+            sigma_normal = Ref(config.sigma_normal),
+            sigma_depth = Ref(config.sigma_depth))
+
+    g = Mantle.Graph(mantle_device(backend))
+    for i in 1:config.iterations
+        # 1, 2, 4, 8, 16… — the à-trous hole size, fixed per pass, so it is a
+        # constant of the plan rather than an argument.
+        step = Int32(1) << (i - 1)
+        src, dst = isodd(i) ? (film.framebuffer, scratch) : (scratch, film.framebuffer)
+        Mantle.compute!(g, "atrous-$i") do p
+            Mantle.use(p, src; read = true)
+            Mantle.use(p, dst; write = true)
+            Mantle.use(p, film.normal; read = true)
+            Mantle.use(p, film.depth; read = true)
+            Mantle.dispatch!(p, atrous_denoise_kernel!,
+                             (dst, src, film.normal, film.depth,
+                              Int32(width), Int32(height), step,
+                              refs.sigma_color, refs.sigma_normal, refs.sigma_depth),
+                             n_pixels)
+        end
+    end
+    # An odd iteration count leaves the result in the scratch. A copy pass rather
+    # than a broadcast afterwards, so it is ordered by the barrier the graph
+    # derives like everything else.
+    if isodd(config.iterations)
+        Mantle.compute!(g, "writeback") do p
+            Mantle.use(p, scratch; read = true)
+            Mantle.use(p, film.framebuffer; write = true)
+            Mantle.dispatch!(p, denoise_copy_kernel!,
+                             (film.framebuffer, scratch, Int32(n_pixels)), n_pixels)
+        end
+    end
+    made = DenoisePlan(film.framebuffer, config.iterations, scratch, refs, Mantle.Plan(g))
+    film.denoise_plan[] = made
+    return made
+end
+
+@kernel inbounds = true function denoise_copy_kernel!(dst, @Const(src), @Const(n::Int32))
+    i = @index(Global)
+    if i <= n
+        dst[i] = src[i]
+    end
+end
 
 """
     denoise!(film::Film; config=DenoiseConfig())
@@ -323,46 +358,11 @@ Uses `film.normal` and `film.depth` as edge-stopping guides.
 # Notes
 - Requires `film.normal` and `film.depth` populated (e.g. via `fill_aux_buffers!`).
 - Mutates `film.framebuffer` (downstream `postprocess!` reads it).
-- `config.use_variance` is currently a no-op: see `weight_color` docstring.
+- The plan and its scratch buffer are cached on the film; changing
+  `config.iterations` or rendering to a different film rebuilds them.
 """
 function denoise!(film::Film; config::DenoiseConfig=DenoiseConfig())
-    height, width = size(film.framebuffer)
-    num_pixels = width * height
-    backend = KA.get_backend(film.framebuffer)
-
-    # use_variance is intentionally ignored; pass a zero-length placeholder so
-    # the kernel signature stays stable. The kernel never reads it when
-    # use_variance==false, but KA still wants a typed array argument.
-    variance_placeholder = similar(film.depth, 0)
-
-    # Ping-pong: buffer_a aliases the framebuffer (input on iter 1, also final
-    # destination on even-iter counts). buffer_b is a scratch.
-    buffer_a = film.framebuffer
-    buffer_b = similar(film.framebuffer)
-
-    denoise_kernel! = atrous_denoise_kernel!(backend)
-
-    for i in 1:config.iterations
-        step_size = Int32(1 << (i - 1))  # 1, 2, 4, 8, 16…
-        if i % 2 == 1
-            denoise_kernel!(
-                buffer_b, buffer_a, film.normal, film.depth, variance_placeholder,
-                Int32(width), Int32(height), step_size,
-                config.sigma_color, config.sigma_normal, config.sigma_depth,
-                false; ndrange=num_pixels)
-        else
-            denoise_kernel!(
-                buffer_a, buffer_b, film.normal, film.depth, variance_placeholder,
-                Int32(width), Int32(height), step_size,
-                config.sigma_color, config.sigma_normal, config.sigma_depth,
-                false; ndrange=num_pixels)
-        end
-        KA.synchronize(backend)
-    end
-
-    # Ensure the final result lives in film.framebuffer.
-    if config.iterations % 2 == 1
-        film.framebuffer .= buffer_b
-    end
+    config.iterations < Int32(1) && return nothing
+    Mantle.run!(denoise_plan!(film, config).plan)
     return nothing
 end
