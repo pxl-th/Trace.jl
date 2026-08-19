@@ -58,12 +58,32 @@ Declare `x` — a buffer, a work queue, or a whole multi-type queue — at the
 access this stage uses it with. Returns nothing: what the kernel receives is the
 container, and what the graph orders on are its buffers.
 """
-function use!(p, x; read::Bool = false, write::Bool = false)
+function use!(p, x; read::Bool = false, write::Bool = false, unordered::Bool = false)
     for b in devicebuffers!(Any[], x)
-        Mantle.use(p, b; read = read, write = write)
+        Mantle.use(p, b; read = read, write = write, unordered = unordered)
     end
     return nothing
 end
+
+"""
+    accumulates!(pass, buffer)
+
+Declare a buffer this stage only ever adds into, atomically.
+
+Six stages of a round do exactly one thing to the per-pixel radiance —
+`atomic +=` — and the order they do it in does not change the sum. Declared as
+an ordinary read-write that is a hazard between every pair of them, so the
+escaped, emitter and shading stages are ordered against each other even though
+their queues are disjoint and nothing else connects them. `Unordered` is the
+vocabulary for exactly this, and it is checked on both sides: only two stages
+that BOTH declare it may overlap, so the film clear before them and the
+accumulate after them still get their barriers.
+
+Float addition is not associative, so the sum's last bits depend on the order
+the additions land in — which is already true between invocations of one
+dispatch and is why the pbrt gate is a tolerance and not an equality.
+"""
+accumulates!(p, x) = use!(p, x; read = true, write = true, unordered = true)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The values a recorded plan reads per render
@@ -178,7 +198,7 @@ function trace_uses!(p, state::VolPathState, cur::WorkQueue, nxt::WorkQueue)
     use!(p, state.per_material_queue; read = true, write = true)
     use!(p, state.hit_surface_queue; read = true, write = true)
     use!(p, state.hit_area_light_queue; read = true, write = true)
-    use!(p, state.pixel_L; read = true, write = true)
+    accumulates!(p, state.pixel_L)
     return nothing
 end
 
@@ -194,7 +214,7 @@ function medium_sample_pass!(g, state::VolPathState, refs, nxt::WorkQueue)
         use!(p, state.hit_area_light_queue; read = true, write = true)
         use!(p, nxt; read = true, write = true)
         use!(p, state.escaped_queue; read = true, write = true)
-        use!(p, state.pixel_L; read = true, write = true)
+        accumulates!(p, state.pixel_L)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_sample_medium_kernel!, state.medium_sample_queue,
                           state.medium_scatter_queue, state.per_material_queue,
@@ -245,7 +265,7 @@ end
 function escaped_pass!(g, state::VolPathState, refs)
     Mantle.compute!(g, "escaped") do p
         use!(p, state.escaped_queue; read = true)
-        use!(p, state.pixel_L; read = true, write = true)
+        accumulates!(p, state.pixel_L)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_handle_escaped_rays_kernel!, state.escaped_queue,
                           state.pixel_L, state.rgb2spec_table, refs.lights,
@@ -263,7 +283,7 @@ end
 function emitters_pass!(g, state::VolPathState, refs)
     Mantle.compute!(g, "emitters") do p
         use!(p, state.hit_area_light_queue; read = true)
-        use!(p, state.pixel_L; read = true, write = true)
+        accumulates!(p, state.pixel_L)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_handle_emitters_kernel!, state.hit_area_light_queue,
                           state.pixel_L, refs.lights, state.rgb2spec_table,
@@ -290,7 +310,7 @@ function shade_pass!(g, state::VolPathState, refs, nxt::WorkQueue)
         use!(p, state.per_material_queue; read = true)
         use!(p, state.hit_surface_queue; read = true)
         use!(p, nxt; read = true, write = true)
-        use!(p, state.pixel_L; read = true, write = true)
+        accumulates!(p, state.pixel_L)
         for q in state.per_material_queue.queues
             Mantle.dispatch!(p, workqueue_map_kernel!,
                              (vp_shade_material_kernel!, q,
@@ -313,7 +333,7 @@ end
 function shadow_pass!(g, state::VolPathState, refs)
     Mantle.compute!(g, "shadow") do p
         use!(p, state.shadow_queue; read = true)
-        use!(p, state.pixel_L; read = true, write = true)
+        accumulates!(p, state.pixel_L)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_trace_shadow_rays_kernel!, state.shadow_queue,
                           state.pixel_L, state.rgb2spec_table, refs.accel,
