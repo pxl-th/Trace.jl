@@ -17,7 +17,10 @@ using Adapt
 using KernelAbstractions: @kernel, @index, @Const
 import KernelAbstractions as KA
 using GPUArraysCore: @allowscalar
-# Lava is a weak dependency — hw-rt.jl is loaded via ext/HikariLavaExt.jl
+# Lava is a hard dependency: `hw-rt.jl` below imports it unconditionally.
+# (An earlier comment here called it weak and pointed at an ext that does not
+# exist — the include at the bottom of this file has never been conditional.)
+import Mantle
 
 # Unexported but API: RayMakie's pbrt bridge calls it, so it is not free to
 # change shape. `public` says that without putting it in every `using`'s scope.

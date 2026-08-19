@@ -4,6 +4,9 @@
 # Uses only Raycore types and stubs -- no backend (Lava/Metal) imports.
 # Backend extensions in Raycore implement the actual dispatch.
 
+# The bare module too, not just the two names: `mantle_device` below needs
+# `Lava.LavaBackend` and hands the module itself to `Mantle.Device`.
+import Lava
 import Lava: HWTLAS, HWAdaptedAccel
 
 # Any backend with hw_accel=true creates an HWTLAS.  Parametrised on
@@ -106,3 +109,30 @@ shades_surfaces_inline(::HWAdaptedAccel) = true
 # cmd_trace_rays_indirect_khr → process. Inline ray queries on
 # `Raycore.closest_hit(::HWAdaptedAccel, ray)` collapse that to a single
 # dispatch, so `vp_trace_and_shade!` covers both backends.
+
+# ============================================================================
+# Mantle device
+# ============================================================================
+
+"""
+    mantle_device(backend) -> Mantle.Device
+
+The Mantle device for a KernelAbstractions backend, which is what a graph
+allocates transients and records passes against.
+
+`Mantle.Device(Lava)` is cached one per `VkContext` and wraps that context's
+existing `default_bq`, so this reuses Lava's device rather than creating a
+second one — a second would mean a second `Pool` over one `VkDevice`, which is
+two allocators over the same memory.
+"""
+mantle_device(::Lava.LavaBackend) = Mantle.Device(Lava)
+mantle_device(::KA.CPU) = Mantle.Device(Mantle.Host())
+
+# Smallest kernel that reads one buffer and writes another, so a test can pin
+# that a Mantle pass reaches Hikari's own allocations. Lives here rather than in
+# the test file because a `@kernel` has to be compiled into the package that
+# dispatches it.
+@kernel function mantle_probe_scale!(dst, @Const(src), a::Float32)
+    i = @index(Global)
+    @inbounds dst[i] = src[i] * a
+end
