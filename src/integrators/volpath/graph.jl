@@ -531,13 +531,43 @@ function build_plans(backend, state::VolPathState, framebuffer, refs, max_depth:
     plan(n) = n == 0 ? nothing :
         Mantle.Plan(rounds_graph(dev, state, refs, n;
                                  chit_owns_surface, has_media, has_lights))
-    return VPPlans(key, refs,
-                   Mantle.Plan(setup_graph(dev, state, refs, a)),
-                   plan(nchunk), nchunk,
-                   plan(ntail), ntail,
-                   Mantle.Plan(accumulate_graph(dev, state, refs)),
-                   Mantle.Plan(finalize_graph(dev, state, framebuffer)))
+    plans = VPPlans(key, refs,
+                    Mantle.Plan(setup_graph(dev, state, refs, a)),
+                    plan(nchunk), nchunk,
+                    plan(ntail), ntail,
+                    Mantle.Plan(accumulate_graph(dev, state, refs)),
+                    Mantle.Plan(finalize_graph(dev, state, framebuffer)))
+    return plans
 end
+
+"""Every plan of a sample, in the order a sample runs them."""
+allplans(p::VPPlans) = filter(!isnothing,
+                              (p.setup, p.chunk, p.tail, p.accumulate, p.finalize))
+
+# NOT baked, and the reason is measured rather than assumed.
+#
+# `Mantle.bake!` replays a capture instead of re-recording, and the host saving
+# is real — a round's recording is 0.101 ms and its replay 0.0058 ms. But
+# `Lava.replay!` waits on a semaphore for the PREVIOUS replay, so replays are
+# serialised against each other: an ordering that a single recording expresses
+# with an intra-submission barrier becomes a GPU round-trip between submissions.
+# That is free for what capture was built for — one plan replayed once per
+# inference step — and it is not free for a renderer that replays a chunk four
+# times a sample and thirty-two samples a frame.
+#
+# Paired and interleaved, unbaked against baked, in one session: at a chunk of 8
+# rounds baking costs +5.2 % on medium_null, and at a chunk of 64 — the whole
+# sample in one plan, hence ONE replay — it wins 14.5 %. Which is the
+# serialisation, changing sign exactly where the model says it should. The
+# whole-sample plan is not the way out: it gives up the early exit, worth far
+# more than 14.5 % on any scene whose rays die early.
+#
+# Three things had to be right before that comparison meant anything, and each
+# is a trap worth knowing: `bake!` RUNS the plan as it captures it (so the
+# accumulate pass would contribute a spurious sample); a baked plan replays the
+# arguments it captured unless `Mantle.rebind!` writes new ones; and `rebind!`
+# cannot reach a `custom!` pass's arguments, which is the hardware RT trace.
+
 
 """
     chunking(max_depth) -> (chunk_rounds, tail_rounds)
@@ -581,7 +611,8 @@ function ensure_plans!(state::VolPathState, film::Film, backend,
                        camera, camera_needs_time::Bool, camera_needs_lens::Bool,
                        initial_medium, filter_params, filter_sampler,
                        regularize::Bool, samples_per_pixel::Int32,
-                       max_component_value::Float32, max_depth::Int32;
+                       max_component_value::Float32, max_depth::Int32,
+                       sample_idx::Int32;
                        chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     refs = render_refs(accel, media_interfaces, media, materials, lights,
                        camera, camera_needs_time, camera_needs_lens,
@@ -597,6 +628,10 @@ function ensure_plans!(state::VolPathState, film::Film, backend,
             KA.synchronize(backend)
             free!(plans)
         end
+        # The sample index BEFORE the build, because the build BAKES: a capture
+        # takes the arguments as they are, and one taken with the previous
+        # sample's index renders that sample again.
+        refs.sample_idx[] = sample_idx
         state.plans = build_plans(backend, state, film.framebuffer, refs, max_depth;
                                   chit_owns_surface, has_media, has_lights)
         return state.plans.refs
@@ -616,16 +651,10 @@ function ensure_plans!(state::VolPathState, film::Film, backend,
     r.regularize[] = regularize
     r.samples_per_pixel[] = samples_per_pixel
     r.max_component_value[] = max_component_value
+    r.sample_idx[] = sample_idx
     return r
 end
 
 """Give every plan's pool regions back. Explicit, like every other release
 here — see the `sync!`/`free!` contract."""
-function free!(plans::VPPlans)
-    Mantle.free!(plans.setup)
-    plans.chunk === nothing || Mantle.free!(plans.chunk)
-    plans.tail === nothing || Mantle.free!(plans.tail)
-    Mantle.free!(plans.accumulate)
-    Mantle.free!(plans.finalize)
-    return nothing
-end
+free!(plans::VPPlans) = (foreach(Mantle.free!, allplans(plans)); nothing)

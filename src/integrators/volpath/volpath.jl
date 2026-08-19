@@ -586,11 +586,10 @@ function render!(
                          camera, camera_uses_motion_blur(camera), camera_uses_lens(camera),
                          initial_medium, vp.filter_params, vp.filter_sampler_gpu,
                          vp.regularize, Int32(vp.samples_per_pixel),
-                         vp.max_component_value, vp.max_depth;
+                         vp.max_component_value, vp.max_depth, sample_idx;
                          chit_owns_surface = chit_owns_surface,
                          has_media = has_media,
                          has_lights = length(lights) > 0)
-    refs.sample_idx[] = sample_idx
     plans = state.plans
 
     # The head of the sample fills queue A, and so does every chunk of bounces
