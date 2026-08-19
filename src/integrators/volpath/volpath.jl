@@ -586,47 +586,58 @@ function render!(
                          camera, camera_uses_motion_blur(camera), camera_uses_lens(camera),
                          initial_medium, vp.filter_params, vp.filter_sampler_gpu,
                          vp.regularize, Int32(vp.samples_per_pixel),
-                         vp.max_component_value;
+                         vp.max_component_value, vp.max_depth;
                          chit_owns_surface = chit_owns_surface,
                          has_media = has_media,
                          has_lights = length(lights) > 0)
     refs.sample_idx[] = sample_idx
     plans = state.plans
 
-    # The head of the sample fills queue A, so a sample always starts there —
-    # `max_depth` rounds of ping-pong would otherwise leave the parity of the
-    # last one deciding where the next sample begins.
+    # The head of the sample fills queue A, and so does every chunk of bounces
+    # below — a chunk is an even number of rounds, so it leaves the ping-pong
+    # where it found it.
     state.current_ray_queue = :a
     Mantle.run!(plans.setup)
 
-    # Path tracing loop - following pbrt-v4 wavefront architecture
-    # All inner stages dispatch over a device-side count (0 rays = GPU no-op),
-    # so we do NOT check queue sizes every bounce — that forces a flush + fence
-    # per round and kills GPU pipelining. But running ALL max_depth rounds
-    # unconditionally is just as bad on deep scenes: rays die off long before
-    # max_depth (Crown: maxdepth 100, ray population < 1% past depth ~30),
-    # and every dead round still costs its dispatch commands + barriers —
-    # a measured ~1.3 ms/round, ≈2.1 s of Crown's 3.6 s render.
+    # Path tracing loop - following pbrt-v4 wavefront architecture.
     #
-    # Compromise: every EXIT_CHECK_INTERVAL rounds, synchronize once and read
-    # the input ray queue's 4-byte BAR counter. The live-ray count is
-    # monotonically non-increasing across rounds (a ray either continues 1:1
-    # — surface bounce, medium scatter, null crossing — or dies; nothing
-    # splits), so "queue empty" is a stable exit condition. Worst case we
-    # record EXIT_CHECK_INTERVAL-1 extra dead rounds past the true death
-    # point, and pay (live_rounds / interval) pipeline drains per sample.
+    # A CHUNK of bounces per plan, not one: every stage sizes itself off a
+    # device-resident count, so nothing in a round is decided on the host and a
+    # recording of eight of them is as valid as a recording of one. What that
+    # saves is what the host has to say — one recording, one submission and one
+    # walk over the pass list per eight bounces instead of per bounce.
+    #
+    # Eight, because that is what the early exit already costs. Running ALL
+    # max_depth rounds unconditionally is what a single whole-sample plan would
+    # mean, and it is not affordable on deep scenes: rays die off long before
+    # max_depth (Crown: maxdepth 100, ray population < 1 % past depth ~30) and
+    # every dead round still costs its dispatch commands and barriers — a
+    # measured ~1.3 ms/round, ≈2.1 s of Crown's 3.6 s render. So the loop keeps
+    # its exit: between chunks, synchronize once and read the input ray queue's
+    # 4-byte BAR counter. The live-ray count is monotonically non-increasing
+    # across rounds (a ray either continues 1:1 — surface bounce, medium
+    # scatter, null crossing — or dies; nothing splits), so "queue empty" is a
+    # stable exit condition, and the chunk length IS the check interval, so this
+    # gives up nothing the interval was not giving up already.
     #
     # Sobol samples are generated inline inside each consumer kernel — see the
     # "Inline Sobol samples" block earlier in this file. The consumers compute
-    # their dimensions from (work.depth, sample_idx), so nothing per round
-    # changes but which end of the ray-queue ping-pong is the input.
-    for depth in 0:(vp.max_depth - 1)
-        if EARLY_EXIT_ENABLED[] && depth > 0 && depth % EXIT_CHECK_INTERVAL == 0
+    # their dimensions from (work.depth, sample_idx), so nothing per chunk
+    # changes at all.
+    done = Int32(0)
+    while done < vp.max_depth
+        left = vp.max_depth - done
+        plan, n = left >= plans.chunk_rounds && plans.chunk !== nothing ?
+            (plans.chunk, plans.chunk_rounds) : (plans.tail, plans.tail_rounds)
+        Mantle.run!(plan)
+        done += Int32(n)
+        # `n` rounds starting at A end at A when `n` is even, which every chunk
+        # is; only a tail can be odd, and a tail is last.
+        isodd(n) && swap_ray_queues!(state)
+        if EARLY_EXIT_ENABLED[] && done < vp.max_depth
             KA.synchronize(backend)
             length(current_ray_queue(state)) == 0 && break
         end
-        Mantle.run!(plans.rounds[state.current_ray_queue === :a ? 1 : 2])
-        swap_ray_queues!(state)
     end
 
     Mantle.run!(plans.accumulate)

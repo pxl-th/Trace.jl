@@ -329,7 +329,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-One bounce, for one direction of the ray-queue ping-pong.
+One bounce, appended to `g`.
 
 Which stages exist is a property of the scene, not a runtime branch: a scene
 without media never fills the medium queues, and on the hardware per-material
@@ -338,9 +338,8 @@ the trace returns. A stage that could only ever dispatch over an empty queue is
 left out rather than run for nothing — which is also why the shadow pass is
 gated: medium direct lighting is its only producer.
 """
-function round_graph(dev, state::VolPathState, refs, cur::WorkQueue, nxt::WorkQueue;
-                     chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
-    g = Mantle.Graph(dev)
+function round_passes!(g, state::VolPathState, refs, cur::WorkQueue, nxt::WorkQueue;
+                       chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     reset_pass!(g, state, nxt)
     trace_pass!(g, refs.accel[], state, refs, cur, nxt)
     if has_media
@@ -354,6 +353,39 @@ function round_graph(dev, state::VolPathState, refs, cur::WorkQueue, nxt::WorkQu
         shade_pass!(g, state, refs, nxt)
     end
     has_media && has_lights && shadow_pass!(g, state, refs)
+    return g
+end
+
+"""
+    rounds_graph(dev, state, refs, n; …)
+
+`n` consecutive bounces in ONE graph, starting from ray queue A.
+
+A round is not independent of the round before it — it drains the queue that one
+filled — so this is not about finding parallelism between them. It is about how
+much the host has to say per sample. A plan is recorded when it runs, so a plan
+per round means `max_depth` recordings, `max_depth` submissions and `max_depth`
+walks over the pass list; `n` rounds in one plan means one of each per `n`.
+
+What makes it expressible at all is that nothing in a round is decided on the
+host. Every stage sizes itself off a device-resident count, so a recording is
+valid whatever the ray population turns out to be — including zero, where every
+dispatch is a no-op and the round costs its commands and nothing else.
+
+The queues alternate inside the graph rather than between plans, which is why
+there is one of these and not two: the ping-pong is now an implementation detail
+of the recording. `n` rounds starting at A end at A when `n` is even, which is
+what lets the same plan run back to back.
+"""
+function rounds_graph(dev, state::VolPathState, refs, n::Integer;
+                      chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
+    g = Mantle.Graph(dev)
+    cur, nxt = state.ray_queue_a, state.ray_queue_b
+    for _ in 1:n
+        round_passes!(g, state, refs, cur, nxt;
+                      chit_owns_surface, has_media, has_lights)
+        cur, nxt = nxt, cur
+    end
     return g
 end
 
@@ -448,6 +480,7 @@ struct PlanKey
     chit_owns_surface::Bool
     has_media::Bool
     has_lights::Bool
+    max_depth::Int32
 end
 
 # Identity for the resources, equality for the flags — a `LavaArray` compared
@@ -458,21 +491,26 @@ Base.:(==)(a::PlanKey, b::PlanKey) =
     a.per_material_queue === b.per_material_queue &&
     a.chit_owns_surface == b.chit_owns_surface &&
     a.has_media == b.has_media &&
-    a.has_lights == b.has_lights
+    a.has_lights == b.has_lights &&
+    a.max_depth == b.max_depth
 
 """
 The compiled plans for one `(integrator state, scene shape, film)`, and the
 `Ref`s a run writes its per-sample values into.
 
-`rounds` is the ping-pong: `rounds[1]` drains queue A into B and `rounds[2]` the
-other way, because a plan resolves its arguments once and the two directions are
-different arguments.
+`chunk` is [`EXIT_CHECK_INTERVAL`](@ref) bounces in one plan and `tail` is
+whatever is left over, or `nothing` when the depth divides evenly. Both start
+from ray queue A, so the loop runs `chunk` back to back and `tail` once — the
+chunk length is even, which is what makes that legal.
 """
 struct VPPlans{R}
     key::PlanKey
     refs::R
     setup::Mantle.Plan
-    rounds::Tuple{Mantle.Plan,Mantle.Plan}
+    chunk::Union{Nothing,Mantle.Plan}
+    chunk_rounds::Int
+    tail::Union{Nothing,Mantle.Plan}
+    tail_rounds::Int
     accumulate::Mantle.Plan
     finalize::Mantle.Plan
 end
@@ -483,21 +521,49 @@ end
 Compile the sample. Called when the key changes, which for a still scene is
 once.
 """
-function build_plans(backend, state::VolPathState, framebuffer, refs;
+function build_plans(backend, state::VolPathState, framebuffer, refs, max_depth::Int32;
                      chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     dev = mantle_device(backend)
-    a, b = state.ray_queue_a, state.ray_queue_b
+    a = state.ray_queue_a
     key = PlanKey(typeof(refs), framebuffer, state.per_material_queue,
-                  chit_owns_surface, has_media, has_lights)
-    rounds = (Mantle.Plan(round_graph(dev, state, refs, a, b;
-                                      chit_owns_surface, has_media, has_lights)),
-              Mantle.Plan(round_graph(dev, state, refs, b, a;
-                                      chit_owns_surface, has_media, has_lights)))
+                  chit_owns_surface, has_media, has_lights, max_depth)
+    nchunk, ntail = chunking(max_depth)
+    plan(n) = n == 0 ? nothing :
+        Mantle.Plan(rounds_graph(dev, state, refs, n;
+                                 chit_owns_surface, has_media, has_lights))
     return VPPlans(key, refs,
                    Mantle.Plan(setup_graph(dev, state, refs, a)),
-                   rounds,
+                   plan(nchunk), nchunk,
+                   plan(ntail), ntail,
                    Mantle.Plan(accumulate_graph(dev, state, refs)),
                    Mantle.Plan(finalize_graph(dev, state, framebuffer)))
+end
+
+"""
+    chunking(max_depth) -> (chunk_rounds, tail_rounds)
+
+How a sample's bounces split into plans.
+
+The whole depth in one plan would be the fewest submissions, and it would cost
+the early exit — which is the thing that makes a deep scene affordable, since
+rays die long before `max_depth` and every dead round still costs its commands.
+So the split is the exit's own granularity: it already only looks every
+[`EXIT_CHECK_INTERVAL`](@ref) rounds, so a plan of exactly that many gives up
+nothing it was not giving up already, and the host speaks once per eight bounces
+instead of once per bounce.
+
+The chunk length has to be EVEN, or the ray queues would not be back where the
+plan expects them for the next run. `EXIT_CHECK_INTERVAL` is 8; a tail that is
+odd is fine, because a tail runs last.
+"""
+function chunking(max_depth::Integer)
+    d = Int(max_depth)
+    k = Int(EXIT_CHECK_INTERVAL)
+    isodd(k) && throw(ArgumentError(
+        "EXIT_CHECK_INTERVAL must be even: a chunk of rounds has to leave the ray " *
+        "queues where the next chunk expects them, and an odd count leaves them " *
+        "swapped."))
+    d >= k ? (k, d % k) : (0, d)
 end
 
 """
@@ -515,14 +581,14 @@ function ensure_plans!(state::VolPathState, film::Film, backend,
                        camera, camera_needs_time::Bool, camera_needs_lens::Bool,
                        initial_medium, filter_params, filter_sampler,
                        regularize::Bool, samples_per_pixel::Int32,
-                       max_component_value::Float32;
+                       max_component_value::Float32, max_depth::Int32;
                        chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     refs = render_refs(accel, media_interfaces, media, materials, lights,
                        camera, camera_needs_time, camera_needs_lens,
                        initial_medium, filter_params, filter_sampler,
                        regularize, samples_per_pixel, max_component_value)
     key = PlanKey(typeof(refs), film.framebuffer, state.per_material_queue,
-                  chit_owns_surface, has_media, has_lights)
+                  chit_owns_surface, has_media, has_lights, max_depth)
     plans = state.plans
     if plans === nothing || plans.key != key
         # Before the old plans' regions go back: they were recorded against
@@ -531,7 +597,7 @@ function ensure_plans!(state::VolPathState, film::Film, backend,
             KA.synchronize(backend)
             free!(plans)
         end
-        state.plans = build_plans(backend, state, film.framebuffer, refs;
+        state.plans = build_plans(backend, state, film.framebuffer, refs, max_depth;
                                   chit_owns_surface, has_media, has_lights)
         return state.plans.refs
     end
@@ -557,8 +623,8 @@ end
 here — see the `sync!`/`free!` contract."""
 function free!(plans::VPPlans)
     Mantle.free!(plans.setup)
-    Mantle.free!(plans.rounds[1])
-    Mantle.free!(plans.rounds[2])
+    plans.chunk === nothing || Mantle.free!(plans.chunk)
+    plans.tail === nothing || Mantle.free!(plans.tail)
     Mantle.free!(plans.accumulate)
     Mantle.free!(plans.finalize)
     return nothing
