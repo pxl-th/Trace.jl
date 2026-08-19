@@ -424,36 +424,6 @@ end
     return
 end
 
-function vp_trace_and_shade!(state::VolPathState, accel, media_interfaces, media,
-                             materials, lights,
-                             sample_idx::Int32,
-                             camera, samples_per_pixel::Int32, regularize::Bool = true)
-    foreach(vp_trace_and_shade_kernel!,
-        current_ray_queue(state),
-        next_ray_queue(state),
-        state.escaped_queue,
-        state.medium_sample_queue,
-        state.per_material_queue,
-        state.hit_surface_queue,
-        state.hit_area_light_queue,
-        state.pixel_L,
-        accel, media_interfaces, media, materials, lights,
-        state.rgb2spec_table,
-        state.bvh_nodes,
-        state.infinite_light_indices,
-        state.light_to_bit_trail,
-        state.num_infinite_lights,
-        state.num_bvh_lights,
-        state.num_lights,
-        state.max_depth,
-        regularize,
-        state.sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        state.rr_depth,
-    )
-    return nothing
-end
-
 
 # ============================================================================
 # Shadow Ray Tracing Kernel (with medium transmittance)
@@ -800,23 +770,6 @@ Handles transmissive boundaries (MediumInterface) by tracing through them.
     end
 end
 
-# 5-arg version: software BVH (original implementation)
-function vp_trace_shadow_rays!(
-        state::VolPathState,
-        accel,
-        media_interfaces,
-        media,
-        materials
-    )
-    foreach(vp_trace_shadow_rays_kernel!,
-        state.shadow_queue,
-        state.pixel_L,
-        state.rgb2spec_table,
-        accel, media_interfaces, media, materials,
-    )
-    return nothing
-end
-
 
 # ============================================================================
 # Escaped Ray Handling (Environment Light)
@@ -885,21 +838,6 @@ end
 
         accumulate_spectrum!(pixel_L, base_idx, final_contrib)
     end
-end
-
-function vp_handle_escaped_rays!(state::VolPathState, lights)
-    foreach(vp_handle_escaped_rays_kernel!,
-        state.escaped_queue,
-        state.pixel_L,
-        state.rgb2spec_table,
-        lights,
-        state.bvh_nodes,
-        state.light_to_bit_trail,
-        state.infinite_light_indices,
-        state.num_infinite_lights,
-        state.num_bvh_lights,
-    )
-    return nothing
 end
 
 # ============================================================================

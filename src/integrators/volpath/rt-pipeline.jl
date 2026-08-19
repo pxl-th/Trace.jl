@@ -538,40 +538,54 @@ function vp_rt_pipeline(materials::Raycore.StaticMultiTypeSet{Data}) where {Data
     return p
 end
 
-function vp_trace_and_shade!(state::VolPathState, accel::Lava.HWAdaptedAccel,
-                             media_interfaces, media,
-                             materials, lights,
-                             sample_idx::Int32,
-                             camera, samples_per_pixel::Int32, regularize::Bool = true)
-    bq = Lava.vk_context().default_bq
-    hwtlas = accel.hwtlas
-    hwtlas === nothing && error("vp_trace_and_shade!(HWAdaptedAccel): accel.hwtlas was stripped before dispatch")
-    input_queue = current_ray_queue(state)
-    rt_pipeline = vp_rt_pipeline(materials)
+"""
+The trace stage on the hardware ray-tracing pipeline.
 
-    trace_rays_indirect!(bq, rt_pipeline, hwtlas.hw_tlas,
-        input_queue,
-        next_ray_queue(state),
-        state.escaped_queue,
-        state.medium_sample_queue,
-        state.per_material_queue,
-        state.hit_surface_queue,
-        state.hit_area_light_queue,
-        state.pixel_L,
-        accel, media_interfaces, media, materials, lights,
-        state.rgb2spec_table,
-        state.bvh_nodes,
-        state.infinite_light_indices,
-        state.light_to_bit_trail,
-        state.num_infinite_lights,
-        state.num_bvh_lights,
-        state.num_lights,
-        state.max_depth,
-        regularize,
-        state.sobol_rng, sample_idx,
-        camera, samples_per_pixel,
-        state.rr_depth;
-        n_rays = input_queue.size,
-    )
-    return nothing
+A `custom!` pass rather than a `compute!` one, and that is the whole difference:
+`vkCmdTraceRaysIndirect` with a shader binding table is not a dispatch, so there
+is no kernel and no ndrange for the graph to record. What it reads and writes is
+the same either way, which is why it is declared with the same
+[`trace_uses!`](@ref) as the compute form — the ordering the graph derives does
+not depend on which pipeline does the tracing.
+
+The body reads the scene out of the `Ref`s at record time, so a camera move or a
+new sample index does not rebuild the plan.
+"""
+function trace_pass!(g, ::Lava.HWAdaptedAccel, state::VolPathState, refs,
+                     cur::WorkQueue, nxt::WorkQueue)
+    Mantle.custom!(g, "trace") do p
+        trace_uses!(p, state, cur, nxt)
+        function ()
+            bq = Lava.vk_context().default_bq
+            accel = refs.accel[]
+            materials = refs.materials[]
+            hwtlas = accel.hwtlas
+            hwtlas === nothing &&
+                error("trace_pass!(HWAdaptedAccel): accel.hwtlas was stripped before dispatch")
+            trace_rays_indirect!(bq, vp_rt_pipeline(materials), hwtlas.hw_tlas,
+                cur, nxt,
+                state.escaped_queue,
+                state.medium_sample_queue,
+                state.per_material_queue,
+                state.hit_surface_queue,
+                state.hit_area_light_queue,
+                state.pixel_L,
+                accel, refs.media_interfaces[], refs.media[], materials, refs.lights[],
+                state.rgb2spec_table,
+                state.bvh_nodes,
+                state.infinite_light_indices,
+                state.light_to_bit_trail,
+                state.num_infinite_lights,
+                state.num_bvh_lights,
+                state.num_lights,
+                state.max_depth,
+                refs.regularize[],
+                state.sobol_rng, refs.sample_idx[],
+                refs.camera[], refs.samples_per_pixel[],
+                state.rr_depth;
+                n_rays = cur.size,
+            )
+            return nothing
+        end
+    end
 end

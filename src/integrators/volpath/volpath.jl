@@ -164,12 +164,6 @@ function Base.close(vp::VolPath)
     return nothing
 end
 
-# Dispatch wrapper: pass `vp` so external packages (e.g. hikari_integration.jl)
-# can overload based on accel type.
-function vp_trace_shadow_rays!(state::VolPathState, accel, media_interfaces, media, materials, ::VolPath)
-    vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials)
-end
-
 # Scene adaptation dispatch — overridden for HWAdaptedAccel in hikari_integration.jl
 adapt_scene_for_render(backend, scene, ::VolPath) = Adapt.adapt(backend, scene)
 
@@ -452,16 +446,15 @@ once after all samples).
 function finalize_film!(vp::VolPath, film::Film)
     state = vp.state
     state === nothing && return nothing
-    img = film.framebuffer
-    height, width = size(img)
-    backend = KA.get_backend(img)
-    n_pixels = width * height
-    kernel! = vp_finalize_film_kernel!(backend)
-    kernel!(
-        img, state.pixel_rgb, state.pixel_weight_sum,
-        Int32(width), Int32(height);
-        ndrange=Int(n_pixels),
-    )
+    plans = state.plans
+    plans === nothing && throw(ArgumentError(
+        "finalize_film!: no plans yet — the divide is a graph pass, and the graph " *
+        "is built by the first `render!`. Render a sample before finalizing."))
+    plans.key.framebuffer === film.framebuffer || throw(ArgumentError(
+        "finalize_film!: this film is not the one the plans were built for. A pass " *
+        "names its target when the plan is compiled, so finalizing into another " *
+        "film would write the one that was rendered. Render this film first."))
+    Mantle.run!(plans.finalize)
     return nothing
 end
 
@@ -569,16 +562,6 @@ function render!(
     sample_idx = film.iteration_index[] + Int32(1)
     film.iteration_index[] = sample_idx
 
-    # Get SobolRNG from state (allocated once)
-    sobol_rng = state.sobol_rng
-
-    # Get accumulators from state (allocation-free)
-    pixel_rgb = state.pixel_rgb
-    pixel_weight_sum = state.pixel_weight_sum
-    wavelengths_per_pixel = state.wavelengths_per_pixel
-    pdf_per_pixel = state.pdf_per_pixel
-    filter_weight_per_pixel = state.filter_weight_per_pixel
-
     # Detect which medium the camera is inside (vacuum if outside all media)
     # Cached: camera position doesn't change between samples, so detect once per render
     camera_pos = get_camera_position(camera)
@@ -590,43 +573,36 @@ function render!(
         vp.initial_medium_key = initial_medium
     end
 
-    # Clear spectral buffer (pixel_L) for this sample iteration + reset the
-    # ray queue.  Both are fills; the GPU's per-dispatch barrier between
-    # them is wasted (they touch disjoint memory).  Wrap in a
-    # `concurrent_dispatch_group` so they overlap.
-    concurrent_dispatch_group() do
-        reset_film!(state)
-        empty!(current_ray_queue(state))
-    end
-
-    # Generate camera rays with filter sampling (pbrt-v4 style) and ZSobol sampler
     # Adapt filter sampler data to GPU — cache on struct to avoid re-uploading every sample
     if vp.filter_sampler_gpu === nothing
         vp.filter_sampler_gpu = Adapt.adapt(backend, vp.filter_sampler_data)
     end
-    filter_sampler_data_gpu = vp.filter_sampler_gpu
 
     # Compute camera effects flags CPU-side so the kernel doesn't have to
     # walk getproperty chains into Camera.core.shutter_*.  These are uniform
     # across all pixels of the render.
-    camera_needs_time = camera_uses_motion_blur(camera)
-    camera_needs_lens = camera_uses_lens(camera)
-    kernel! = vp_generate_camera_rays_kernel!(backend)
-    kernel!(
-        current_ray_queue(state),  # WorkQueue passed via Adapt
-        wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
-        Int32(height),
-        camera, camera_needs_time, camera_needs_lens,
-        sample_idx, initial_medium, vp.filter_params,
-        filter_sampler_data_gpu,
-        sobol_rng;
-        ndrange=Int(n_pixels)
-    )
+    refs = ensure_plans!(state, film, backend,
+                         accel, media_interfaces, media, materials, lights,
+                         camera, camera_uses_motion_blur(camera), camera_uses_lens(camera),
+                         initial_medium, vp.filter_params, vp.filter_sampler_gpu,
+                         vp.regularize, Int32(vp.samples_per_pixel),
+                         vp.max_component_value;
+                         chit_owns_surface = chit_owns_surface,
+                         has_media = has_media,
+                         has_lights = length(lights) > 0)
+    refs.sample_idx[] = sample_idx
+    plans = state.plans
+
+    # The head of the sample fills queue A, so a sample always starts there —
+    # `max_depth` rounds of ping-pong would otherwise leave the parity of the
+    # last one deciding where the next sample begins.
+    state.current_ray_queue = :a
+    Mantle.run!(plans.setup)
 
     # Path tracing loop - following pbrt-v4 wavefront architecture
-    # All inner kernels use indirect dispatch (0 rays = GPU no-op), so we do
-    # NOT check queue sizes every bounce — that forces a flush + fence per
-    # round and kills GPU pipelining. But running ALL max_depth rounds
+    # All inner stages dispatch over a device-side count (0 rays = GPU no-op),
+    # so we do NOT check queue sizes every bounce — that forces a flush + fence
+    # per round and kills GPU pipelining. But running ALL max_depth rounds
     # unconditionally is just as bad on deep scenes: rays die off long before
     # max_depth (Crown: maxdepth 100, ray population < 1% past depth ~30),
     # and every dead round still costs its dispatch commands + barriers —
@@ -639,106 +615,21 @@ function render!(
     # splits), so "queue empty" is a stable exit condition. Worst case we
     # record EXIT_CHECK_INTERVAL-1 extra dead rounds past the true death
     # point, and pay (live_rounds / interval) pipeline drains per sample.
+    #
+    # Sobol samples are generated inline inside each consumer kernel — see the
+    # "Inline Sobol samples" block earlier in this file. The consumers compute
+    # their dimensions from (work.depth, sample_idx), so nothing per round
+    # changes but which end of the ray-queue ping-pong is the input.
     for depth in 0:(vp.max_depth - 1)
         if EARLY_EXIT_ENABLED[] && depth > 0 && depth % EXIT_CHECK_INTERVAL == 0
             KA.synchronize(backend)
             length(current_ray_queue(state)) == 0 && break
         end
-        # Sobol samples are generated inline inside each consumer kernel —
-        # see the "Inline Sobol samples" block earlier in this file.  The
-        # consumers compute their dimensions from (work.depth, sample_idx)
-        # so we just thread `sample_idx` through the dispatchers.
-        reset_iteration_queues!(state)
-
-        # Trace + shade in one dispatch for non-medium rays. Medium rays still
-        # take the old path: the fused kernel pushes them to medium_sample_queue
-        # and the medium pipeline below drains it (and any medium-originated
-        # surface escapes into the per-material queues, which `vp_shade_surfaces!`
-        # drains after the medium kernels run). Surface-only scenes (the
-        # common case) bypass `hit_surface_queue` entirely — saves one dispatch
-        # + barrier per bounce plus ~170 MB of work-item materialization on a
-        # 1.4M-pixel render.
-        vp_trace_and_shade!(state, accel, media_interfaces, media, materials, lights,
-                            sample_idx,
-                            camera, Int32(vp.samples_per_pixel), vp.regularize)
-
-        # Medium sampling — indirect dispatch handles empty queues (0 groups = no-op)
-        if !isempty(media)
-            vp_sample_medium_interaction!(state, media, materials)
-        end
-
-        # NOTE on grouping: only the per-material shading dispatches share a
-        # deferred indirect group (inside `vp_shade_surfaces!`). Grouping the
-        # medium DL/scatter + escaped + emitters stages in with the shading
-        # was tried (2026-06-10) and BENCHMARKED WORSE on volume/trace-heavy
-        # scenes (bunny SW +25%, killeroo SW +22%) even though it removes
-        # barriers — co-scheduling the heavy ray-query kernels (medium DL's
-        # shadow transmittance, the shading kernels' inline shadow traces)
-        # thrashes cache/occupancy. Sequential pairs win there; the fused
-        # multi-prepare group only pays off for the 12 SMALL per-type
-        # shading dispatches (materials SW −25%, crown SW −5%).
-        if !isempty(media)
-            if length(lights) > 0
-                vp_sample_medium_direct_lighting!(state, lights, sample_idx)
-            end
-            vp_sample_medium_scatter!(state, sample_idx)
-        end
-
-        # Escaped rays — lights check is CPU-side static scene data
-        if length(lights) > 0
-            vp_handle_escaped_rays!(state, lights)
-        end
-
-        # HW per-material chit path: emission MIS and per-material BSDF /
-        # DL / RR / continuation already ran INSIDE each material's chit
-        # shader during `vp_trace_and_shade!`. `hit_area_light_queue` and
-        # `per_material_queue` are unused on this path, so we skip both
-        # `vp_handle_emitters!` and `vp_shade_surfaces!`. The SW BVH path
-        # still drains them — the post-hoc kernels are the only place
-        # surface shading runs there. Medium-bearing HW scenes also still
-        # need them: the medium-survives-to-surface path
-        # (`vp_sample_medium_kernel!` in delta-tracking.jl) populates the
-        # same queues via `enqueue_after_intersection!`.
-        if !chit_owns_surface
-            # Emission MIS — drains hit_area_light_queue. Direct port of
-            # pbrt-v4's "Handle emitters hit by indirect rays" kernel
-            # (wavefront/integrator.cpp:540).
-            if length(lights) > 0
-                vp_handle_emitters!(state, lights)
-            end
-
-            # Per-material shading — drains the typed index queues. Both
-            # producers fill them: the surface trace for non-medium rays and
-            # delta tracking's survive-to-surface path, through the same
-            # `enqueue_after_intersection!`. One dispatch per concrete
-            # material type; each kernel contains only one material's BSDF, so
-            # SPIR-V stays small and the register cliff (128 regs/thread) is
-            # avoided. The dispatches share a fused-prepare deferred group.
-            vp_shade_surfaces!(state, accel, media_interfaces, media,
-                               materials, lights,
-                               sample_idx,
-                               camera,
-                               Int32(vp.samples_per_pixel), vp.regularize)
-        end
-
-        vp_trace_shadow_rays!(state, accel, media_interfaces, media, materials, vp)
-
+        Mantle.run!(plans.rounds[state.current_ray_queue === :a ? 1 : 2])
         swap_ray_queues!(state)
     end
 
-    # Accumulate this sample's spectral radiance to RGB with filter weights (pbrt-v4 style)
-    # Sensor imaging_ratio and output_matrix are applied here, matching pbrt-v4's PixelSensor.
-    kernel! = vp_accumulate_to_rgb_kernel!(backend)
-    kernel!(
-        pixel_rgb, pixel_weight_sum, state.pixel_L,
-        wavelengths_per_pixel, pdf_per_pixel, filter_weight_per_pixel,
-        state.cie_table.cie_x, state.cie_table.cie_y, state.cie_table.cie_z,
-        Int32(n_pixels),
-        vp.max_component_value,
-        state.output_matrix,
-        state.imaging_ratio;
-        ndrange=Int(n_pixels)
-    )
+    Mantle.run!(plans.accumulate)
 
     # Update film: divide weighted sum by weight sum (pbrt-v4 style).
     # The kwarg lets batched callers (RayMakie's colorbuffer loop) skip the

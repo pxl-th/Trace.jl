@@ -133,6 +133,13 @@ mutable struct VolPathState{Backend}
     # which materials are present.
     per_material_queue::Any              # MultiTypeMaterialQueue{...} | nothing
     per_material_queue_signature::Any    # type tuple, used as freshness check
+
+    # The compiled Mantle plans for a sample (see graph.jl). Here rather than on
+    # the integrator because they name this state's queues and accumulators: a
+    # state that is rebuilt takes its plans with it.  `Any` for the same reason
+    # the queues above are — the concrete type carries the scene's material
+    # types and the adapted scene's.
+    plans::Any                           # VPPlans{...} | nothing
 end
 
 """
@@ -146,6 +153,11 @@ rule as `free!(::Film)` — pair this with the end of a `colorbuffer` / a
 `sync!(scene)`, or explicitly `KA.synchronize(backend)` before calling.
 """
 function free!(state::VolPathState)
+    # The plans first: they name the queues below, and a plan gives its pool
+    # regions back rather than freeing anything the queues own.
+    state.plans === nothing || free!(state.plans)
+    state.plans = nothing
+
     # Work queues (bulk of GPU memory — each holds items + size arrays)
     free!(state.ray_queue_a)
     free!(state.ray_queue_b)
@@ -289,6 +301,9 @@ function VolPathState(
         # Per-material typed queues (built lazily once we see the scene's
         # adapted materials).
         nothing, nothing,
+        # Plans (built lazily on the first render, once the scene shape and the
+        # film are known).
+        nothing,
     )
 end
 
@@ -329,34 +344,3 @@ function swap_ray_queues!(state::VolPathState)
     state.current_ray_queue = state.current_ray_queue == :a ? :b : :a
 end
 
-"""Reset all processing queues for a new bounce.
-
-The empties are tiny 1-element `fill!`s, but the GPU normally inserts a
-full pipeline barrier between each dispatch.  These counters all live in
-1-element arrays, so resetting them is a handful of stores — the cost was
-entirely the ~20 dispatch commands.  `empty_all!` collapses everything
-into ONE kernel dispatch (a single thread zeroing every counter), which
-removed ~0.4 ms of per-round overhead on Crown's 12-material render."""
-function reset_iteration_queues!(state::VolPathState)
-    pmq = state.per_material_queue
-    if pmq === nothing
-        empty_all!(state.backend,
-            next_ray_queue(state),
-            state.medium_sample_queue, state.medium_scatter_queue,
-            state.hit_surface_queue, state.shadow_queue,
-            state.escaped_queue, state.hit_area_light_queue)
-    else
-        empty_all!(state.backend,
-            next_ray_queue(state),
-            state.medium_sample_queue, state.medium_scatter_queue,
-            state.hit_surface_queue, state.shadow_queue,
-            state.escaped_queue, state.hit_area_light_queue,
-            pmq)
-    end
-    return nothing
-end
-
-"""Reset film buffer for a new sample."""
-function reset_film!(state::VolPathState)
-    KA.fill!(state.pixel_L, 0f0)
-end

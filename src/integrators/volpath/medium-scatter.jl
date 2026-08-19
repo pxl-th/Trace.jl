@@ -227,31 +227,3 @@ end
     medium_scatter_inner!(ray_queue, work, max_depth, sobol_rng, sample_idx)
 end
 
-# ============================================================================
-# High-Level Functions
-# ============================================================================
-
-function vp_sample_medium_direct_lighting!(state::VolPathState, lights, sample_idx::Int32)
-    foreach(vp_medium_direct_lighting_kernel!,
-        state.medium_scatter_queue,
-        state.shadow_queue,
-        lights,
-        state.rgb2spec_table,
-        state.bvh_nodes, state.infinite_light_indices,
-        state.num_infinite_lights, state.num_bvh_lights,
-        state.num_lights,
-        state.sobol_rng, sample_idx,
-    )
-    return nothing
-end
-
-function vp_sample_medium_scatter!(state::VolPathState, sample_idx::Int32)
-    output_queue = next_ray_queue(state)
-    foreach(vp_medium_scatter_kernel!,
-        state.medium_scatter_queue,
-        output_queue,
-        state.max_depth,
-        state.sobol_rng, sample_idx,
-    )
-    return nothing
-end

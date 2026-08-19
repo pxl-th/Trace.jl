@@ -102,8 +102,8 @@ end
 # The materials that have no BSDF of their own
 # ============================================================================
 #
-# `foreach_type` generates a `vp_shade_material_kernel!{T}` for every concrete
-# type in the scene's material set, so every one of them needs BSDF methods to
+# The shading pass dispatches a `vp_shade_material_kernel!{T}` per concrete type
+# in the scene's material set, so every one of them needs BSDF methods to
 # compile — including the types that never actually shade a hit:
 #
 #   * `MixMaterial` is re-pointed at one of its sub-materials at the PUSH site

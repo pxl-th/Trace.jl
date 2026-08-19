@@ -144,6 +144,8 @@ include("integrators/volpath/delta-tracking.jl")
 include("integrators/volpath/medium-scatter.jl")
 include("integrators/volpath/intersection.jl")
 include("integrators/volpath/surface-eval.jl")
+# The sample as Mantle graphs — needs every stage's kernel to exist
+include("integrators/volpath/graph.jl")
 include("integrators/volpath/volpath.jl")
 # Hardware RT dispatch (uses Raycore's backend-agnostic HWTLAS/HWAdaptedAccel interface)
 include("integrators/volpath/hw-rt.jl")

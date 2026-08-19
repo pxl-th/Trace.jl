@@ -9,7 +9,6 @@ import KernelAbstractions as KA
 using Atomix: @atomic
 using StructArrays
 using Adapt
-import Lava: LavaBackend, concurrent_dispatch_group, concurrent_indirect_group
 
 # ============================================================================
 # SOA/AOS Array Allocation (following pbrt-v4's SOA pattern)
@@ -198,32 +197,13 @@ end
 # Default workgroupsize=256 gives ~14% speedup on CUDA (Ampere) vs auto-selection.
 # Static workgroupsize helps GPU compilers optimize register allocation and enables
 # more concurrent blocks per SM.
+#
+# How a queue is dispatched over is `Mantle.DeviceRange(q.size; max = q.capacity)`
+# in the graph — the count lives on the device, the backend turns it into
+# workgroups there, and the graph orders the stage after whoever wrote the count.
+# What used to be here was the launch side of that: a `gpu_ndrange` that handed
+# Lava the counter buffer and read it back on every other backend.
 const DEFAULT_WORKGROUPSIZE = 256
-
-"""
-    gpu_ndrange(backend, size_buf)
-
-Get the ndrange for dispatching over a queue's GPU-resident size buffer.
-Default: CPU readback (works on AMDGPU, CUDA, CPU).
-Lava overrides this to return the GPU array directly for indirect dispatch (no flush).
-"""
-# Clamp to 1 (not 0) because ndrange=0 crashes on some backends (AMDGPU).
-# The kernel's bounds check (idx > queue_size) handles the empty case.
-# Backends supporting indirect dispatch (Lava) return the GPU array directly,
-# avoiding GPU->CPU sync. Others fall back to CPU readback.
-function gpu_ndrange(backend, size_buf)
-    if backend isa LavaBackend
-        return size_buf
-    end
-    return max(Int(Array(size_buf)[1]), 1)
-end
-
-function Base.foreach(f, queue::WorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
-    backend = KA.get_backend(queue.items)
-    kernel! = workqueue_map_kernel!(backend, workgroupsize)
-    kernel!(f, queue, args...; ndrange=gpu_ndrange(backend, queue.size))
-    return nothing
-end
 
 # ============================================================================
 # MultiTypeWorkQueue — one WorkQueue per concrete item type
@@ -232,27 +212,20 @@ end
 # Mirrors pbrt-v4's per-material-type queue pattern (MaterialEvalQueue<T> in
 # wavefront/workitems.h). One `WorkQueue{ItemFor[T]}` per concrete type T in
 # the scene. The trace kernel routes each work item into the queue for its
-# concrete type via `with_index` dispatch; the consumer drains *all* of them
-# with `foreach_type`, which lowers to one indirect dispatch per type into
-# the active Lava command buffer.
+# concrete type via `with_index` dispatch; the shading stage drains all of them
+# — one dispatch per type, all in one graph pass, since they are independent.
 #
 # Each per-type kernel is fully monomorphised by Julia (no `with_index`
 # switch inside the kernel), so the resulting SPIR-V is small and the warps
 # never diverge on material-type branches.
-#
-# On Lava the N dispatches naturally serialise via the existing per-dispatch
-# barriers. Wrapping the loop in `Lava.concurrent_dispatch_group()` (see
-# Lava commit eefc75c) suppresses the inter-dispatch barriers so independent
-# per-type kernels run concurrently on idle SMs — verified to give up to
-# ~3× wall-clock speedup on small dispatches that don't saturate the GPU.
 
 """
     MultiTypeWorkQueue{Qs <: Tuple}
 
 Heterogeneous tuple of `WorkQueue`s, one per concrete item type. Iteration
-order matches the type-tuple order. Compile-time-known number of queues, so
-`foreach_type` unrolls cleanly via `Base.foreach(::Tuple)` (which lowers to
-`afoldl`) with full type stability per arm.
+order matches the type-tuple order, and the number of queues is known at
+compile time, so a stage that dispatches over all of them unrolls with full
+type stability per arm.
 
 # Fields
 - `queues::Qs`: NTuple of WorkQueue, one per concrete item type
@@ -289,26 +262,6 @@ function Adapt.adapt_structure(backend, mtwq::MultiTypeWorkQueue)
     MultiTypeWorkQueue(map(q -> Adapt.adapt(backend, q), mtwq.queues))
 end
 
-"""
-    foreach_type(kernel!, mtwq::MultiTypeWorkQueue, args...; workgroupsize=DEFAULT_WORKGROUPSIZE)
-
-Dispatch `kernel!` once per queue in `mtwq`, indirect-dispatched on each
-queue's GPU-resident size buffer. Julia unrolls the tuple loop at compile
-time (via `Base.foreach(::Tuple) → afoldl`) and the kernel is monomorphised
-per concrete item type, so each arm compiles to a separate small SPIR-V
-module with no `with_index` switch inside.
-
-Per-dispatch barriers between the per-type kernels serialise them on the
-GPU. Wrap the call in `Lava.concurrent_dispatch_group(...) do ... end` to
-let them overlap when they're independent (different output queues, or
-shared output via atomic-claimed slots).
-"""
-@inline function foreach_type(kernel!, mtwq::MultiTypeWorkQueue, args...;
-                              workgroupsize=DEFAULT_WORKGROUPSIZE)
-    foreach(q -> foreach(kernel!, q, args...; workgroupsize=workgroupsize), mtwq.queues)
-    return nothing
-end
-
 # ============================================================================
 # Batched counter reset — one dispatch for all queues
 # ============================================================================
@@ -339,21 +292,6 @@ _collect_size_counters(acc::Tuple, q::WorkQueue, rest...) =
     _collect_size_counters((acc..., q.size), rest...)
 _collect_size_counters(acc::Tuple, m::MultiTypeWorkQueue, rest...) =
     _collect_size_counters((acc..., map(q -> q.size, m.queues)...), rest...)
-
-"""
-    empty_all!(backend, queues...)
-
-Reset the size counters of all given queues (`WorkQueue` or
-`MultiTypeWorkQueue`) in a SINGLE kernel dispatch. A handful of stores from
-one thread — the point is replacing N per-queue `fill!` dispatches (each
-with its own barrier) with one command.
-"""
-function empty_all!(backend, queues...)
-    counters = _collect_size_counters((), queues...)
-    kernel! = zero_size_counters_kernel!(backend, 1)
-    kernel!(counters; ndrange=1)
-    return nothing
-end
 
 # ============================================================================
 # Convenience Aliases

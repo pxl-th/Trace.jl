@@ -191,11 +191,11 @@ end
 #     concrete instance via `material_of_type(materials, T, vec_idx)` (one
 #     array load resolved at compile time), accumulates emission, runs DL
 #     + indirect path.
-#   * `vp_shade_surfaces!` — `foreach_type` over the `MultiTypeMaterialQueue`,
-#     wrapped in `Lava.concurrent_dispatch_group` so per-type kernels can
-#     overlap on idle SMs (otherwise serialized by the per-dispatch
-#     barriers — each per-type kernel writes to disjoint slots of the
-#     shared `next_ray_queue` + atomic `pixel_L`).
+#   * the "shade" pass (graph.jl) — one dispatch per queue of the
+#     `MultiTypeMaterialQueue`, all in ONE pass, because they are independent:
+#     each per-type kernel writes disjoint slots of the shared `next_ray_queue`
+#     and atomic `pixel_L`. A pass is the unit barriers go between, so they
+#     overlap on idle SMs rather than serialising.
 
 """Direct lighting for one surface hit: BVH light sample, BSDF evaluation on
 the already-resolved `bxdf` carrier, MIS weight, shadow ray pushed inline.
@@ -537,66 +537,3 @@ emitter kernel writes only `pixel_L`; the material kernels also write
     return
 end
 
-"""Drain the per-bounce `hit_area_light_queue` produced by
-`enqueue_after_intersection!`. Matches pbrt-v4's split between
-`hitAreaLightQueue` (this kernel) and `MaterialEvalQueue` (the
-per-material `vp_shade_surfaces!` kernels)."""
-function vp_handle_emitters!(state::VolPathState, lights)
-    num_lights = state.num_lights
-    num_lights < Int32(1) && return nothing
-    foreach(vp_handle_emitters_kernel!,
-        state.hit_area_light_queue,
-        state.pixel_L,
-        lights, state.rgb2spec_table,
-        state.bvh_nodes, state.light_to_bit_trail,
-        state.num_infinite_lights, state.num_bvh_lights, state.num_lights,
-    )
-    return nothing
-end
-
-"""Drain the per-material typed queues — one indirect dispatch per concrete
-material type, each kernel monomorphised on a single `TypedHitRef{T}`.
-
-Wrapped in `Lava.concurrent_indirect_group` so the per-type dispatches
-share one fused multi-prepare + barrier and overlap on idle SMs.  The
-per-type kernels write to atomically-claimed slots in the shared
-`next_ray_queue` and to per-pixel atomic `pixel_L` accumulators, so
-overlap is safe."""
-function vp_shade_surfaces!(
-    state::VolPathState, accel, media_interfaces, media,
-    materials, lights,
-    sample_idx::Int32,
-    camera, samples_per_pixel::Int32,
-    regularize::Bool = true,
-)
-    # Deferred indirect group: ONE fused multi-prepare for all per-type
-    # dispatches, one shared barrier, then the dispatches overlapped.
-    # Grouping the medium/escaped/emitters stages in here too was tried and
-    # benchmarked worse (see the note in render!'s bounce loop).
-    concurrent_indirect_group() do
-        foreach_type(vp_shade_material_kernel!,
-            state.per_material_queue,
-            state.hit_surface_queue,
-            next_ray_queue(state),
-            state.pixel_L,
-            accel,
-            media_interfaces,
-            media,
-            materials,
-            lights,
-            state.rgb2spec_table,
-            state.bvh_nodes,
-            state.infinite_light_indices,
-            state.light_to_bit_trail,
-            state.num_infinite_lights,
-            state.num_bvh_lights,
-            state.num_lights,
-            state.max_depth,
-            regularize,
-            state.sobol_rng, sample_idx,
-            camera, samples_per_pixel,
-            state.rr_depth,
-        )
-    end
-    return nothing
-end

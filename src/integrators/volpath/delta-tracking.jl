@@ -511,24 +511,3 @@ Uses deterministic LCG RNG for medium sampling (pbrt-v4 pattern).
     return SampleTMajResult(beta, r_u, r_l, current_rng, false, ray_d)
 end
 
-# ============================================================================
-# High-Level Medium Sampling Function
-# ============================================================================
-
-function vp_sample_medium_interaction!(state::VolPathState, media, materials)
-    foreach(vp_sample_medium_kernel!,
-        state.medium_sample_queue,
-        state.medium_scatter_queue,
-        state.per_material_queue,
-        state.hit_surface_queue,
-        state.hit_area_light_queue,
-        next_ray_queue(state),
-        state.escaped_queue,
-        state.pixel_L,
-        media,
-        materials,
-        state.rgb2spec_table,
-        state.max_depth,
-    )
-    return nothing
-end
