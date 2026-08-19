@@ -27,6 +27,15 @@
 # times, so a plan per round expresses it, and the early exit reads a device
 # counter and breaks — which no graph-level loop node would make cheaper.
 
+# What is NOT here: the queues are Hikari's own allocations, read by the passes
+# as foreign buffers. A graph can order accesses to a buffer it does not own; it
+# cannot adopt one into its arena, and aliasing is the arena's. Moving them was
+# the obvious last step of the port and it is measured to be worth nothing on
+# this loop — `benchmarks/queue_aliasing/aliasing.jl` puts every intermediate
+# queue in the placer's hands at 1280x1080 and gets 174 MiB back for ONE round
+# and exactly zero for two or more, because every queue is refilled every round
+# and so is live from the first to the last. The shipped chunk is eight.
+
 import Mantle
 import StructArrays
 
