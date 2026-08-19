@@ -1,10 +1,11 @@
 using GeometryBasics: normal_mesh, Tesselation
+import Adapt
 
 @testset "Denoising" begin
     to_mesh(prim) = normal_mesh(prim isa Sphere ? Tesselation(prim, 32) : prim)
 
-    function make_noisy_scene()
-        scene = Hikari.Scene()
+    function make_noisy_scene(backend = KA.CPU())
+        scene = Hikari.Scene(; backend = backend)
         push!(scene, to_mesh(Sphere(Point3f(0, 0.5, 0), 0.5f0)),
               Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.8f0, 0.3f0, 0.2f0)))
         push!(scene, to_mesh(Rect3f(Vec3f(-2, 0, -2), Vec3f(4, 0.01, 4))),
@@ -14,10 +15,11 @@ using GeometryBasics: normal_mesh, Tesselation
         return scene
     end
 
-    function render_noisy(scene; res=32, spp=2)
+    function render_noisy(scene; res=32, spp=2, backend = KA.CPU())
         film = Hikari.Film(Point2f(res, res))
         camera = Hikari.PerspectiveCamera(
             Point3f(2f0, 1.5f0, -2f0), Point3f(0f0, 0.3f0, 0f0), film; fov=45f0)
+        film = backend isa KA.CPU ? film : Adapt.adapt(backend, film)
         Hikari.clear!(film)
         Hikari.VolPath(samples=spp, max_depth=4)(scene, film, camera)
         Hikari.fill_aux_buffers!(film, scene, camera)
@@ -139,5 +141,42 @@ using GeometryBasics: normal_mesh, Tesselation
 
         @test film.denoise_plan[] === plan
         @test sharp != blurry
+    end
+
+    @testset "on the GPU, and agreeing with the CPU" begin
+        # Everything above renders a CPU film, and that is exactly how the GPU
+        # denoiser came to be shipped without ever having compiled: its 5x5
+        # B-spline weights are a constant table indexed at runtime, which the
+        # SPIR-V emitter gave the wrong storage class, and its `use_variance`
+        # placeholder was a zero-length device array freed under the running
+        # dispatch. Neither is reachable from a `Matrix` film. So: the same
+        # inputs through both backends, and they have to agree.
+        backend = Lava.LavaBackend()
+        gpu_scene = make_noisy_scene(backend)
+        gfilm, _ = render_noisy(gpu_scene; backend = backend)
+        cpu_scene = make_noisy_scene()
+        cfilm, _ = render_noisy(cpu_scene)
+
+        # Same starting picture on both, so only the filter differs.
+        src = Array(gfilm.framebuffer)
+        copyto!(cfilm.framebuffer, src)
+        copyto!(cfilm.normal, Array(gfilm.normal))
+        copyto!(cfilm.depth, Array(gfilm.depth))
+
+        # Odd and even: the odd count exercises the writeback pass.
+        for iters in (3, 4)
+            cfg = Hikari.DenoiseConfig(iterations = iters)
+            copyto!(gfilm.framebuffer, src)
+            copyto!(cfilm.framebuffer, src)
+            Hikari.denoise!(gfilm; config = cfg)
+            Hikari.denoise!(cfilm; config = cfg)
+            KA.synchronize(backend)
+            g = Array(gfilm.framebuffer)
+            c = cfilm.framebuffer
+            @test all(px -> isfinite(px.r) && isfinite(px.g) && isfinite(px.b), g)
+            @test g != src                       # it filtered something
+            @test maximum(i -> max(abs(c[i].r - g[i].r), abs(c[i].g - g[i].g),
+                                   abs(c[i].b - g[i].b)), eachindex(c)) < 1f-5
+        end
     end
 end
