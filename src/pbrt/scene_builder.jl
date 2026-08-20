@@ -99,17 +99,33 @@ function build_hikari_scene(pbrt::PBRTScene;
         lens_radius = Float32(pbrt_get_float(pbrt.camera, "lensradius", 0.0))
         focal_distance = Float32(pbrt_get_float(pbrt.camera, "focaldistance", 1.0e6))
     end
-    # NOTE: `pbrt.camera_transform` from `pbrt_lookat` produces correctly
-    # oriented images for the Z-up test suite scenes (tile<0.07 vs pbrt
-    # references) but renders Crown horizontally mirrored vs its pbrt
-    # reference EXR. Conversely, `Raycore.look_at`-derived camera (what
-    # RayMakie uses, verified to match Crown's pbrt EXR) breaks the test
-    # suite. Both `pbrt_lookat` and `Raycore.look_at` differ by a single
-    # `cross(up, dir)` vs `cross(dir, up)` flip — but only one is right
-    # for any given pbrt LookAt, and which one depends on the LookAt
-    # convention. Resolving this properly needs a coordinate-system audit
-    # of `pbrt_lookat`+`perspective`+`screen_to_raster` together; for now
-    # the path that keeps the regression suite green stays the default.
+    # `pbrt.camera_transform` from `pbrt_lookat`, NOT `Raycore.look_at`. The two
+    # differ by a `cross(up, dir)` vs `cross(dir, up)` flip, and that difference
+    # is a real convention split, not a bug in either:
+    #
+    #   pbrt   (transform.cpp `LookAt`): right = normalize(cross(up, dir))
+    #   Makie  (Raycore.look_at):        right = cross(dir, up)   [ = -pbrt's ]
+    #
+    # pbrt's camera space is LEFT-handed by design; Makie's is the usual
+    # right-handed one. Feeding the same `LookAt` numbers to both therefore
+    # produces images that are HORIZONTAL MIRRORS of each other.
+    #
+    # Measured 2026-08-20 on bunny-cloud (asymmetric enough to show it, unlike
+    # Crown, whose near-symmetry is why the earlier note here read as
+    # inconclusive): RayMakie's render vs pbrt's own 256 spp EXR gave mean
+    # |Δlum| 0.0458, and 0.0134 against the MIRRORED reference — with the cloud
+    # itself going from −0.136 to +0.0035. Same brightness, same size, same
+    # rows; the bbox mirrored to within 3 px.
+    #
+    # RayMakie is internally consistent and must stay that way: a probe with a
+    # raytraced mesh and a raster `scatter!` at the same world x puts both at the
+    # same column, i.e. Hikari's camera agrees with Makie's own projection. So
+    # `Raycore.look_at` is correct FOR MAKIE and must not be "fixed" to pbrt's
+    # convention — that would mirror the raytraced image away from every overlay.
+    #
+    # The consequence for this file: the suite must keep using `pbrt_lookat`, and
+    # anyone comparing a RayMakie render against a pbrt EXR has to mirror one of
+    # them first.
     wtc_mat = pbrt.camera_transform
     ctw_mat = inv(wtc_mat)
     wtc_tf = Transformation(wtc_mat, ctw_mat)
