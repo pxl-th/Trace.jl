@@ -387,16 +387,15 @@ struct SobolRNG{M <: AbstractVector{UInt32}}
 end
 
 """
-    SobolRNG(backend, seed::UInt32, width::Integer, height::Integer, samples_per_pixel::Integer)
+    SobolRNG(mem, seed::UInt32, width::Integer, height::Integer, samples_per_pixel::Integer)
 
 Create a SobolRNG for the given render settings.
-Allocates Sobol matrices on the specified backend (CPU/GPU).
+Allocates the Sobol matrices in memory the render state owns.
 """
-function SobolRNG(backend, seed::UInt32, width::Integer, height::Integer, samples_per_pixel::Integer)
+function SobolRNG(mem, seed::UInt32, width::Integer, height::Integer, samples_per_pixel::Integer)
     # Allocate and copy Sobol matrices + packed permutation table to GPU
     combined = vcat(SobolMatrices32, PACKED_PERMUTATIONS_4WAY)
-    matrices = KA.allocate(backend, UInt32, length(combined))
-    KA.copyto!(backend, matrices, combined)
+    matrices = upload!(mem, combined)
 
     # Compute ZSobol parameters
     log2_spp, n_base4_digits = compute_zsobol_params(Int(samples_per_pixel), Int(width), Int(height))

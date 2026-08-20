@@ -86,7 +86,7 @@ function build_hikari_scene(pbrt::PBRTScene;
             pixel_filter = LanczosSincFilter(r, tau)
         end
     end
-    film = Adapt.adapt(backend, Film(Point2f(xres, yres); filter=pixel_filter))
+    film = Film(backend, Film(Point2f(xres, yres); filter=pixel_filter))
     sensor = PixelSensor(sensor=sensor_name, iso=sensor_iso, whitebalance=sensor_wb,
                          exposure_time=exposure_time)
 
@@ -1298,10 +1298,15 @@ function convert_envmap_to_srgb(path::String)
     pbrt_imgtool = "/sim/Programmieren/VulkanDev/pbrt-v4/build/imgtool"
     is_aces = false
     if isfile(pbrt_imgtool)
+        # A failure here is not "not ACES" — it is "we do not know", and the
+        # consequence is an ACES image used as if it were sRGB, which is a
+        # wrong picture rather than an error. So it says so instead of
+        # pretending the answer was no.
         try
             output = read(`$pbrt_imgtool info $path`, String)
             is_aces = contains(output, "ACES")
-        catch
+        catch e
+            @warn "could not ask imgtool about $path; treating it as sRGB" exception = (e, catch_backtrace())
         end
     end
 

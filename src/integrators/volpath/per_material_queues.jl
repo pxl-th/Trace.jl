@@ -126,10 +126,10 @@ so a hit with `type_idx == i` belongs in queue `i`.
 function build_per_material_queues(
     materials::Raycore.StaticMultiTypeSet{Data},
     capacity::Integer,
-    backend,
+    mem,
 ) where {Data}
     item_types = map(vec_type -> TypedHitRef{eltype(vec_type)}, Data.parameters)
-    return MultiTypeWorkQueue(tuple(item_types...), capacity, backend)
+    return MultiTypeWorkQueue(tuple(item_types...), capacity, mem)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

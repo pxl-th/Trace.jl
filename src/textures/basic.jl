@@ -55,6 +55,13 @@ end
     return data[]
 end
 
+# The single value of a 0-d texture, whichever field is actually holding it.
+# The two constructors disagree: `Texture(arr)` puts it in `data` and zeroes
+# `constval`, while `ConstTexture(val)` puts it in `constval` and leaves `data`
+# an `Array{T,0}(undef)`. So `data[]` alone is uninitialised memory for every
+# const texture, which is what `isconst` is here to tell us.
+@inline constant_value(t::Texture{T, 0}) where {T} = t.isconst ? t.constval : t.data[]
+
 function (c::Texture{T})(si::SurfaceInteraction)::T where {T<:TextureType}
     return sample_texture_data(c.data, si.uv)
 end

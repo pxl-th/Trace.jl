@@ -651,12 +651,11 @@ function ensure_plans!(state::VolPathState, film::Film, backend,
                   chit_owns_surface, has_media, has_lights, max_depth)
     plans = state.plans
     if plans === nothing || plans.key != key
-        # Before the old plans' regions go back: they were recorded against
-        # this device and may still be in flight.
-        if plans !== nothing
-            KA.synchronize(backend)
-            free!(plans)
-        end
+        # The old plans go back without a wait. Their recordings may well still
+        # be in flight; `Mantle.free!` retires the regions rather than releasing
+        # them, so the pool hands those bytes on only once the device says so.
+        # This used to be `KA.synchronize(backend)` first.
+        plans === nothing || free!(plans)
         # The sample index BEFORE the build, because the build BAKES: a capture
         # takes the arguments as they are, and one taken with the previous
         # sample's index renders that sample again.

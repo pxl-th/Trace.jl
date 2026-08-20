@@ -222,6 +222,13 @@ Type-stable dispatch to check if a material is MixMaterial.
 @propagate_inbounds function is_mix_material_dispatch(
     materials::StaticMultiTypeSet, idx::SetKey
 )::Bool
+    # A material that is not in the set is not a mix. Guarding here rather than
+    # asking `with_index`, which has no element to hand `is_mix_material` and
+    # would either fall into its else-branch — answering about an ARBITRARY
+    # material — or, when the set is empty, expand to a bare `error(...)` that a
+    # GPU kernel cannot raise and simply dies on. See
+    # `get_surface_alpha_dispatch` for the same guard and what it cost.
+    Raycore.is_valid(idx) || return false
     return with_index(is_mix_material, materials, idx)
 end
 

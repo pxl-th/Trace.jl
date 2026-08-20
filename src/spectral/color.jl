@@ -23,7 +23,7 @@ const D65_PHOTOMETRIC = 10567.0f0
     CIEXYZTable{V <: AbstractVector{Float32}}
 
 GPU-compatible table for CIE XYZ color matching functions.
-Use `to_gpu(ArrayType, table)` to convert to GPU arrays.
+Use `to_gpu(mem, table)` to put it on the device.
 """
 struct CIEXYZTable{V <: AbstractVector{Float32}}
     cie_x::V
@@ -32,18 +32,14 @@ struct CIEXYZTable{V <: AbstractVector{Float32}}
 end
 
 """
-    to_gpu(backend, table::CIEXYZTable) -> CIEXYZTable
+    to_gpu(mem, table::CIEXYZTable) -> CIEXYZTable
 
-Convert CIEXYZTable to use GPU-compatible arrays.
-Uses KernelAbstractions backend for allocation.
+The response curves on the device, in memory the render state owns.
 """
-function to_gpu(backend, table::CIEXYZTable)
-    CIEXYZTable(
-        adapt(backend, table.cie_x),
-        adapt(backend, table.cie_y),
-        adapt(backend, table.cie_z)
-    )
-end
+to_gpu(mem::DeviceMemory, table::CIEXYZTable) =
+    CIEXYZTable(upload!(mem, table.cie_x),
+                upload!(mem, table.cie_y),
+                upload!(mem, table.cie_z))
 
 # =============================================================================
 # CIE XYZ Color Matching Function Data (from pbrt-v4)

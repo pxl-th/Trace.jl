@@ -72,7 +72,7 @@ const _TH_ZERO = RGBSpectrum(0f0, 0f0, 0f0)
 # `to_texture` wraps a constant in a 0-dimensional `Texture` (`ConstTexture`),
 # which is how most pbrt scalar/colour parameters arrive. Unwrap it inline —
 # a constant has no business occupying a texture slot.
-@inline TexHandle(t::Texture{T, 0}) where {T} = TexHandle(t.data[])
+@inline TexHandle(t::Texture{T, 0}) where {T} = TexHandle(constant_value(t))
 
 # The slot lives in the TextureRef's TYPE; capture it as data.
 @inline TexHandle(t::Raycore.TextureRef{A, T, N, TIdx}) where {A, T, N, TIdx} =
@@ -108,7 +108,7 @@ The inline scalar of a constant handle, or `default` for out-of-line kinds.
     h.kind == TexKind.CONST_FLOAT ? h.f :
     h.kind == TexKind.CONST_SPECTRUM ? h.rgb.c[1] : Float32(default)
 @inline const_float(t::Texture{T, 0}, default::Real = 0f0) where {T <: Real} =
-    Float32(t.data[])
+    Float32(constant_value(t))
 @inline const_float(x, default::Real = 0f0) = Float32(default)
 
 """
@@ -264,7 +264,7 @@ Resolve one host material parameter against the set's texture store.
 """
 device_param(dhv, h::TexHandle) = h
 device_param(dhv, s::PiecewiseLinearSpectrum) = s   # lives inline on the device
-device_param(dhv, t::Texture{T, 0}) where {T} = TexHandle(t.data[])
+device_param(dhv, t::Texture{T, 0}) where {T} = TexHandle(t)
 device_param(dhv, t::Texture{T, N}) where {T, N} =
     TexHandle(Raycore.store_texture(dhv, t.data))
 device_param(dhv, r::Raycore.TextureRef) = TexHandle(r)
@@ -309,3 +309,26 @@ left to Raycore's own conversion.
     end
     return :($(wrapper)($(args...)))
 end
+
+# ...but a stored MATERIAL field is a `TexHandle`, not a raw scalar, and the
+# overload above would unwrap a const `Texture` to its `RGBSpectrum` — which
+# `setindex!` then refuses to put into a `Vector{Diffuse{TexHandle,…}}`. The
+# error names two `Diffuse` parametrisations and no call site, so it reads as a
+# type puzzle rather than as "this field is a handle".
+#
+# `device_param` is the rule for turning anything into a handle, and it is the
+# same one `to_device_material` uses at push time — so an update now lands the
+# item in exactly the form a push would have.
+Raycore.update_item(dhv::Raycore.MultiTypeSet, ::TexHandle, new) = device_param(dhv, new)
+
+function Raycore.update_item(dhv::Raycore.MultiTypeSet, old::TexHandle, new::Texture)
+    new.isconst && return device_param(dhv, new)
+    # A sampled texture replacing a handle would have to reuse the slot this
+    # handle already names, or every frame stores another copy. That reuse path
+    # exists for a stored `TextureRef` (texture-ref.jl) and not for a `TexHandle`, so say
+    # so rather than silently growing the texture store.
+    error("update_item: replacing a material's TexHandle with a sampled Texture is not " *
+          "supported — the existing slot cannot be reused, so this would store a copy " *
+          "per update. Rebuild the scene, or keep the field a TextureRef.")
+end
+

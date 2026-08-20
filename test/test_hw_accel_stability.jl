@@ -50,7 +50,7 @@ function _render_once(scene, backend; res::Int=48, samples::Int=8, depth::Int=3)
     film = Hikari.Film(Point2f(res, res))
     camera = Hikari.PerspectiveCamera(Point3f(0, -3, 1.5), Point3f(0, 0, 0.35),
                                       film; fov=50f0)
-    gpu_film = Adapt.adapt(backend, film)
+    gpu_film = Hikari.Film(backend, film)
     vp = Hikari.VolPath(samples=samples, max_depth=depth, hw_accel=true)
     vp(scene, gpu_film, camera)
     img = Array(gpu_film.framebuffer)

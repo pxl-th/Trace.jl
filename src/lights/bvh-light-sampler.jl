@@ -465,34 +465,18 @@ end
 # ============================================================================
 
 """
-    to_gpu(backend, sampler::BVHLightSampler) -> NamedTuple
+    bvh_to_gpu(mem, sampler::BVHLightSampler) -> NamedTuple
 
-Upload BVH light sampler data to GPU. Returns a NamedTuple with GPU arrays.
+Upload BVH light sampler data into memory the render state owns. Returns a
+NamedTuple with GPU arrays; `free!(mem)` releases them.
 """
-function bvh_to_gpu(backend, sampler::BVHLightSampler)
-    # Upload nodes - KA.allocate for struct arrays
-    if !isempty(sampler.nodes)
-        nodes_gpu = KA.allocate(backend, LightBVHNode, length(sampler.nodes))
-        copyto!(nodes_gpu, sampler.nodes)
-    else
-        nodes_gpu = KA.allocate(backend, LightBVHNode, 1)
-    end
-
-    # Upload bit trail array
-    if !isempty(sampler.light_to_bit_trail)
-        bit_trail_gpu = KA.allocate(backend, UInt32, length(sampler.light_to_bit_trail))
-        copyto!(bit_trail_gpu, sampler.light_to_bit_trail)
-    else
-        bit_trail_gpu = KA.allocate(backend, UInt32, 1)
-    end
-
-    # Upload infinite light indices
-    if !isempty(sampler.infinite_light_indices)
-        inf_indices_gpu = KA.allocate(backend, Int32, length(sampler.infinite_light_indices))
-        copyto!(inf_indices_gpu, sampler.infinite_light_indices)
-    else
-        inf_indices_gpu = KA.allocate(backend, Int32, 1)
-    end
+function bvh_to_gpu(mem, sampler::BVHLightSampler)
+    # `upload!` handles the empty case by allocating one element, which is what
+    # the three branches here used to spell out: a kernel indexes these
+    # unconditionally and a zero-length array has no address to give it.
+    nodes_gpu = upload!(mem, sampler.nodes)
+    bit_trail_gpu = upload!(mem, sampler.light_to_bit_trail)
+    inf_indices_gpu = upload!(mem, sampler.infinite_light_indices)
 
     return (
         nodes = nodes_gpu,

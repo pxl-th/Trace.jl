@@ -63,6 +63,11 @@ macro real_assert(expr, msg="")
     end
 end
 
+# Where a render state's device memory comes from. First, because everything
+# below that allocates on the device takes a `DeviceMemory` in its signature —
+# the spectral tables, the light BVH, the Sobol matrices, the work queues.
+include("device-memory.jl")
+
 include("spectrum.jl")
 # PiecewiseLinearSpectrum needs SampledSpectrum/Wavelengths from spectral.jl,
 # and must be available before texture-ref.jl and uber-material.jl

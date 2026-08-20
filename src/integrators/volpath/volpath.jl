@@ -523,12 +523,12 @@ function render!(
        # needs them shows up on a reused integrator.
        (has_media && Int(vp.state.medium_sample_queue.capacity) < width * height) ||
        (!chit_owns_surface && Int(vp.state.hit_surface_queue.capacity) < width * height)
-        # Free the previous state's GPU buffers before reallocating — a bare
-        # reassign races GC finalizers and doubles peak memory.
-        if vp.state !== nothing
-            KA.synchronize(backend)
-            free!(vp.state)
-        end
+        # The previous state's regions go back before the new ones are taken, so
+        # a resize does not hold two states' worth at once. The comment here
+        # used to read "a bare reassign races GC finalizers and doubles peak
+        # memory" and the line above it was a `KA.synchronize`; neither is true
+        # any more — nothing finalizes, and `free!` retires.
+        vp.state === nothing || free!(vp.state)
         # Use original scene.lights (MultiTypeSet) for PowerLightSampler (needs .backend)
         # Ensure SobolRNG has enough bits for progressive rendering:
         # When samples_per_pixel=1 (interactive mode), log2_spp=0 causes sample_idx

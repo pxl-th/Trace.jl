@@ -142,7 +142,7 @@ begin
     film, camera = create_film_and_camera(; width=1820, height=720, use_pbrt_camera=true)
     integrator = Hikari.VolPath(samples=100, max_depth=8)
     # Film still needs GPU conversion, scene already on GPU
-    gpu_film = Adapt.adapt(backend, film)
+    gpu_film = Hikari.Film(backend, film)
     Hikari.clear!(gpu_film)
     @time integrator(scene, gpu_film, camera)
     img = Hikari.postprocess!(gpu_film; exposure=0.5f0, tonemap=:aces, gamma=2.2f0)

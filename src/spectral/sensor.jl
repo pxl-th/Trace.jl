@@ -399,20 +399,6 @@ const CIE_Z_TABLE = from_interleaved(PiecewiseLinearSpectrum{35}, (
 ))
 
 """
-    configure_sensor!(state, sensor::PixelSensor, sensor_name::String)
-
-Configure a VolPathState to use a specific pixel sensor for spectral→RGB conversion.
-Replaces the CIE XYZ response curves with sensor curves and sets the output matrix.
-"""
-function configure_sensor!(state, sensor::PixelSensor, sensor_name::String="cie1931")
-    backend = state.backend
-    table = sensor_response_table(sensor_name)
-    state.cie_table = to_gpu(backend, table)
-    state.output_matrix = sensor.output_from_sensor
-    state.imaging_ratio = sensor.imaging_ratio
-end
-
-"""
     sensor_response_table(sensor::PixelSensor) -> CIEXYZTable
 
 Create a CIEXYZTable where the X/Y/Z channels contain sensor R/G/B response

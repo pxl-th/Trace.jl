@@ -57,16 +57,19 @@ struct Film{
     # Progressive rendering state
     iteration_index::Base.RefValue{Int32}
 
-    # Persistent scratch buffers for HW RT fill_aux_buffers!.
-    # Cached on the film so they survive across frames; freed in free!(film).
-    # `Any` to avoid leaking RTRay/RTHitResult types into Film's type parameters.
-    aux_rays::Base.RefValue{Any}
-    aux_results::Base.RefValue{Any}
-
     # The denoiser's compiled plan and its ping-pong scratch (see `denoise!`).
-    # Same reason as the two above: kept across frames rather than rebuilt per
-    # call, and `Any` so the plan's type stays out of `Film`'s.
+    # Kept across frames rather than rebuilt per call, and `Any` so the plan's
+    # type stays out of `Film`'s.
+    #
+    # `aux_rays`/`aux_results` used to sit here too — scratch for a three-step
+    # HW aux pass that `hw_fill_aux_kernel!` replaced. Nothing has assigned them
+    # since; they were declared, carried through every adapt and freed in
+    # `free!`, and always `nothing`.
     denoise_plan::Base.RefValue{Any}
+
+    # Every device array above comes from here and goes back through it. See
+    # `device-memory.jl`: nothing in this package finalizes a GPU resource.
+    memory::DeviceMemory
 end
 
 """
@@ -99,12 +102,18 @@ function Film(
         filter_table[y+1, x+1] = filter(p)
     end
 
-    pixel_size = (crop_resolution[end], crop_resolution[begin])
-    framebuffer = Matrix{RGB{Float32}}(undef, pixel_size...)
-    albedo = fill(RGB{Float32}(0, 0, 0), pixel_size...)
-    normal = fill(Vec3f(0, 0, 0), pixel_size...)
-    depth = fill(0.0f0, pixel_size...)
-    postprocess = Matrix{RGBA{Float32}}(undef, pixel_size...)
+    # A host film's memory is pooled too, and costs nothing to forget:
+    # `Mantle.Device(Host())` builds a FRESH pool per call, so the whole thing
+    # is reachable only from this film and the GC reclaims it if `free!` is
+    # never reached. On a device the pool is shared and cached, which is what
+    # `retire!` and `Mantle.reclaim!` are for.
+    mem = DeviceMemory(KA.CPU())
+    pixel_size = (Int(crop_resolution[end]), Int(crop_resolution[begin]))
+    framebuffer = alloc!(mem, RGB{Float32}, pixel_size)
+    albedo = alloc!(mem, RGB{Float32}, pixel_size, RGB{Float32}(0, 0, 0))
+    normal = alloc!(mem, Vec3f, pixel_size, Vec3f(0, 0, 0))
+    depth = alloc!(mem, Float32, pixel_size, 0.0f0)
+    postprocess = alloc!(mem, RGBA{Float32}, pixel_size)
 
     return Film(
         resolution,
@@ -122,8 +131,45 @@ function Film(
         postprocess,
         Ref(Int32(0)),
         Ref{Any}(nothing),
+        mem,
+    )
+end
+
+"""
+    Film(backend, film::Film) -> Film
+
+`film`'s layers on `backend`, in memory this film owns.
+
+Replaces `Adapt.adapt(backend, film)`, which was doing the allocating — `adapt`
+converts, and a conversion that reaches for an allocator has nowhere to put one,
+which is why the result could only ever be freed by the GC. `free!(film)`
+releases these; forgetting it retires them instead of losing them.
+
+`filter_table` stays on the host: it is read when the plans are built, never by a
+kernel. `iteration_index` is shared with `film`, as it was before — it is the
+progressive sample counter, and two films disagreeing about it is the bug.
+"""
+function Film(backend, film::Film)
+    mem = DeviceMemory(backend)
+    return Film(
+        film.resolution,
+        film.crop_bounds,
+        film.diagonal,
+        film.filter_table,
+        film.filter_table_width,
+        film.filter_radius,
+        film.filter_params,
+        film.scale,
+        upload!(mem, film.framebuffer),
+        upload!(mem, film.albedo),
+        upload!(mem, film.normal),
+        upload!(mem, film.depth),
+        upload!(mem, film.postprocess),
+        film.iteration_index,
+        # A fresh slot, not the source film's: the plan names the buffers it
+        # filters, and this film's are these.
         Ref{Any}(nothing),
-        Ref{Any}(nothing),
+        mem,
     )
 end
 
@@ -207,35 +253,22 @@ end
 """
     free!(film::Film)
 
-Release GPU memory held by the film.  Does **not** synchronize.
+Release GPU memory held by the film.
 
-**Precondition (caller's responsibility):** the GPU must be idle before
-this is called.  The simplest way is to call this only after a
-`colorbuffer` has completed (it issues `device_wait_idle`) or after
-`sync!(scene)`.  Calling while a render is in flight is a use-after-free.
+No precondition. This used to require an idle GPU and warn that calling it
+during a render was a use-after-free; the regions are retired now, so the pool
+decides when they are safe rather than the caller.
 """
 function free!(film::Film)
-    finalize(film.filter_table)
-    finalize(film.framebuffer)
-    finalize(film.albedo)
-    finalize(film.normal)
-    finalize(film.depth)
-    finalize(film.postprocess)
-    if film.aux_rays[] !== nothing
-        finalize(film.aux_rays[])
-        film.aux_rays[] = nothing
-    end
-    if film.aux_results[] !== nothing
-        finalize(film.aux_results[])
-        film.aux_results[] = nothing
-    end
+    # The denoiser first: it holds a compiled plan and its own scratch, and both
+    # are its to give back. `filter_table` appears nowhere because it is a host
+    # `Matrix{Float32}` — it was in the `finalize` list this replaces, doing
+    # nothing while reading as if it released GPU memory.
     dp = film.denoise_plan[]
     if dp !== nothing
-        # The plan gives its pool regions back; the scratch is an ordinary
-        # allocation of this film's and goes the way the buffers above do.
-        Mantle.free!(dp.plan)
-        finalize(dp.scratch)
+        free!(dp)
         film.denoise_plan[] = nothing
     end
+    free!(film.memory)
     return nothing
 end

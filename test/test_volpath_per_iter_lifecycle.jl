@@ -45,7 +45,7 @@ const _CTX_M = Lava.vk_context()
     # historically tripped the cascade fault around iter 5-6.
     for iter in 1:12
         film = Hikari.Film(Point2f(8, 8))
-        gpu_film = Adapt.adapt(_BACKEND_M, film)
+        gpu_film = Hikari.Film(_BACKEND_M, film)
         vp = Hikari.VolPath(samples=1, max_depth=1, hw_accel=true)
         vp(scene, gpu_film, camera)
         img = Array(gpu_film.framebuffer)

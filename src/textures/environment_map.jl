@@ -55,11 +55,20 @@ function rotation_matrix(angle_degrees::Real, axis::Vec3f)::Mat3f
     s, c = sincos(θ)
     t = 1f0 - c
 
-    # Rodrigues' rotation formula as matrix
+    # Rodrigues' rotation formula, written COLUMN BY COLUMN.
+    #
+    # `Mat3f(...)` fills column-major. This used to be laid out to READ like the
+    # textbook row-major matrix, which made it the TRANSPOSE — i.e. a rotation by
+    # -angle. `rotation_matrix(90, ẑ)` mapped x̂ to (0,-1,0) instead of (0,1,0),
+    # so every rotated environment map was turned the wrong way, and by twice the
+    # requested angle relative to the reference.
     Mat3f(
-        t*a[1]*a[1] + c,      t*a[1]*a[2] - s*a[3], t*a[1]*a[3] + s*a[2],
-        t*a[1]*a[2] + s*a[3], t*a[2]*a[2] + c,      t*a[2]*a[3] - s*a[1],
-        t*a[1]*a[3] - s*a[2], t*a[2]*a[3] + s*a[1], t*a[3]*a[3] + c
+        # column 1
+        t*a[1]*a[1] + c,      t*a[1]*a[2] + s*a[3], t*a[1]*a[3] - s*a[2],
+        # column 2
+        t*a[1]*a[2] - s*a[3], t*a[2]*a[2] + c,      t*a[2]*a[3] + s*a[1],
+        # column 3
+        t*a[1]*a[3] + s*a[2], t*a[2]*a[3] - s*a[1], t*a[3]*a[3] + c
     )
 end
 

@@ -55,7 +55,7 @@ function _render_one(scene)
     cam = Hikari.PerspectiveCamera(Point3f(0,-3,1.5), Point3f(0,0,0.35),
                                    Hikari.Film(Point2f(16,16)); fov=50f0)
     film = Hikari.Film(Point2f(16,16))
-    gpu_film = Adapt.adapt(_BE_M7, film)
+    gpu_film = Hikari.Film(_BE_M7, film)
     vp = Hikari.VolPath(samples=1, max_depth=2, hw_accel=true)
     vp(scene, gpu_film, cam)
     img = Array(gpu_film.framebuffer)

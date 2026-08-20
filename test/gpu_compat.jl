@@ -213,7 +213,7 @@ function gen_gpu_test_scene()
     adapted = Adapt.adapt(backend, scene)
 
     # Get rgb2spec_table directly
-    rgb2spec_table = Hikari.to_gpu(backend, Hikari.get_srgb_table())
+    rgb2spec_table = Hikari.to_gpu(Hikari.DeviceMemory(backend), Hikari.get_srgb_table())
 
     (
         scene=adapted,

@@ -62,7 +62,8 @@ end
     backend = Lava.LavaBackend()
     dev = Hikari.mantle_device(backend)
     cap, want = 4096, 777
-    q = Hikari.WorkQueue{Float32}(backend, cap)
+    mem = Hikari.DeviceMemory(backend)
+    q = Hikari.WorkQueue{Float32}(mem, cap)
     out = KA.allocate(backend, Float32, cap)
     KA.fill!(out, 0f0)
 
@@ -88,6 +89,8 @@ end
     o = Array(out)
     @test count(!=(0f0), o) == want
     @test sort(o[1:want]) == Float32[2i for i in 1:want]
+
+    Hikari.free!(mem)
 end
 
 @testset "several device-sized dispatches in one pass" begin
@@ -98,7 +101,8 @@ end
     backend = Lava.LavaBackend()
     dev = Hikari.mantle_device(backend)
     cap, k = 2048, 4
-    qs = [Hikari.WorkQueue{Float32}(backend, cap) for _ in 1:k]
+    mem = Hikari.DeviceMemory(backend)
+    qs = [Hikari.WorkQueue{Float32}(mem, cap) for _ in 1:k]
     outs = [KA.allocate(backend, Float32, cap) for _ in 1:k]
     foreach(o -> KA.fill!(o, 0f0), outs)
     wants = [500 + i for i in 1:k]
@@ -121,6 +125,8 @@ end
     Mantle.run!(Mantle.Plan(g))
     KA.synchronize(backend)
     @test [count(!=(0f0), Array(o)) for o in outs] == wants
+
+    Hikari.free!(mem)
 end
 
 @testset "an empty queue dispatches nothing" begin
@@ -129,7 +135,8 @@ end
     backend = Lava.LavaBackend()
     dev = Hikari.mantle_device(backend)
     cap = 256
-    q = Hikari.WorkQueue{Float32}(backend, cap)
+    mem = Hikari.DeviceMemory(backend)
+    q = Hikari.WorkQueue{Float32}(mem, cap)
     out = KA.allocate(backend, Float32, cap)
     KA.fill!(out, 7f0)
 
@@ -143,6 +150,8 @@ end
     Mantle.run!(Mantle.Plan(g))
     KA.synchronize(backend)
     @test all(==(7f0), Array(out))
+
+    Hikari.free!(mem)
 end
 
 @testset "a Ref argument is read per run, not per plan" begin

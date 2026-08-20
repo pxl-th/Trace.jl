@@ -115,29 +115,23 @@ Adapt.adapt_structure(to, light::Hikari.SunLight) = light
 
 
 
-# Film - adapt arrays for GPU
-function Adapt.adapt_structure(to, film::Film)
-    Film(
-        film.resolution,
-        film.crop_bounds,
-        film.diagonal,
-        film.filter_table,
-        film.filter_table_width,
-        film.filter_radius,
-        film.filter_params,
-        film.scale,
-        Adapt.adapt(to, film.framebuffer),
-        Adapt.adapt(to, film.albedo),
-        Adapt.adapt(to, film.normal),
-        Adapt.adapt(to, film.depth),
-        Adapt.adapt(to, film.postprocess),
-        film.iteration_index,
-        film.aux_rays,
-        film.aux_results,
-        # A fresh slot, not the source film's: the plan names the buffers it
-        # filters, and this film's are the adapted ones. Sharing the ref would
-        # hand a device film the plan compiled for a host film's arrays.
-        Ref{Any}(nothing),
-    )
-end
+# A `Film` has no `adapt_structure`, deliberately. It used to have one, and it
+# was not a conversion: `Adapt.adapt(::LavaBackend, ::Array)` allocates, so
+# `adapt(backend, film)` was the film's ALLOCATOR, reached through an interface
+# with nowhere to put an allocator — which is why the result had no owner and
+# could only be reclaimed by the GC. `Film(backend, film)` is that path now.
+#
+# Nothing else wanted it: kernels take `film.framebuffer` and `film.normal`, not
+# the film, so no dispatch ever adapted one.
+#
+# This method exists to make the old spelling LOUD. `Adapt.adapt` falls back to
+# identity for a type with no `adapt_structure`, so simply deleting the method
+# would have made `adapt(backend, film)` quietly return the HOST film — a render
+# then runs a device scene against host arrays, which fails somewhere else
+# entirely or not at all. Two call sites still spelled it that way and this is
+# what found them.
+Adapt.adapt_structure(::Any, ::Film) = throw(ArgumentError(
+    "`Adapt.adapt` does not allocate a Film — it converts, and allocating a " *
+    "film's layers on a backend needs an allocator to own them. Use " *
+    "`Film(backend, film)`, and `free!(film)` when done."))
 

@@ -19,7 +19,7 @@ import Adapt
         film = Hikari.Film(Point2f(res, res))
         camera = Hikari.PerspectiveCamera(
             Point3f(2f0, 1.5f0, -2f0), Point3f(0f0, 0.3f0, 0f0), film; fov=45f0)
-        film = backend isa KA.CPU ? film : Adapt.adapt(backend, film)
+        film = Hikari.Film(backend, film)
         Hikari.clear!(film)
         Hikari.VolPath(samples=spp, max_depth=4)(scene, film, camera)
         Hikari.fill_aux_buffers!(film, scene, camera)

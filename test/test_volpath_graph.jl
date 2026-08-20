@@ -45,7 +45,7 @@ function volpath_graph_film(backend, res)
     film = Hikari.Film(Point2f(res, res))
     camera = Hikari.PerspectiveCamera(Point3f(0f0, 1f0, -3.5f0), Point3f(0f0, 1f0, 0f0),
                                       film; fov = 40f0)
-    film = Adapt.adapt(backend, film)
+    film = Hikari.Film(backend, film)
     Hikari.clear!(film)
     return film, camera
 end

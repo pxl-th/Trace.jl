@@ -283,7 +283,20 @@ struct DenoisePlan{P,S,R}
     scratch::S
     refs::R
     plan::P
+    # The scratch's, and only the scratch's. Its own rather than the film's
+    # because it has its own lifetime: a plan is rebuilt when the framebuffer or
+    # the iteration count changes, and a rebuild that added to the film's memory
+    # would accumulate one scratch per rebuild for the life of the film.
+    memory::DeviceMemory
 end
+
+"""
+    free!(dp::DenoisePlan)
+
+Give back the compiled plan's regions and the scratch. Called on a rebuild and
+from `free!(::Film)`, and safe at any time — the regions are retired.
+"""
+free!(dp::DenoisePlan) = (Mantle.free!(dp.plan); free!(dp.memory); nothing)
 
 """The plan for this film and iteration count, compiled if there is not one."""
 function denoise_plan!(film::Film, config::DenoiseConfig)
@@ -297,9 +310,18 @@ function denoise_plan!(film::Film, config::DenoiseConfig)
         return cached
     end
     backend = KA.get_backend(film.framebuffer)
+    # The one this replaces goes back before the new one is taken, so a session
+    # that changes the iteration count does not leave a plan and a full-frame
+    # scratch behind each time. No wait needed: retiring is safe with its passes
+    # still in flight.
+    if cached isa DenoisePlan
+        free!(cached)
+        film.denoise_plan[] = nothing
+    end
     height, width = size(film.framebuffer)
     n_pixels = width * height
-    scratch = similar(film.framebuffer)
+    mem = DeviceMemory(backend)
+    scratch = alloc!(mem, eltype(film.framebuffer), size(film.framebuffer))
     refs = (sigma_color = Ref(config.sigma_color),
             sigma_normal = Ref(config.sigma_normal),
             sigma_depth = Ref(config.sigma_depth))
@@ -333,7 +355,7 @@ function denoise_plan!(film::Film, config::DenoiseConfig)
                              (film.framebuffer, scratch, Int32(n_pixels)), n_pixels)
         end
     end
-    made = DenoisePlan(film.framebuffer, config.iterations, scratch, refs, Mantle.Plan(g))
+    made = DenoisePlan(film.framebuffer, config.iterations, scratch, refs, Mantle.Plan(g), mem)
     film.denoise_plan[] = made
     return made
 end

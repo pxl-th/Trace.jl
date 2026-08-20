@@ -47,6 +47,10 @@ Contains all work queues and buffers for VolPath wavefront rendering.
 mutable struct VolPathState{Backend}
     backend::Backend
 
+    # Every device allocation below comes from here and goes back through it.
+    # See `device-memory.jl`: nothing in this package finalizes a GPU resource.
+    memory::DeviceMemory
+
     # Ray queues (double-buffered for iteration)
     ray_queue_a::WorkQueue{VPRayWorkItem}
     ray_queue_b::WorkQueue{VPRayWorkItem}
@@ -118,13 +122,6 @@ mutable struct VolPathState{Backend}
     # Sobol RNG for low-discrepancy sampling (allocated once, reused across frames)
     sobol_rng::Any  # SobolRNG or nothing
 
-    # Hardware RT buffers (lazily allocated when using HW-accelerated tracing)
-    hw_primary_ray_buf::Any      # RTRay buffer for primary rays
-    hw_primary_result_buf::Any   # RTHitResult buffer for primary rays
-    hw_shadow_states::Any        # ShadowIterState buffer
-    hw_shadow_ray_buf::Any       # RTRay buffer for shadow rays
-    hw_shadow_result_buf::Any    # RTHitResult buffer for shadow rays
-
     # Per-material-type shading queues (one `WorkQueue{TypedHitRef{T}}` per
     # concrete material type `T` in the scene).  Built lazily on first render
     # from the scene's adapted `StaticMultiTypeSet` of materials; rebuilt
@@ -133,6 +130,13 @@ mutable struct VolPathState{Backend}
     # which materials are present.
     per_material_queue::Any              # MultiTypeMaterialQueue{...} | nothing
     per_material_queue_signature::Any    # type tuple, used as freshness check
+
+    # Their own `DeviceMemory` and not the one above, because they have their own
+    # lifetime: a scene with different material types replaces them, and regions
+    # that go back on a rebuild must not be mixed in with the ones that live as
+    # long as the state. One `free!` per group is the whole reason this is a
+    # second allocator rather than a second list.
+    per_material_memory::DeviceMemory
 
     # The compiled Mantle plans for a sample (see graph.jl). Here rather than on
     # the integrator because they name this state's queues and accumulators: a
@@ -146,53 +150,21 @@ end
     free!(state::VolPathState)
 
 Release all GPU memory held by the VolPath render state (work queues,
-pixel buffers, tables).  Does **not** synchronize.
+pixel buffers, tables).
 
-**Precondition (caller's responsibility):** the GPU must be idle.  Same
-rule as `free!(::Film)` — pair this with the end of a `colorbuffer` / a
-`sync!(scene)`, or explicitly `KA.synchronize(backend)` before calling.
+No precondition: the regions are retired, not released, so calling this with a
+render still in flight is fine. It used to require an idle GPU and say so.
 """
 function free!(state::VolPathState)
-    # The plans first: they name the queues below, and a plan gives its pool
-    # regions back rather than freeing anything the queues own.
+    # The plans first: they name the buffers below, and a plan gives its own pool
+    # regions back rather than freeing anything the state owns.
     state.plans === nothing || free!(state.plans)
     state.plans = nothing
-
-    # Work queues (bulk of GPU memory — each holds items + size arrays)
-    free!(state.ray_queue_a)
-    free!(state.ray_queue_b)
-    free!(state.medium_sample_queue)
-    free!(state.medium_scatter_queue)
-    free!(state.hit_surface_queue)
-    free!(state.shadow_queue)
-    free!(state.escaped_queue)
-    free!(state.hit_area_light_queue)
-    state.per_material_queue !== nothing && free!(state.per_material_queue)
-
-    # Pixel buffers
-    finalize(state.pixel_L)
-    finalize(state.pixel_rgb)
-    finalize(state.pixel_weight_sum)
-    finalize(state.wavelengths_per_pixel)
-    finalize(state.pdf_per_pixel)
-    finalize(state.filter_weight_per_pixel)
-
-    # BVH light sampler data
-    finalize(state.bvh_nodes)
-    finalize(state.light_to_bit_trail)
-    finalize(state.infinite_light_indices)
-
-    # Sobol RNG state
-    if state.sobol_rng !== nothing
-        rng = state.sobol_rng
-        for name in fieldnames(typeof(rng))
-            arr = getfield(rng, name)
-            if arr isa AbstractArray
-                finalize(arr)
-            end
-        end
-    end
-
+    # Then everything at once. The queues, the accumulators, the light BVH and
+    # the Sobol matrices are all regions of one pool, so there is no order to get
+    # right and nothing here to keep in step with the constructor.
+    free!(state.memory)
+    free!(state.per_material_memory)
     return nothing
 end
 
@@ -223,6 +195,7 @@ function VolPathState(
     # state when a scene with media shows up.
     has_media::Bool = true,
 )
+    mem = DeviceMemory(backend)
     n_pixels = width * height
     vestigial_capacity = hw_accel ? 1 : queue_capacity
     medium_capacity = has_media ? queue_capacity : 1
@@ -232,58 +205,53 @@ function VolPathState(
     hit_surface_capacity = hw_accel ? 1 : queue_capacity
 
     # Create work queues
-    ray_queue_a = WorkQueue{VPRayWorkItem}(backend, queue_capacity)
-    ray_queue_b = WorkQueue{VPRayWorkItem}(backend, queue_capacity)
-    medium_sample_queue = WorkQueue{VPMediumSampleWorkItem}(backend, medium_capacity)
-    medium_scatter_queue = WorkQueue{VPMediumScatterWorkItem}(backend, medium_capacity)
-    hit_surface_queue = WorkQueue{VPHitSurfaceWorkItem}(backend, hit_surface_capacity)
-    shadow_queue = WorkQueue{VPShadowRayWorkItem}(backend, queue_capacity)
-    escaped_queue = WorkQueue{VPEscapedRayWorkItem}(backend, queue_capacity)
-    hit_area_light_queue = WorkQueue{VPHitAreaLightWorkItem}(backend, vestigial_capacity)
+    ray_queue_a = WorkQueue{VPRayWorkItem}(mem, queue_capacity)
+    ray_queue_b = WorkQueue{VPRayWorkItem}(mem, queue_capacity)
+    medium_sample_queue = WorkQueue{VPMediumSampleWorkItem}(mem, medium_capacity)
+    medium_scatter_queue = WorkQueue{VPMediumScatterWorkItem}(mem, medium_capacity)
+    hit_surface_queue = WorkQueue{VPHitSurfaceWorkItem}(mem, hit_surface_capacity)
+    shadow_queue = WorkQueue{VPShadowRayWorkItem}(mem, queue_capacity)
+    escaped_queue = WorkQueue{VPEscapedRayWorkItem}(mem, queue_capacity)
+    hit_area_light_queue = WorkQueue{VPHitAreaLightWorkItem}(mem, vestigial_capacity)
 
     # Film buffer (4 wavelengths per pixel)
-    pixel_L = KA.allocate(backend, Float32, n_pixels * 4)
-    KA.fill!(pixel_L, 0f0)
+    pixel_L = alloc!(mem, Float32, n_pixels * 4, 0f0)
 
     # Accumulators for progressive rendering (configurable eltype for OpenCL compatibility)
-    pixel_rgb = KA.allocate(backend, accumulation_eltype, n_pixels * 3)
-    KA.fill!(pixel_rgb, zero(accumulation_eltype))
-    pixel_weight_sum = KA.allocate(backend, accumulation_eltype, n_pixels)
-    KA.fill!(pixel_weight_sum, zero(accumulation_eltype))
-    wavelengths_per_pixel = KA.allocate(backend, Float32, n_pixels * 4)
-    KA.fill!(wavelengths_per_pixel, 0f0)
-    pdf_per_pixel = KA.allocate(backend, Float32, n_pixels * 4)
-    KA.fill!(pdf_per_pixel, 0f0)
-    filter_weight_per_pixel = KA.allocate(backend, Float32, n_pixels)
-    KA.fill!(filter_weight_per_pixel, 0f0)
+    pixel_rgb = alloc!(mem, accumulation_eltype, n_pixels * 3, zero(accumulation_eltype))
+    pixel_weight_sum = alloc!(mem, accumulation_eltype, n_pixels, zero(accumulation_eltype))
+    wavelengths_per_pixel = alloc!(mem, Float32, n_pixels * 4, 0f0)
+    pdf_per_pixel = alloc!(mem, Float32, n_pixels * 4, 0f0)
+    filter_weight_per_pixel = alloc!(mem, Float32, n_pixels, 0f0)
 
     # Load lookup tables to GPU (sensor determines response curves)
-    rgb2spec_table = to_gpu(backend, get_srgb_table())
-    cie_table = to_gpu(backend, sensor_response_table(sensor.sensor_name))
+    rgb2spec_table = to_gpu(mem, get_srgb_table())
+    cie_table = to_gpu(mem, sensor_response_table(sensor.sensor_name))
 
     # Build BVH light sampler (spatially-aware importance sampling)
     n_lights = length(lights)
     if n_lights > 0
         bvh_sampler = BVHLightSampler(lights; scene_radius=scene_radius)
-        bvh_gpu = bvh_to_gpu(backend, bvh_sampler)
+        bvh_gpu = bvh_to_gpu(mem, bvh_sampler)
         bvh_nodes = bvh_gpu.nodes
         light_to_bit_trail = bvh_gpu.light_to_bit_trail
         infinite_light_indices = bvh_gpu.infinite_light_indices
         num_bvh_lights = bvh_gpu.num_bvh_lights
         num_infinite_lights = bvh_gpu.num_infinite_lights
     else
-        bvh_nodes = KA.allocate(backend, LightBVHNode, 1)
-        light_to_bit_trail = KA.allocate(backend, UInt32, 1)
-        infinite_light_indices = KA.allocate(backend, Int32, 1)
+        bvh_nodes = alloc!(mem, LightBVHNode, 1)
+        light_to_bit_trail = alloc!(mem, UInt32, 1)
+        infinite_light_indices = alloc!(mem, Int32, 1)
         num_bvh_lights = Int32(0)
         num_infinite_lights = Int32(0)
     end
 
     # Create SobolRNG (allocated once, reused across frames)
-    sobol_rng = SobolRNG(backend, sampler_seed, width, height, samples_per_pixel)
+    sobol_rng = SobolRNG(mem, sampler_seed, width, height, samples_per_pixel)
 
     return VolPathState(
         backend,
+        mem,
         ray_queue_a, ray_queue_b, :a,
         medium_sample_queue, medium_scatter_queue,
         hit_surface_queue, shadow_queue, escaped_queue,
@@ -296,11 +264,9 @@ function VolPathState(
         num_bvh_lights, num_infinite_lights, Int32(n_lights),
         Int32(max_depth), Int32(rr_depth), Int32(width), Int32(height),
         sobol_rng,
-        # HW RT buffers (lazily allocated)
-        nothing, nothing, nothing, nothing, nothing,
         # Per-material typed queues (built lazily once we see the scene's
         # adapted materials).
-        nothing, nothing,
+        nothing, nothing, DeviceMemory(backend),
         # Plans (built lazily on the first render, once the scene shape and the
         # film are known).
         nothing,
@@ -318,8 +284,13 @@ the start of each `render!` after scene adaptation.
 function ensure_per_material_queue!(state::VolPathState, materials_static, capacity::Integer)
     sig = typeof(materials_static).parameters[1]   # Data tuple of StaticMultiTypeSet
     if state.per_material_queue === nothing || state.per_material_queue_signature !== sig
-        state.per_material_queue !== nothing && free!(state.per_material_queue)
-        state.per_material_queue = build_per_material_queues(materials_static, capacity, state.backend)
+        # The previous scene's queues go back before the new ones are taken, so
+        # switching scenes does not accumulate a set per scene. No wait: the
+        # regions are retired, and the allocator that wants them next is the one
+        # that decides whether the device is done with them.
+        state.per_material_queue === nothing || free!(state.per_material_memory)
+        state.per_material_queue =
+            build_per_material_queues(materials_static, capacity, state.per_material_memory)
         state.per_material_queue_signature = sig
     end
     return state.per_material_queue

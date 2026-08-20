@@ -7,6 +7,7 @@
 using Test
 using Hikari
 using Lava
+using Mantle
 using KernelAbstractions
 import KernelAbstractions as KA
 using GeometryBasics
@@ -81,35 +82,99 @@ end
     @testset "VolPathState allocation/free" begin
         backend = Lava.LavaBackend()
 
-        @testset "state allocates all queues and buffers" begin
+        # This used to count `Lava.live_buffer_count()` before and after, with a
+        # tolerance of ten either side because `finalize` defers to the GC and
+        # the GC runs when it likes. Nothing here finalizes any more: the state
+        # holds one `DeviceMemory`, every allocation is a region of it, and
+        # `free!` gives them all back at a point the caller chose. So the
+        # assertion can be exact, and it is about the pool rather than about how
+        # many `VkBuffer`s the pool happened to need.
+        @testset "state takes its memory from the pool and gives all of it back" begin
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            baseline = Lava.live_buffer_count()
+            pool = Mantle.pool(Hikari.mantle_device(backend))
 
             scene = _make_test_scene()
-            # Create a VolPathState directly
             state = Hikari.VolPathState(
                 backend, 16, 16, scene.lights;
                 max_depth=4, samples_per_pixel=1
             )
             Lava.vk_flush!(Lava.vk_context())
+            @test Hikari.nallocations(state.memory) > 10   # queues, accumulators, BVH, Sobol
+            reserved = Mantle.reserved(pool)
 
-            # State should have allocated many GPU buffers
-            after_alloc = Lava.live_buffer_count()
-            @test after_alloc > baseline + 10  # At least 10+ buffers (queues + pixel buffers + tables)
-
-            # Free state
             Hikari.free!(state)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            @test Hikari.nallocations(state.memory) == 0
+            @test Hikari.nallocations(state.per_material_memory) == 0
+
+            # And the regions really are back: more identical states cost the
+            # device nothing, which a leak could not do.
+            #
+            # `live_buffer_count` is checked alongside the pool because the two
+            # catch different mistakes. The pool number stays flat if an
+            # allocation never reached the pool at all; Lava's count is what
+            # notices a `KA.allocate` that crept back into the constructor and
+            # was never given back. Everything the state owns — the queues, the
+            # accumulators, the light BVH, the Sobol matrices and both spectral
+            # tables — has to go through `DeviceMemory` for both to hold.
+            buffers = Lava.live_buffer_count()
+            for _ in 1:3
+                st = Hikari.VolPathState(
+                    backend, 16, 16, scene.lights;
+                    max_depth=4, samples_per_pixel=1
+                )
+                Lava.vk_flush!(Lava.vk_context())
+                Hikari.free!(st)
+            end
+            Lava.vk_flush!(Lava.vk_context())
             GC.gc(true)
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            @test Mantle.reserved(pool) == reserved
+            @test Lava.live_buffer_count() == buffers
+        end
 
-            after_free = Lava.live_buffer_count()
-            # finalize() defers to GC which may not run immediately,
-            # so we allow a small tolerance for pending frees
-            @test after_free <= baseline + 10
+        # The reason `DeviceMemory` carries a finalizer at all. `free!` is still
+        # how memory goes back, and every path in this package calls it — this
+        # is about the path that does NOT, which before had no way back at all:
+        # an `Adapt`-allocated film was reclaimed by the GC, and a pooled one
+        # would simply have been lost. The finalizer retires; `reclaim!`
+        # releases, from the owning thread, a submission boundary later.
+        @testset "a film nobody freed is reclaimed, not lost" begin
+            backend = Lava.LavaBackend()
+            dev = Hikari.mantle_device(backend)
+            pool = Mantle.pool(dev)
+
+            "Build a device film, drop it on the floor, and let the pool catch up."
+            function churn!()
+                Hikari.Film(backend, Hikari.Film(Point2f(128, 128)))
+                nothing                      # no free!, no reference kept
+            end
+            "Run the finalizers, then let the pool catch up with the device."
+            function settle!()
+                GC.gc(true)                  # finalizers run, regions retire
+                KA.fill!(KA.allocate(backend, Float32, 4), 1f0)
+                Lava.vk_flush!(Lava.vk_context())
+                KA.synchronize(backend)      # so the fences they were stamped with pass
+                while Mantle.reclaim!(pool, dev; wait = true) > 0 end
+                return nothing
+            end
+
+            churn!(); settle!()
+            reserved = Mantle.reserved(pool)
+            for _ in 1:5
+                churn!()
+                settle!()
+            end
+            # The pool never had to ask the device for more, across five films
+            # built and dropped without a `free!` between them. That is the whole
+            # claim: without the finalizer each one's regions stay allocated and
+            # this grows by a film per iteration. Counting what `reclaim!`
+            # returns would NOT show it — `acquire!` reclaims before it grows, so
+            # the next film's allocation collects the previous one's bytes and
+            # the explicit call finds nothing left to do.
+            @test Mantle.reserved(pool) == reserved
         end
 
         @testset "double free! is safe" begin
@@ -120,7 +185,8 @@ end
             )
             Lava.vk_flush!(Lava.vk_context())
             Hikari.free!(state)
-            # Second free should not crash (finalize on already-freed buffers is a no-op)
+            # Second free is a no-op: `free!` empties the owned list, so there is
+            # nothing left to hand back twice.
             Hikari.free!(state)
             Lava.vk_flush!(Lava.vk_context())
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
@@ -132,7 +198,8 @@ end
         backend = Lava.LavaBackend()
 
         @testset "push and read on GPU" begin
-            queue = Hikari.WorkQueue{Int32}(backend, 256)
+            mem = Hikari.DeviceMemory(backend)
+            queue = Hikari.WorkQueue{Int32}(mem, 256)
 
             @kernel function push_items!(queue)
                 i = @index(Global)
@@ -146,13 +213,13 @@ end
             items = sort(Array(queue.items)[1:8])
             @test items == Int32[10, 20, 30, 40, 50, 60, 70, 80]
 
-            Hikari.free!(queue)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            Hikari.free!(mem)
         end
 
         @testset "empty and reuse" begin
-            queue = Hikari.WorkQueue{Int32}(backend, 64)
+            mem = Hikari.DeviceMemory(backend)
+            queue = Hikari.WorkQueue{Int32}(mem, 64)
 
             @kernel function push_val!(queue, val)
                 i = @index(Global)
@@ -170,25 +237,38 @@ end
             Lava.vk_flush!(Lava.vk_context())
             @test length(queue) == 5
 
-            Hikari.free!(queue)
             Lava.vk_flush!(Lava.vk_context())
-            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
+            Hikari.free!(mem)
         end
 
-        @testset "free! releases GPU memory" begin
+        # A queue's arrays are regions of the state's `DeviceMemory`, so
+        # "freed" means back in the pool, not back to the driver. That is the
+        # whole point of the pool and it is what makes the assertion below
+        # stronger than the `live_buffer_count() == baseline` this used to
+        # check: the second round of queues has to cost the device NOTHING,
+        # which a driver-level count could satisfy while the pool quietly grew
+        # a second block.
+        @testset "freed queues come back from the pool, not the device" begin
             GC.gc(true)
             Lava.vk_flush!(Lava.vk_context())
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            baseline = Lava.live_buffer_count()
+            pool = Mantle.pool(Hikari.mantle_device(backend))
 
-            queue = Hikari.WorkQueue{Int32}(backend, 128)
+            mem = Hikari.DeviceMemory(backend)
+            qs = [Hikari.WorkQueue{Int32}(mem, 1 << 16) for _ in 1:4]
+            @test Hikari.nallocations(mem) == 8          # items + counter each
             Lava.vk_flush!(Lava.vk_context())
-            @test Lava.live_buffer_count() > baseline
+            after_first = Mantle.reserved(pool)
 
-            Hikari.free!(queue)
+            Hikari.free!(mem)
+            @test Hikari.nallocations(mem) == 0
+            @test Mantle.reserved(pool) == after_first   # nothing given back yet
+
+            mem2 = Hikari.DeviceMemory(backend)
+            qs2 = [Hikari.WorkQueue{Int32}(mem2, 1 << 16) for _ in 1:4]
             Lava.vk_flush!(Lava.vk_context())
-            Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
-            @test Lava.live_buffer_count() == baseline
+            @test Mantle.reserved(pool) == after_first   # reused, not reallocated
+            Hikari.free!(mem2)
         end
     end
 
@@ -320,6 +400,9 @@ end
             GC.gc(true)
             Lava.drain_deferred_frees!(Lava.vk_context().default_bq)
             baseline = Lava.live_buffer_count()
+            pool = Mantle.pool(Hikari.mantle_device(Lava.LavaBackend()))
+            reserved = Mantle.reserved(pool)
+            owned = Hikari.nallocations(vp.state.memory)
 
             # Multiple renders — buffer count should not grow
             for _ in 1:5
@@ -332,6 +415,11 @@ end
             after = Lava.live_buffer_count()
 
             @test after == baseline
+            # The same claim one level up, where the state's memory actually
+            # lives now: a render neither takes a new region nor makes the pool
+            # ask the device for more.
+            @test Hikari.nallocations(vp.state.memory) == owned
+            @test Mantle.reserved(pool) == reserved
 
             close(vp)
             Lava.vk_flush!(Lava.vk_context())

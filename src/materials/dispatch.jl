@@ -23,6 +23,15 @@ BSDF, MIS, and direct-lighting paths all see the same shading frame.
     dndu::Vec3f, dndv::Vec3f,
     ng::Vec3f, tfc::TextureFilterContext
 )::Tuple{Vec3f, Vec3f}
+    # A surface whose material is not in the set has no displacement to read, so
+    # the frame is the geometric one. Same guard, same reason as
+    # `get_surface_alpha_dispatch`: a null-material medium boundary carries an
+    # INVALID index, and on a scene whose only object is a volume the material
+    # set is EMPTY, where `with_index` expands to `error(...)` — unraisable in a
+    # GPU kernel, so the ray simply disappeared. This is the call on the medium
+    # side of the trace: it is what killed a ray that had already crossed INTO
+    # the volume, on the far wall of the same cube.
+    Raycore.is_valid(idx) || return (ns, dpdus)
     return with_index(perturb_shading_frame_impl, materials, idx,
                       materials, ns, dpdus, dpdu, dpdv, dndu, dndv, ng, tfc)
 end
@@ -94,6 +103,21 @@ Returns alpha ∈ [0, 1] where 0 = fully transparent, 1 = fully opaque.
 @propagate_inbounds function get_surface_alpha_dispatch(
     materials::StaticMultiTypeSet, idx::SetKey, uv::Point2f
 )::Float32
+    # A surface with no material in the set is not alpha-tested: opaque, so the
+    # caller proceeds to the null-material branch that owns this case.
+    #
+    # The guard is the fix for a volume being the only thing in a scene. A
+    # volume's bounding cube is `MediumInterface(NullMaterial(); inside = m)`,
+    # and a `NullMaterial` is never pushed, so `idx` here is INVALID — and if
+    # the volume is the only object, `materials` is EMPTY. `with_index` expands
+    # to `error("with_index: empty StaticMultiTypeSet")` for an empty set, which
+    # a GPU kernel cannot raise: every ray that hit the cube died right here,
+    # producing neither a continuation ray nor an escape, and the volume
+    # rendered as a solid black box. With any other material in the scene the
+    # same invalid index instead fell into `with_index`'s else-branch and read
+    # some ARBITRARY material's alpha — opaque by luck, which is why adding an
+    # unrelated sphere "fixed" it.
+    Raycore.is_valid(idx) || return 1.0f0
     return with_index(get_surface_alpha, materials, idx, materials, uv)
 end
 

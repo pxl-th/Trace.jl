@@ -22,28 +22,29 @@ using Adapt
 should_use_soa(::Type{T}) where T = false
 
 """
-    allocate_array(backend, T, n; soa=false)
+    allocate_array(mem, T, n; soa=false)
 
-Allocate array with AOS (soa=false) or SOA (soa=true) layout.
-Both support identical indexing: arr[i] returns T, arr[i] = val stores T.
+Allocate array with AOS (soa=false) or SOA (soa=true) layout, from the memory
+the render state owns. Both support identical indexing: arr[i] returns T,
+arr[i] = val stores T.
 """
-function allocate_array(backend, ::Type{T}, n::Integer; soa::Bool=false) where T
-    soa ? allocate_soa(backend, T, n) : KA.allocate(backend, T, n)
+function allocate_array(mem::DeviceMemory, ::Type{T}, n::Integer; soa::Bool=false) where T
+    soa ? allocate_soa(mem, T, n) : alloc!(mem, T, n)
 end
 
-function allocate_soa(backend, ::Type{T}, n::Integer) where T
+function allocate_soa(mem::DeviceMemory, ::Type{T}, n::Integer) where T
     if !should_use_soa(T)
-        return KA.allocate(backend, T, n)
+        return alloc!(mem, T, n)
     end
     if fieldcount(T) > 0
         fnames = fieldnames(T)
         ftypes = fieldtypes(T)
         components = NamedTuple{fnames}(
-            ntuple(i -> allocate_soa(backend, ftypes[i], n), length(fnames))
+            ntuple(i -> allocate_soa(mem, ftypes[i], n), length(fnames))
         )
         return StructArray{T}(components)
     end
-    return KA.allocate(backend, T, n)
+    return alloc!(mem, T, n)
 end
 
 # ============================================================================
@@ -66,8 +67,8 @@ counter to track the current size. Supports both AOS and SOA layouts.
 
 # Example
 ```julia
-# Create a queue on GPU backend
-queue = WorkQueue{MyWorkItem}(backend, 1024)
+# Create a queue in the memory a render state owns
+queue = WorkQueue{MyWorkItem}(mem, 1024)
 
 # In a kernel, push items atomically
 idx = push!(queue, item)
@@ -84,36 +85,21 @@ struct WorkQueue{T, V <: AbstractVector{T}, S <: AbstractVector{Int32}}
     capacity::Int32
 end
 
-"""
-    free!(queue::WorkQueue)
-
-Release GPU memory held by the work queue's items and size arrays.
-Does **not** synchronize — caller must ensure the GPU is idle (see the
-sync!/free! contract in Raycore and Hikari).
-"""
-function free!(queue::WorkQueue)
-    # SOA queues store `items` as a `StructArray{T}` whose components are
-    # LavaArrays; `finalize(::StructArray)` is a no-op and leaves the
-    # component LavaArrays alive until Julia GC runs.  AOS queues store
-    # `items` as a single LavaArray directly.  Walk in either case.
-    _finalize_items!(queue.items)
-    finalize(queue.size)
-    return nothing
-end
-_finalize_items!(items) = finalize(items)
-function _finalize_items!(items::StructArray)
-    for c in StructArrays.components(items)
-        _finalize_items!(c)
-    end
-end
+# A queue has no `free!` of its own: its arrays are views into regions the
+# state's `DeviceMemory` owns, so `free!(mem)` releases them and there is nothing
+# per-queue to remember. What used to be here walked the SOA components calling
+# `finalize` on each, because `finalize(::StructArray)` is a no-op and would have
+# left them alive until the GC ran — one more piece of a lifetime protocol that
+# is now the pool's.
 
 """
-    WorkQueue{T}(backend, capacity; soa=should_use_soa(T))
+    WorkQueue{T}(mem::DeviceMemory, capacity; soa=should_use_soa(T))
 
-Create a new work queue with the given capacity on the specified backend.
+Create a new work queue with the given capacity, in memory the render state
+owns.
 
 # Arguments
-- `backend`: KernelAbstractions backend (e.g., `CPU()`, `CUDABackend()`, `ROCBackend()`)
+- `mem`: the state's [`DeviceMemory`](@ref); `free!(mem)` releases this queue
 - `capacity`: Maximum number of items the queue can hold
 - `soa`: If true, use Structure-of-Arrays layout for better GPU memory coalescing.
   Defaults to `should_use_soa(T)` so flagged item types automatically get the
@@ -121,10 +107,9 @@ Create a new work queue with the given capacity on the specified backend.
   this default was wired up, the trait was set on `VPRayWorkItem` and friends
   but never actually read — every queue was AOS regardless.)
 """
-function WorkQueue{T}(backend, capacity::Integer; soa::Bool=should_use_soa(T)) where T
-    items = allocate_array(backend, T, capacity; soa=soa)
-    size = KA.allocate(backend, Int32, 1)
-    KA.fill!(size, Int32(0))
+function WorkQueue{T}(mem::DeviceMemory, capacity::Integer; soa::Bool=should_use_soa(T)) where T
+    items = allocate_array(mem, T, capacity; soa=soa)
+    size = alloc!(mem, Int32, 1, Int32(0))
     WorkQueue{T, typeof(items), typeof(size)}(items, size, Int32(capacity))
 end
 
@@ -244,14 +229,9 @@ in `item_types`.
 mtwq = MultiTypeWorkQueue((HitWorkA, HitWorkB, HitWorkC), 1024, backend)
 ```
 """
-function MultiTypeWorkQueue(item_types::Tuple, capacity::Integer, backend; soa::Bool=false)
-    qs = map(T -> WorkQueue{T}(backend, capacity; soa=soa), item_types)
+function MultiTypeWorkQueue(item_types::Tuple, capacity::Integer, mem::DeviceMemory; soa::Bool=false)
+    qs = map(T -> WorkQueue{T}(mem, capacity; soa=soa), item_types)
     return MultiTypeWorkQueue(qs)
-end
-
-function free!(mtwq::MultiTypeWorkQueue)
-    foreach(free!, mtwq.queues)
-    return nothing
 end
 
 Base.empty!(mtwq::MultiTypeWorkQueue) = (foreach(empty!, mtwq.queues); mtwq)

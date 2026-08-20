@@ -446,17 +446,17 @@ end
 # ============================================================================
 
 """
-    to_gpu(backend, table::RGBToSpectrumTable) -> RGBToSpectrumTable
+    to_gpu(mem, table::RGBToSpectrumTable) -> RGBToSpectrumTable
 
-Convert RGBToSpectrumTable to use GPU-compatible arrays.
-Uses KernelAbstractions backend for allocation.
+The table on the device, in memory the render state owns. `coeffs` keeps its
+five dimensions — a `Mantle.Buffer` is shaped, and `rgb_to_spectrum` indexes it
+with five indices.
 """
-function to_gpu(backend, table::RGBToSpectrumTable)
-    scale_gpu = adapt(backend, table.scale)
-    coeffs_gpu = adapt(backend, table.coeffs)
-    d65_gpu = adapt(backend, table.d65_values)
-    return RGBToSpectrumTable(table.res, scale_gpu, coeffs_gpu, d65_gpu)
-end
+to_gpu(mem::DeviceMemory, table::RGBToSpectrumTable) =
+    RGBToSpectrumTable(table.res,
+                       upload!(mem, table.scale),
+                       upload!(mem, table.coeffs),
+                       upload!(mem, table.d65_values))
 
 function Adapt.adapt_structure(to, table::RGBToSpectrumTable)
     RGBToSpectrumTable(

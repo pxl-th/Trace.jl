@@ -55,7 +55,7 @@ function _make_film_camera(res::Int)
 end
 
 function _render(scene, film, camera; backend, hw::Bool, samples::Int, depth::Int)
-    gpu_film = Adapt.adapt(backend, film)
+    gpu_film = Hikari.Film(backend, film)
     vp = Hikari.VolPath(samples=samples, max_depth=depth, hw_accel=hw)
     vp(scene, gpu_film, camera)
     img = Array(gpu_film.framebuffer)

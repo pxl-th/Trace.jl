@@ -51,7 +51,7 @@ end
 function _render(scene; backend=_BACKEND, hw::Bool=false, res::Int=32,
                  samples::Int=16, depth::Int=3)
     film = Hikari.Film(Point2f(res, res))
-    gpu_film = Adapt.adapt(backend, film)
+    gpu_film = Hikari.Film(backend, film)
     camera = Hikari.PerspectiveCamera(Point3f(0, -3, 1.5), Point3f(0, 0, 0.35),
                                       film; fov=50f0)
     vp = Hikari.VolPath(samples=samples, max_depth=depth, hw_accel=hw)

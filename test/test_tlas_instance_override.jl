@@ -46,7 +46,7 @@ end
 _colors_of(materials, idx) = Raycore.is_valid(idx) ? materials[idx].Kd : nothing
 
 function _render(scene, film, camera; backend, hw::Bool, samples::Int=2, depth::Int=3)
-    gpu_film = Adapt.adapt(backend, film)
+    gpu_film = Hikari.Film(backend, film)
     vp = Hikari.VolPath(samples=samples, max_depth=depth, hw_accel=hw)
     vp(scene, gpu_film, camera)
     close(vp)
