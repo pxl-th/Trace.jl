@@ -120,9 +120,36 @@ new bumped normal against `ng`, not against the original interpolated `ns`.
     dhdu = (hu - h0) / δu
     dhdv = (hv - h0) / δv
 
-    # pbrt-v4 materials.h:BumpMap eq. 9.20 — uses unnormalized dpdu/dpdv directly
-    dpdu_p = dpdu + dhdu * ns + h0 * dndu
-    dpdv_p = dpdv + dhdv * ns + h0 * dndv
+    # pbrt-v4 materials.h:BumpMap reads `ctx.shading.dpdu`/`dpdv`, NOT the raw
+    # geometric partials. For a mesh without vertex tangents those come from
+    # shapes.h:962-966 + SetShadingGeometry:
+    #
+    #     ts = Cross(ns, dpdu);  ss = Cross(ts, ns)
+    #
+    # i.e. `ss` is dpdu PROJECTED perpendicular to the shading normal and `ts` is
+    # perpendicular to both — each UNNORMALIZED, so eq. 9.20 keeps the
+    # |dhdu|/|dpdu| ratio that sets the tilt.
+    #
+    # On a flat surface the interpolated ns is already perpendicular to dpdu, so
+    # the projection is a no-op and raw partials happen to be right. On a CURVED
+    # surface it is not, and the error grows with curvature. Measured with the
+    # same bump map, amplitude and material on both: a flat quad matched pbrt at
+    # tile 0.0008 / energy 0.9999 while the sphere sat at 0.4091 / 0.918.
+    #
+    # Note `dpdv` is not used: pbrt builds the shading frame from dpdu alone.
+    ts = cross(ns, dpdu)
+    ts_len_sq = dot(ts, ts)
+    if ts_len_sq > 1f-16
+        ss_s = cross(ts, ns)
+        ts_s = ts
+    else
+        # Degenerate (dpdu parallel to ns): pbrt falls back to CoordinateSystem.
+        ss_s, ts_s = coordinate_system(ns)
+    end
+
+    # pbrt-v4 materials.h:BumpMap eq. 9.20
+    dpdu_p = ss_s + dhdu * ns + h0 * dndu
+    dpdv_p = ts_s + dhdv * ns + h0 * dndv
 
     # pbrt-v4 interaction.cpp:184-187 — `Normal3f ns(Normalize(Cross(dpdu, dpdv)))`
     # then `SetShadingGeometry(ns, dpdu, dpdv, ..., false)`, which inside

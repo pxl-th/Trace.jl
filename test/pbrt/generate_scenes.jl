@@ -660,26 +660,21 @@ AttributeEnd"""
 end
 
 """
-crown.pbrt's `mitra_right_back` material, reproduced on the suite sphere.
+crown.pbrt's `mitra_right_back` material, reproduced on the suite sphere, plus
+the FLAT control that localises bump bugs to surface curvature.
 
-`tex_conductor_bumpmap_*` already covers an image bump, but with a 16-bit GRAY
-map, a CONSTANT roughness, and the texture wired straight to the material. Every
-one of those differs from what crown actually does, and crown's displaced dome
-panels are where its render diverges from pbrt:
+`tex_conductor_bumpmap_*` already covers an image bump, but with a 16-bit gray
+map whose height span is 0.144 and whose largest texel-to-texel step is 0.0024 —
+a nearly flat height field. crown's map spans 0.737 with steps of 0.047, 5x and
+20x larger, and rides on a `scale` indirection over a material that also has a
+textured roughness. A gentle bump hides errors that scale with amplitude.
 
-    crown                                  existing suite scene
-    8-bit RGBA bump (alpha all ones)       16-bit gray
-    bump behind a `scale` INDIRECTION      texture wired directly
-    textured roughness on the SAME material constant roughness
-
-Each of those touches a different path. The RGBA case matters because pbrt's
-`MIPMap::CreateFromFile` drops alpha only when it is all ones, and
-`Bilerp<Float>` returns the ALPHA channel for a 4-channel image while
-`Texel<Float>` returns channel 0 — no suite texture was 4-channel. The `scale`
-indirection matters because the bump height is finite-differenced, so any
-per-evaluation cost or precision loss in the wrapper shows up as a tilted
-normal. And a textured roughness makes the microfacet lobe vary across the same
-surface the bump is perturbing.
+The flat/curved PAIR is the diagnostic. pbrt's eq. 9.20 adds `h * dndu`, and the
+shading frame it feeds the formula is dpdu PROJECTED perpendicular to the shading
+normal. Both terms vanish on a flat surface, where the interpolated normal is
+already perpendicular to dpdu. So a bump bug that is curvature-coupled shows up
+as: flat matches, sphere does not. That is exactly how the raw-dpdu bug was
+found — flat 0.0008 / 0.9999 against sphere 0.4091 / 0.918.
 """
 function generate_crownlike_bump_scenes()
     textures = """
@@ -712,13 +707,31 @@ Texture "rough-sc" "float" "scale"
 
     n = 0
     for (suffix, light) in (("light_point", LIGHTS["point"]), ("light_area", LIGHTS["area"]))
-        write_scene(joinpath(SCENES_DIR, "xfail_bumpmip_scaled_$(suffix).pbrt");
+        write_scene(joinpath(SCENES_DIR, "tex_conductor_scalebump_texrough_$(suffix).pbrt");
                     light = light, textures = textures, sphere_mat = mat)
-        write_scene(joinpath(SCENES_DIR, "xfail_bumpmip_direct_$(suffix).pbrt");
+        write_scene(joinpath(SCENES_DIR, "tex_conductor_rgbabump_direct_$(suffix).pbrt");
                     light = light, textures = textures, sphere_mat = mat_direct)
         n += 2
     end
-    return n
+
+    # Flat control: same map, amplitude and material, zero curvature. Written by
+    # hand because `write_scene` always emits the ground + sphere pair.
+    open(joinpath(SCENES_DIR, "tex_conductor_bump_flat_light_point.pbrt"), "w") do io
+        println(io, "# Auto-generated reference test scene — FLAT bump control.")
+        println(io, "# dndu = dndv = 0 here and the shading frame needs no projection,")
+        println(io, "# so a curvature-coupled bump bug matches on this and misses on the")
+        println(io, "# sphere. Keep the two together: the PAIR is what localises the bug.")
+        println(io, CAMERA); println(io, FILM_BASE); println(io, INTEGRATOR)
+        println(io); println(io, "WorldBegin"); println(io, LIGHTS["point"]); println(io)
+        println(io, textures); println(io)
+        for line in split(mat_direct, '\n'); println(io, line); end
+        println(io, """Shape "trianglemesh"
+  "point3 P" [ -0.5 0 0.0   0.5 0 0.0   0.5 0 1.0   -0.5 0 1.0 ]
+  "normal N" [ 0 -1 0  0 -1 0  0 -1 0  0 -1 0 ]
+  "point2 uv" [ 0 0  1 0  1 1  0 1 ]
+  "integer indices" [ 0 1 2  0 2 3 ]""")
+    end
+    return n + 1
 end
 
 function generate_all_scenes()

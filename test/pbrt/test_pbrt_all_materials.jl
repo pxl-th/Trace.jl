@@ -64,25 +64,6 @@ function _test_scene(scene_name; backend, samples, hw_accel,
     return m
 end
 
-"""
-A scene we KNOW does not match yet, run as `@test_broken`.
-
-The point is that it still RUNS: it stays visible in the output, and Julia turns
-a `@test_broken` that unexpectedly PASSES into a failure, so the day the
-underlying feature lands the suite tells us instead of leaving a stale
-exclusion behind. Nothing here is skipped or silently relaxed.
-"""
-function _test_scene_broken(scene_name; backend, samples, hw_accel)
-    scene_file = joinpath(SCENES_DIR, "$(scene_name).pbrt")
-    isfile(scene_file) || return nothing
-    ref = ensure_reference(scene_name; spp=samples)
-    fb = render_scene(scene_name; backend, samples, hw_accel)
-    m = compute_metrics(ref, fb)
-    println("  $(scene_name): tile=$(round(m.tile, digits=4)) energy=$(round(m.energy_ratio, digits=3)) [known failure]")
-    @test_broken m.tile < TILE_THRESHOLD
-    return m
-end
-
 function _test_scenes_matching(prefix; backend, samples, hw_accel, kwargs...)
     for name in list_scenes(prefix)
         @testset "$name" begin
@@ -133,26 +114,6 @@ function run_pbrt_suite(; backend=Lava.LavaBackend(),
         @testset "Sensors"        _test_scenes_matching("sensor_"; backend, samples, hw_accel)
         @testset "Media"          _test_scenes_matching("medium_"; backend, samples, hw_accel)
 
-        # Image-based bump maps do not match pbrt yet: pbrt EWA-filters image
-        # textures through a MIP pyramid, so its bump finite-difference measures
-        # the slope of a mip-FILTERED height field, while Hikari samples bilinear
-        # at full resolution (textures/texture-ref.jl:139, "TODO: implement
-        # mipmaps"). Under minification that makes Hikari's gradients far too
-        # steep, over-tilting the bumped normal, scattering the specular
-        # highlight and losing energy in proportion to bump amplitude —
-        # measured monotonic: scale 0.005/0.02/0.05/0.25 -> energy
-        # 0.982/0.929/0.831/0.602.
-        #
-        # The procedural checkerboard bump (shadow_bumpgold) passes precisely
-        # because pbrt evaluates procedural textures analytically with no
-        # pyramid, so both sides use full-resolution slopes and agree.
-        @testset "Known failures" begin
-            for name in list_scenes("xfail_")
-                @testset "$name" begin
-                    _test_scene_broken(name; backend, samples, hw_accel)
-                end
-            end
-        end
     end
 end
 
