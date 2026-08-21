@@ -304,9 +304,7 @@ end
 
             geom = vp_compute_surface_geometry(primitive, barycentric, work.ray.o, work.ray.d, t_hit)
 
-            dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
-            dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
-            tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
+            tfc_bump = bump_filter_context(camera, work, geom, samples_per_pixel)
             dndu, dndv = vp_compute_normal_derivatives(primitive)
             ns_b, dpdus_b = get_perturbed_shading_frame(materials, mat_idx,
                                                        geom.ns, geom.dpdus,
@@ -390,9 +388,7 @@ end
 
         # Camera-approximated differentials for every hit, matching pbrt-v4
         # ComputeDifferentials (see the trace-kernel comment above).
-        dpdx, dpdy = approximate_dp_dxy(geom.pi, geom.n, camera, samples_per_pixel)
-        dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
-        tfc_bump = TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
+        tfc_bump = bump_filter_context(camera, work, geom, samples_per_pixel)
         dndu, dndv = vp_compute_normal_derivatives(primitive)
         ns_b, dpdus_b = get_perturbed_shading_frame(materials, resolved_mat_idx,
                                                    geom.ns, geom.dpdus,

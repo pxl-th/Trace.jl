@@ -71,3 +71,14 @@ get_camera_to_world(camera::MatrixCamera) = camera.core.camera_to_world
 
 get_camera_position(camera::PerspectiveCamera) = Raycore.transform_point(get_camera_to_world(camera).m, Point3f(0f0))
 get_camera_position(camera::MatrixCamera) = Raycore.transform_point(get_camera_to_world(camera).m, Point3f(0f0))
+
+# The camera-space plane that `raster_to_camera` maps the film onto. This is
+# where `dx_camera`/`dy_camera` live, so anything combining them with a
+# reconstructed camera-space point has to use this plane.
+#
+# Ask for it here rather than deriving it from the camera's `near`: the
+# projection puts this plane at `2 * near`, and assuming otherwise made every
+# texture footprint and bump step in the renderer 2x too wide.
+get_raster_to_camera(camera::PerspectiveCamera) = camera.core.raster_to_camera
+get_raster_to_camera(camera::MatrixCamera) = camera.raster_to_camera
+raster_plane_z(camera) = get_raster_to_camera(camera)(Point3f(0f0))[3]

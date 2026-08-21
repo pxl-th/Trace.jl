@@ -45,14 +45,19 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
     to_point = Vec3f(pi - camera_pos)
     dist = sqrt(dot(to_point, to_point))
 
-    # Hikari's `dx_camera` is the camera-space per-raster-pixel displacement
-    # on the perspective NEAR plane (z = PERSPECTIVE_NEAR), not the angular
-    # size of a pixel. To project it to world displacement at the actual hit
-    # distance we have to multiply by `dist / near`; otherwise the world
-    # displacement comes out ~100× too small and the per-pixel UV footprint
-    # falls below BUMP_DEFAULT_DELTA — so the bump fallback (5e-4) kicks in
-    # instead of the real screen-space derivative, leaving the gold-dome
-    # conductor with coherent mirror highlights.
+    # Hikari's `dx_camera` is the camera-space per-raster-pixel displacement on
+    # the plane `raster_to_camera` maps the film onto, not the angular size of a
+    # pixel. To project it to world displacement at the actual hit distance we
+    # divide by that plane's depth; otherwise the world displacement comes out
+    # ~100× too small and the per-pixel UV footprint falls below
+    # BUMP_DEFAULT_DELTA — so the bump fallback (5e-4) kicks in instead of the
+    # real screen-space derivative, leaving the gold-dome conductor with
+    # coherent mirror highlights.
+    #
+    # That plane sits at `2 * near`, not `near`, so dividing by the camera's
+    # near distance made every footprint in the renderer exactly 2x too wide —
+    # verified against differentials reconstructed from real neighbouring-pixel
+    # rays, which `surface_dp_dxy` now matches to 0.05%.
     #
     # pbrt-v4 scales BOTH differential paths by max(.125, 1/sqrt(spp)):
     # true camera ray diffs via `ray.ScaleDifferentials(rayDiffScale)`
@@ -65,7 +70,7 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
     # nearest-neighbour `sample_texture_data`; bilinear sampling returns
     # the correct local slope for sub-texel finite differences.
     spp_scale = max(0.125f0, 1f0 / sqrt(Float32(samples_per_pixel)))
-    scale = spp_scale * dist / PERSPECTIVE_NEAR
+    scale = spp_scale * dist / abs(raster_plane_z(camera))
 
     # Transform dx_camera and dy_camera to world space
     # These represent how the ray direction changes per pixel
@@ -78,6 +83,121 @@ Returns (dpdx, dpdy) - approximate change in position per screen pixel.
     dpdy = scale * (dy_world - n * dot(n, dy_world))
 
     return dpdx, dpdy
+end
+
+"""
+    surface_dp_dxy(camera, ray_o, ray_d, p, n, samples_per_pixel, depth) -> (dpdx, dpdy)
+
+Screen-space position derivatives at a hit point.
+
+pbrt-v4 `SurfaceInteraction::ComputeDifferentials` (interaction.cpp:48) uses the
+ray's TRUE differentials whenever it has them, and only falls back to
+`Camera::Approximate_dp_dxy` when it does not. Camera rays always have them
+(`GenerateRayDifferential`); indirect bounces never do, because the path
+integrators do not propagate differentials. So `depth == 0` gets the exact
+footprint and everything deeper gets the approximation — matching pbrt on both
+branches rather than approximating everywhere.
+
+This matters well beyond mipmap selection: the footprint sets
+`δu = 0.5(|dudx|+|dudy|)`, the finite-difference step `perturb_bump_frame` uses
+for `∂h/∂u`. A wrong footprint tilts the bumped normal, which MOVES specular
+highlights rather than just dimming them. Measured on crown.pbrt as a coherent
+dipole on the displaced dome panels.
+
+Only `PerspectiveCamera` implements the exact form — it is the camera the pbrt
+importer builds, and the reconstruction below depends on its near-plane
+convention. Other cameras keep the approximation.
+"""
+@propagate_inbounds surface_dp_dxy(camera, ray_o::Point3f, ray_d::Vec3f,
+                                   p::Point3f, n::Vec3f,
+                                   samples_per_pixel::Int32, depth::Int32) =
+    approximate_dp_dxy(p, n, camera, samples_per_pixel)
+
+@propagate_inbounds function surface_dp_dxy(camera::PerspectiveCamera,
+                                            ray_o::Point3f, ray_d::Vec3f,
+                                            p::Point3f, n::Vec3f,
+                                            samples_per_pixel::Int32, depth::Int32)
+    depth == Int32(0) || return approximate_dp_dxy(p, n, camera, samples_per_pixel)
+
+    ctw = get_camera_to_world(camera)
+    d_cam = normalize(Raycore.transform_direction(ctw.inv_m, ray_d))
+    # Degenerate: ray parallel to the image plane. Nothing to reconstruct.
+    abs(d_cam[3]) < 1f-9 && return approximate_dp_dxy(p, n, camera, samples_per_pixel)
+
+    # Hikari's camera looks down -z (`generate_ray`: t = -focal_distance / d[3]),
+    # pbrt looks down +z, so the near and focal planes sit at NEGATIVE z here.
+    #
+    # `dx_camera`/`dy_camera` are offsets on whatever plane `raster_to_camera`
+    # maps z=0 onto, and `p_camera` has to land on that SAME plane or the offsets
+    # are the wrong size. That plane is at `2 * near`, not `near`, so derive it
+    # rather than assume it.
+    z_ref = raster_plane_z(camera)
+    focal = camera.core.focal_distance
+    uses_lens = camera.core.lens_radius > 0f0
+
+    # Recover `p_camera`, the near-plane point this pixel's ray passed through —
+    # `dx_camera`/`dy_camera` are offsets on that same plane, so the reconstruction
+    # has to land on it.
+    o_cam = Raycore.transform_point(ctw.inv_m, ray_o)
+    p_camera = if uses_lens
+        # With a lens the ray runs lens_point -> focal point, so the unlensed
+        # direction is the one from the camera origin through the focal point.
+        # `p_focus` is proportional to `p_camera` (cameras.cpp:441-443), so
+        # rescaling it to the near plane recovers `p_camera` exactly.
+        t_focus = (-focal - o_cam[3]) / d_cam[3]
+        p_focus = o_cam + d_cam * t_focus
+        abs(p_focus[3]) < 1f-9 && return approximate_dp_dxy(p, n, camera, samples_per_pixel)
+        p_focus * (z_ref / p_focus[3])
+    else
+        d_cam * (z_ref / d_cam[3])
+    end
+
+    # pbrt-v4 cameras.cpp:451-474 — offset rays through the neighbouring pixels.
+    # Both differentials share the primary ray's origin in either branch.
+    px_cam = Vec3f(p_camera) + camera.dx_camera
+    py_cam = Vec3f(p_camera) + camera.dy_camera
+    rx_d_cam, ry_d_cam = if uses_lens
+        dx = normalize(px_cam); dy = normalize(py_cam)
+        (abs(dx[3]) < 1f-9 || abs(dy[3]) < 1f-9) &&
+            return approximate_dp_dxy(p, n, camera, samples_per_pixel)
+        (normalize(dx * (-focal / dx[3]) - Vec3f(o_cam)),
+         normalize(dy * (-focal / dy[3]) - Vec3f(o_cam)))
+    else
+        (normalize(px_cam), normalize(py_cam))
+    end
+
+    # RayDifferential::ScaleDifferentials, applied by the integrator at
+    # cpu/integrators.cpp:251. Origins coincide with the primary ray's, so only
+    # the directions move.
+    s = max(0.125f0, 1f0 / sqrt(Float32(samples_per_pixel)))
+    rx_d = Raycore.transform_direction(ctw.m, d_cam + (rx_d_cam - d_cam) * s)
+    ry_d = Raycore.transform_direction(ctw.m, d_cam + (ry_d_cam - d_cam) * s)
+
+    # pbrt-v4 interaction.cpp:52-61 — intersect both offset rays with the tangent
+    # plane at the hit and difference against it.
+    n_rx = dot(n, rx_d); n_ry = dot(n, ry_d)
+    (abs(n_rx) < 1f-9 || abs(n_ry) < 1f-9) &&
+        return approximate_dp_dxy(p, n, camera, samples_per_pixel)
+    num = dot(n, Vec3f(p)) - dot(n, Vec3f(ray_o))
+    tx = num / n_rx
+    ty = num / n_ry
+    (isfinite(tx) && isfinite(ty)) ||
+        return approximate_dp_dxy(p, n, camera, samples_per_pixel)
+    return (Vec3f(ray_o) + rx_d * tx) - Vec3f(p), (Vec3f(ray_o) + ry_d * ty) - Vec3f(p)
+end
+
+"""
+    bump_filter_context(camera, work, geom, samples_per_pixel) -> TextureFilterContext
+
+The differentials + UV-derivative + context construction that every trace kernel
+needs before perturbing the shading frame. Six call sites across the software and
+hardware paths had this open-coded identically.
+"""
+@propagate_inbounds function bump_filter_context(camera, work, geom, samples_per_pixel::Int32)
+    dpdx, dpdy = surface_dp_dxy(camera, work.ray.o, work.ray.d, geom.pi, geom.n,
+                                samples_per_pixel, work.depth)
+    dudx, dudy, dvdx, dvdy = compute_uv_derivatives(geom.dpdu, geom.dpdv, dpdx, dpdy)
+    return TextureFilterContext(geom.uv, dudx, dudy, dvdx, dvdy)
 end
 
 """

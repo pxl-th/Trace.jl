@@ -1,9 +1,3 @@
-# Near plane used by the perspective transform. Anything that needs to convert
-# Hikari's near-plane-relative `dx_camera`/`dy_camera` to angular units (e.g.
-# `approximate_dp_dxy` for ray differentials) must divide by this constant.
-const PERSPECTIVE_NEAR = 0.01f0
-const PERSPECTIVE_FAR  = 1000.0f0
-
 struct ProjectiveCamera <: Camera
     core::CameraCore
     camera_to_screen::Transformation
@@ -58,16 +52,21 @@ struct PerspectiveCamera <: Camera
 
     """
     - `screen_window::Bounds2`: Screen space extent of the image.
+    - `near`/`far`: projection clip planes. They only shape the perspective
+      transform — no ray is clipped by them — so they are camera parameters
+      rather than renderer-wide constants. Anything needing the camera-space
+      plane the film maps onto must ask `raster_plane_z(camera)`, NOT assume
+      `near`: the projection puts that plane at `2 * near`.
     """
     function PerspectiveCamera(
         camera_to_world::Transformation, screen_window::Bounds2,
         shutter_open::Float32, shutter_close::Float32,
         lens_radius::Float32, focal_distance::Float32,
-        fov::Float32, film::Film,
+        fov::Float32, film::Film; near::Float32 = 0.01f0, far::Float32 = 1000f0,
     )
         pc = ProjectiveCamera(
             inv(camera_to_world),
-            perspective(fov, PERSPECTIVE_NEAR, PERSPECTIVE_FAR),
+            perspective(fov, near, far),
             screen_window, shutter_open, shutter_close,
             lens_radius, focal_distance, film,
         )
