@@ -103,6 +103,10 @@ function run_pbrt_suite(; backend=Lava.LavaBackend(),
             end
         end
 
+        # `cam_` and `integ_` were dead prefixes: scenes sat in scenes/ that no
+        # testset matched, so cam_dof_light_point.pbrt had never once run.
+        @testset "Camera"         _test_scenes_matching("cam_";    backend, samples, hw_accel)
+        @testset "Integrator"     _test_scenes_matching("integ_";  backend, samples, hw_accel)
         @testset "Textures"       _test_scenes_matching("tex_";    backend, samples, hw_accel)
         @testset "Cast shadows"   _test_scenes_matching("shadow_"; backend, samples, hw_accel)
         @testset "Light variants" _test_scenes_matching("light_";  backend, samples, hw_accel)

@@ -231,16 +231,8 @@ function build_hikari_scene(pbrt::PBRTScene;
         outside_medium = get(media_cache, srec.medium_outer, nothing)
 
         # Area light → wrap material in MediumInterface with Emissive
-        # pbrt normalizes: scale /= SpectrumToPhotometric(Lemit)
         if srec.area_light !== nothing
-            Le = pbrt_get_emissive_le(srec.area_light, (1.0, 1.0, 1.0))
-            al_scale = Float32(pbrt_get_float(srec.area_light, "scale", 1.0))
-            two_sided = pbrt_get_bool(srec.area_light, "twosided", false)
-            table = get_srgb_table()
-            Le_spectrum = rgb_illuminant_spectrum(table,
-                RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
-            al_scale /= spectrum_to_photometric(Le_spectrum)
-            emissive = Emissive(TexHandle(Le), al_scale, two_sided)
+            emissive = Emissive(srec.area_light)
             push!(scene, mesh, MediumInterface(mat;
                 emission=emissive, inside=inside_medium, outside=outside_medium))
         elseif inside_medium !== nothing || outside_medium !== nothing
@@ -306,14 +298,27 @@ function pbrt_get_rgb(entity::PBRTEntity, name::String, default::NTuple{3, Float
     return (Float64(p.values[1]), Float64(p.values[2]), Float64(p.values[3]))
 end
 
-# Convert a blackbody temperature (Kelvin) to a linear sRGB triplet via
-# CIE xy chromaticity (Y normalized to 1). pbrt-v4 keeps the *absolute*
-# magnitude (no max-channel rescaling), so e.g. a 5500 K blackbody comes
-# out as (~1.10, ~0.98, ~0.83) — not (1, .89, .75). The earlier `/ m`
-# normalization silently darkened every blackbody area-light scene by
-# ~max(r,g,b) (≈10% for 5500 K, larger for warmer temps), which was the
-# root cause of the shadow_smoothgold_dome energy_ratio≈0.88 mismatch.
-function _blackbody_to_rgb(T::Float32)
+# Convert a blackbody temperature (Kelvin) to a linear sRGB triplet: take the
+# chromaticity from the Planckian locus and normalize LUMINANCE to 1.
+#
+# DO NOT "fix" this to match pbrt-v4's `BlackbodySpectrum` normalization. That
+# was tried and measured. pbrt scales its Planck spectrum so its PEAK value is 1
+# (`1/Blackbody(λ_max, T)`, Wien), whose luminance is NOT 1 — 0.9796 at 5500 K,
+# 0.2763 at 2700 K — so reproducing it here looks obviously more faithful. It is
+# not, because pbrt is SPECTRAL: it never forms an emitter RGB at all, it carries
+# wavelengths through `PixelSensor`, which applies its own imaging ratio and
+# white balance. The RGB this function returns feeds Hikari's sensor pipeline,
+# which expects a luminance-normalized emitter.
+#
+# A/B on the two blackbody suite scenes (5500 K, `scale 10`, same harness, both
+# against the same pbrt reference):
+#
+#     formula                       smoothgold          bumpgold
+#     Y normalized to 1 (this)      energy 1.0004       energy 0.9990
+#     pbrt peak normalization       energy 0.9808       energy 0.9793  <- 2% dark
+#
+# Pinned by test_blackbody_emitter_scale.jl.
+function blackbody_to_rgb(T::Float32)
     x, y = planckian_xy(T)
     X = x / y; Y = 1f0; Z = (1f0 - x - y) / y
     r =  3.2406f0 * X - 1.5372f0 * Y - 0.4986f0 * Z
@@ -324,13 +329,41 @@ function _blackbody_to_rgb(T::Float32)
     return (Float64(max(r, 0f0)), Float64(max(g, 0f0)), Float64(max(b, 0f0)))
 end
 
+"""
+    Emissive(area_light::PBRTEntity)
+
+Build the emissive material for a pbrt `AreaLightSource "diffuse"` record.
+
+Applies pbrt-v4's photometric normalization from `lights.cpp`
+`DiffuseAreaLight::Create`, which scales so radiance is equivalent to 1 nit:
+
+    scale /= SpectrumToPhotometric(L)
+
+Note this divides by the value for the ACTUAL emitter spectrum, not a fixed D65
+constant. For an `RGBIlluminantSpectrum` the two coincide — pbrt and Hikari both
+special-case it back to the colour space's illuminant — but that is a property of
+that spectrum type, not a licence to hardcode D65.
+
+Both importers (Hikari's `pbrt_build_scene` and RayMakie's `pbrt_to_makie`) go
+through here so they cannot drift apart.
+"""
+function Emissive(area_light::PBRTEntity)
+    Le = pbrt_get_emissive_le(area_light, (1.0, 1.0, 1.0))
+    scale = Float32(pbrt_get_float(area_light, "scale", 1.0))
+    two_sided = pbrt_get_bool(area_light, "twosided", false)
+    Le_spectrum = rgb_illuminant_spectrum(get_srgb_table(),
+        RGB{Float32}(Float32(Le[1]), Float32(Le[2]), Float32(Le[3])))
+    scale /= spectrum_to_photometric(Le_spectrum)
+    return Emissive(TexHandle(Le), scale, two_sided)
+end
+
 # Like pbrt_get_rgb but also handles "blackbody" type params (single temperature value).
 # Used for emissive Le values which can be RGB or blackbody spectra.
 function pbrt_get_emissive_le(entity::PBRTEntity, default::NTuple{3, Float64})
     haskey(entity.params, "L") || return default
     p = entity.params["L"]
     if p.type == :blackbody && !isempty(p.values)
-        return _blackbody_to_rgb(Float32(p.values[1]))
+        return blackbody_to_rgb(Float32(p.values[1]))
     elseif length(p.values) >= 3
         return (Float64(p.values[1]), Float64(p.values[2]), Float64(p.values[3]))
     end

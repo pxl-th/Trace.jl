@@ -276,13 +276,19 @@ const FILTERS = Dict(
 )
 
 # Sensor configurations
+# name => extra Film parameters. Hikari ships 17 calibrated sensors but only
+# nikon_d850 was ever compared against pbrt, so a per-sensor calibration error
+# could sit in any of the other 16 unnoticed — crown.pbrt uses
+# canon_eos_5d_mkiv at iso 150, a combination nothing exercised.
 const SENSORS = Dict(
-    "default"      => "",  # default cie1931, iso=100
-    "iso200"       => "iso200",   # just a tag — encoded in Film line
-    "iso50"        => "iso50",
-    "wb4000"       => "wb4000",   # warm white balance
-    "wb8000"       => "wb8000",   # cool white balance
-    "nikon_d850"   => "nikon_d850",  # Nikon D850 spectral sensor
+    "iso200"            => """ "float iso" 200""",
+    "iso50"             => """ "float iso" 50""",
+    "wb4000"            => """ "float whitebalance" 4000""",   # warm white balance
+    "wb8000"            => """ "float whitebalance" 8000""",   # cool white balance
+    "nikon_d850"        => """ "string sensor" "nikon_d850\"""",
+    "canon_eos_5d_mkiv" => """ "string sensor" "canon_eos_5d_mkiv\"""",
+    # crown.pbrt's exact film: this sensor AND a non-default iso together.
+    "canon_crown"       => """ "string sensor" "canon_eos_5d_mkiv" "float iso" 150""",
 )
 
 # ============================================================================
@@ -415,23 +421,9 @@ function generate_sensor_scenes()
     count = 0
     mat = MATERIALS["conductor_gold"]
     light = LIGHTS["point"]
-    for (sname, _) in SENSORS
-        sname == "default" && continue
-        film = if sname == "iso200"
-            """$FILM_BASE "float iso" 200"""
-        elseif sname == "iso50"
-            """$FILM_BASE "float iso" 50"""
-        elseif sname == "wb4000"
-            """$FILM_BASE "float whitebalance" 4000"""
-        elseif sname == "wb8000"
-            """$FILM_BASE "float whitebalance" 8000"""
-        elseif sname == "nikon_d850"
-            FILM_BASE * " \"string sensor\" \"nikon_d850\""
-        else
-            FILM_BASE
-        end
+    for (sname, film_params) in SENSORS
         write_scene(joinpath(SCENES_DIR, "sensor_$(sname).pbrt");
-                    light=light, sphere_mat=mat, film=film)
+                    light=light, sphere_mat=mat, film=FILM_BASE * film_params)
         count += 1
     end
     println("  Generated $count sensor scenes")
@@ -520,6 +512,153 @@ function generate_medium_scenes()
     return count
 end
 
+"""
+Thin-lens depth of field.
+
+pbrt's camera default is a pinhole (`lensradius` 0), so a renderer that parses
+the scene but never applies `lensradius`/`focaldistance` still gets the ENERGY
+right — it just renders everything sharp. That failure is invisible to an
+energy-ratio gate and only shows up in the spatial tile score, which is why it
+needs its own scene rather than a knob on an existing one.
+
+Three quads stacked along Z; the camera focuses on the far one, so the near and
+middle quads must come out visibly blurred.
+"""
+function generate_camera_scenes()
+    # Camera sits at (0,-5,0) looking along +y (suite convention), so the quads
+    # must lie in the XZ plane with normal -y to FACE it. Putting them in XY with
+    # normal +z renders them edge-on: the image comes out black and the scene
+    # then "passes" against an equally black reference while testing nothing.
+    #
+    # Depths from the camera are 3 / 5 / 7; each quad is offset in x so all three
+    # stay visible instead of hiding behind each other. A checkerboard gives the
+    # high-frequency detail that makes defocus blur measurable — a flat colour
+    # blurs into itself and barely moves the tile score.
+    function quad(io, xoff, yoff, tex)
+        println(io, """
+AttributeBegin
+Material "diffuse" "texture reflectance" "$tex"
+Translate $xoff $yoff 0
+Shape "trianglemesh"
+  "point3 P" [ -0.45 0 -0.45  0.45 0 -0.45  0.45 0 0.45  -0.45 0 0.45 ]
+  "normal N" [ 0 -1 0  0 -1 0  0 -1 0  0 -1 0 ]
+  "point2 uv" [ 0 0  1 0  1 1  0 1 ]
+  "integer indices" [ 0 1 2  0 2 3 ]
+AttributeEnd""")
+    end
+
+    n = 0
+    for (name, lensradius, focaldistance) in (("cam_dof_near", 0.3, 3.0),
+                                              ("cam_dof_far",  0.3, 7.0),
+                                              ("cam_pinhole",  0.0, 5.0))
+        path = joinpath(SCENES_DIR, "$(name)_light_point.pbrt")
+        open(path, "w") do io
+            println(io, "# Auto-generated reference test scene — thin-lens depth of field.")
+            println(io, "LookAt 0 -5 0   0 0 0   0 0 1")
+            println(io, """Camera "perspective" "float fov" 50""")
+            println(io, """    "float lensradius" $lensradius""")
+            println(io, """    "float focaldistance" $focaldistance""")
+            println(io, FILM_BASE)
+            println(io, INTEGRATOR)
+            println(io)
+            println(io, "WorldBegin")
+            # Uniform illumination: a point light would land behind these quads.
+            println(io, """LightSource "infinite" "rgb L" [1 1 1]""")
+            println(io)
+            for (i, (c1, c2)) in enumerate((("0.9 0.15 0.1", "0.05 0.05 0.05"),
+                                            ("0.1 0.9 0.15", "0.05 0.05 0.05"),
+                                            ("0.15 0.2 0.9", "0.05 0.05 0.05")))
+                println(io, """Texture "checks$i" "spectrum" "checkerboard" "float uscale" 6 "float vscale" 6 "rgb tex1" [$c1] "rgb tex2" [$c2]""")
+            end
+            println(io)
+            quad(io, -0.8, -2.0, "checks1")   # distance 3
+            quad(io,  0.0,  0.0, "checks2")   # distance 5
+            quad(io,  0.8,  2.0, "checks3")   # distance 7
+        end
+        n += 1
+    end
+    return n
+end
+
+"""
+Integrator defaults that pbrt-v4 and Hikari DISAGREE on.
+
+Every other scene in this suite is written with `INTEGRATOR`, which pins
+`"bool regularize" true` and a `maxcomponentvalue` of 10 — and those happen to
+be Hikari's own defaults, so the whole suite is blind to the disagreement:
+
+    regularize         pbrt false (cpu/integrators.cpp:817)   Hikari true
+    maxcomponentvalue  pbrt Infinity (film.cpp:576)           Hikari 10f0
+
+Both roughen or clamp specular highlights. A scene that simply omits the knobs
+— which is what real scenes do — therefore renders with energy pushed out of
+its highlights unless the loader threads the parsed values through. Measured on
+crown.pbrt that was a 1.6 % global energy deficit sitting entirely in the bright
+quintiles.
+
+These use a smooth conductor, where regularization and clamping actually bite.
+"""
+function generate_integrator_scenes()
+    n = 0
+    for (name, integ, film) in (
+            # pbrt defaults on both knobs: no regularization, no clamp.
+            ("integ_default_smooth_conductor",
+             """Integrator "volpath" "integer maxdepth" 8""",
+             """Film "rgb" "integer xresolution" $RES "integer yresolution" $RES"""),
+            # Regularization explicitly ON, clamp still off — isolates one knob.
+            ("integ_regularize_smooth_conductor",
+             """Integrator "volpath" "integer maxdepth" 8 "bool regularize" true""",
+             """Film "rgb" "integer xresolution" $RES "integer yresolution" $RES"""),
+            # Clamp explicitly on, regularization off — isolates the other.
+            ("integ_clamp_smooth_conductor",
+             """Integrator "volpath" "integer maxdepth" 8""",
+             """Film "rgb" "integer xresolution" $RES "integer yresolution" $RES "float maxcomponentvalue" 2"""))
+        path = joinpath(SCENES_DIR, "$(name)_light_area.pbrt")
+        write_scene(path; film=film, integrator=integ, light=LIGHTS["area"],
+                    sphere_mat=MATERIALS["conductor_mirror"])
+        n += 1
+    end
+    return n
+end
+
+"""
+Scenes that differ ONLY in how many area lights they contain.
+
+Every other scene in this suite has exactly one light, so light SELECTION — the
+sampling PMF over lights and the MIS weights that ride on it — is never
+exercised. A per-light bias is invisible with one light and grows with the
+count. crown.pbrt has six area lights and reads ~2 % brighter than pbrt, which
+is the shape such a bias would take.
+
+Per-light emission is held FIXED and each scene is compared against its own pbrt
+reference, so the diagnostic is whether the energy ratio DRIFTS as lights are
+added, not the absolute brightness.
+
+Blackbody + `scale`, matching how crown's lights are written.
+"""
+function generate_multilight_scenes()
+    placements = ((0.8, -0.4, 1.5), (-0.9, -0.3, 1.4), (0.6, 0.9, 1.6), (-0.7, 0.8, 1.3),
+                  (0.0, -1.1, 1.2), (0.1, 1.2, 1.7))
+    emitter((x, y, z)) = """
+AttributeBegin
+AreaLightSource "diffuse" "float scale" [10] "blackbody L" [5500] "bool twosided" true
+Material "diffuse" "rgb reflectance" [1 1 1]
+Translate $x $y $z
+Shape "trianglemesh"
+  "point3 P" [ -0.25 -0.25 0  0.25 -0.25 0  0.25 0.25 0  -0.25 0.25 0 ]
+  "integer indices" [ 0 1 2  0 2 3 ]
+AttributeEnd"""
+
+    n = 0
+    for count in (1, 2, 4, 6)
+        write_scene(joinpath(SCENES_DIR, "multilight_$(lpad(count, 2, '0'))_conductor.pbrt");
+                    light=join((emitter(p) for p in placements[1:count]), "\n"),
+                    sphere_mat=MATERIALS["conductor_gold"])
+        n += 1
+    end
+    return n
+end
+
 function generate_all_scenes()
     println("Generating scenes in $SCENES_DIR...")
 
@@ -535,6 +674,9 @@ function generate_all_scenes()
     total += generate_filter_scenes()
     total += generate_sensor_scenes()
     total += generate_medium_scenes()
+    total += generate_camera_scenes()
+    total += generate_integrator_scenes()
+    total += generate_multilight_scenes()
 
     println("Total: $total scene files")
 end
