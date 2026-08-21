@@ -659,6 +659,68 @@ AttributeEnd"""
     return n
 end
 
+"""
+crown.pbrt's `mitra_right_back` material, reproduced on the suite sphere.
+
+`tex_conductor_bumpmap_*` already covers an image bump, but with a 16-bit GRAY
+map, a CONSTANT roughness, and the texture wired straight to the material. Every
+one of those differs from what crown actually does, and crown's displaced dome
+panels are where its render diverges from pbrt:
+
+    crown                                  existing suite scene
+    8-bit RGBA bump (alpha all ones)       16-bit gray
+    bump behind a `scale` INDIRECTION      texture wired directly
+    textured roughness on the SAME material constant roughness
+
+Each of those touches a different path. The RGBA case matters because pbrt's
+`MIPMap::CreateFromFile` drops alpha only when it is all ones, and
+`Bilerp<Float>` returns the ALPHA channel for a 4-channel image while
+`Texel<Float>` returns channel 0 — no suite texture was 4-channel. The `scale`
+indirection matters because the bump height is finite-differenced, so any
+per-evaluation cost or precision loss in the wrapper shows up as a tilted
+normal. And a textured roughness makes the microfacet lobe vary across the same
+surface the bump is perturbing.
+"""
+function generate_crownlike_bump_scenes()
+    textures = """
+Texture "bump-raw" "float" "imagemap"
+    "string filename" "textures/test_bump_rgba.png"
+Texture "bump-sc" "float" "scale"
+    "float scale" 0.25
+    "texture tex" "bump-raw"
+Texture "rough-raw" "float" "imagemap"
+    "string filename" "textures/test_midgrey_stripes.png"
+Texture "rough-sc" "float" "scale"
+    "float scale" 0.1
+    "texture tex" "rough-raw\""""
+
+    # Gold conductor with BOTH textures, exactly as crown declares it.
+    mat = """Material "conductor"
+    "spectrum eta" "metal-Au-eta"
+    "spectrum k" "metal-Au-k"
+    "texture roughness" "rough-sc"
+    "texture displacement" "bump-sc\""""
+
+    # Control: same bump, but wired straight to the material with a constant
+    # roughness. If the scaled/textured variant misses and this one does not,
+    # the indirection is implicated rather than the bump image itself.
+    mat_direct = """Material "conductor"
+    "spectrum eta" "metal-Au-eta"
+    "spectrum k" "metal-Au-k"
+    "float roughness" 0.05
+    "texture displacement" "bump-raw\""""
+
+    n = 0
+    for (suffix, light) in (("light_point", LIGHTS["point"]), ("light_area", LIGHTS["area"]))
+        write_scene(joinpath(SCENES_DIR, "xfail_bumpmip_scaled_$(suffix).pbrt");
+                    light = light, textures = textures, sphere_mat = mat)
+        write_scene(joinpath(SCENES_DIR, "xfail_bumpmip_direct_$(suffix).pbrt");
+                    light = light, textures = textures, sphere_mat = mat_direct)
+        n += 2
+    end
+    return n
+end
+
 function generate_all_scenes()
     println("Generating scenes in $SCENES_DIR...")
 
@@ -677,6 +739,7 @@ function generate_all_scenes()
     total += generate_camera_scenes()
     total += generate_integrator_scenes()
     total += generate_multilight_scenes()
+    total += generate_crownlike_bump_scenes()
 
     println("Total: $total scene files")
 end
