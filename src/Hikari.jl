@@ -170,4 +170,48 @@ include("pbrt/scene_builder.jl")
 
 # include("model_loader.jl")
 
+# ── Precompile workload ─────────────────────────────────────────────────────
+#
+# Hikari had no workload at all, so the first scene built in a session paid to
+# JIT the parser and the whole scene builder. Measured on a 128x128 pbrt scene:
+# 12.8 s for the first `load_pbrt`, 0.04 s for the second, i.e. essentially all
+# of it was first-call latency rather than work.
+#
+# DEVICE-FREE: `build_hikari_scene` defaults to a CPU backend, so this
+# never touches the Vulkan driver — precompilation must not, and a device crash
+# here has poisoned pkgimages before (see Lava's `__init__`).
+#
+# A CPU-backend build cannot specialise the Lava-array half of the builder, so
+# this does not eliminate the cost, it removes the backend-independent part:
+# parsing, material and texture construction, the spectral tables and the BVH.
+# Measured: parse 0.8 s + CPU build 5.3 s up front cuts the subsequent Lava-backed
+# build from 12.8 s to 9.3 s.
+#
+# `Lava.@setup_workload`/`@compile_workload` are PrecompileTools' macros
+# re-exported by Lava (the latter also wrapping Lava's frozen-kernel recording,
+# a no-op here since a CPU build compiles no SPIR-V), which is why Hikari needs
+# no direct PrecompileTools dependency.
+const _PRECOMPILE_SCENE = """
+Film "rgb" "integer xresolution" 16 "integer yresolution" 16
+LookAt 0 -1.2 0.6   0 0 0.5   0 0 1
+Camera "perspective" "float fov" 40
+Integrator "volpath" "integer maxdepth" 3
+WorldBegin
+LightSource "point" "rgb I" [40 40 40] "point3 from" [2 -1.5 3]
+Material "diffuse" "rgb reflectance" [0.5 0.5 0.5]
+Shape "trianglemesh"
+  "point3 P" [ -1 0 -1  1 0 -1  1 0 1  -1 0 1 ]
+  "normal N" [ 0 -1 0  0 -1 0  0 -1 0  0 -1 0 ]
+  "point2 uv" [ 0 0  1 0  1 1  0 1 ]
+  "integer indices" [ 0 1 2  0 2 3 ]
+"""
+
+Lava.@setup_workload begin
+    Lava.@compile_workload "hikari_scene_1" begin
+        pbrt = parse_pbrt_string(_PRECOMPILE_SCENE)
+        build_hikari_scene(pbrt; backend = KernelAbstractions.CPU(), samples = 1,
+                           max_depth = nothing, hw_accel = false)
+    end
+end
+
 end
