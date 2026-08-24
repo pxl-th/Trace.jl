@@ -206,11 +206,26 @@ Shape "trianglemesh"
   "integer indices" [ 0 1 2  0 2 3 ]
 """
 
+include("precompile_statements.jl")
+
 Lava.@setup_workload begin
     Lava.@compile_workload "hikari_scene_1" begin
         pbrt = parse_pbrt_string(_PRECOMPILE_SCENE)
+        # A CPU build specialises the scene builder on Array-backed types that a
+        # Lava-only user never calls, so it is fair to ask whether it is dead
+        # weight. Measured with the precompile statements below already in place:
+        # dropping it costs 0.96 s (load_pbrt 3.24 -> 4.08 s, render 3.70 ->
+        # 3.82 s) and saves 12.4 MB of package image. It stays, because the
+        # backend-independent half it covers -- the parser, materials, textures,
+        # spectral tables -- is on every path, and because the CPU backend is a
+        # real target: it is the reference the pbrt comparisons render against.
         build_hikari_scene(pbrt; backend = KernelAbstractions.CPU(), samples = 1,
                            max_depth = nothing, hw_accel = false)
+        # The CPU build cannot reach anything parameterised on `LavaBackend`,
+        # which is where the rest of the time was: ~29 s of Julia inference per
+        # session, 22 s of it in ten signatures. `precompile` infers those
+        # without running them, so this stays device-free.
+        _precompile_statements()
     end
 end
 

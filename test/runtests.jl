@@ -27,6 +27,7 @@ include("test_multitypeset_updates.jl")
 include("test_material_type_collapse.jl")
 include("test_bxdf_dispatch.jl")
 include("test_mantle_device.jl")
+include("test_precompile_statements.jl")
 include("test_volpath_graph.jl")
 include("test_volpath_per_iter_lifecycle.jl")
 
