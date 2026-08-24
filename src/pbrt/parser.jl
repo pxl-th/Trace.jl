@@ -63,6 +63,21 @@ struct PBRTScene
     film::Union{PBRTEntity, Nothing}
     camera::Union{PBRTEntity, Nothing}
     camera_transform::Mat4f
+    # Distance from eye to target of the `LookAt` in force when `Camera` was
+    # issued, or 0 if the camera transform was not built by a `LookAt`.
+    #
+    # The transform alone cannot carry this: `look_at` normalizes the
+    # direction, so every target along the view ray yields the same matrix (to
+    # Float32 rounding, ~2e-6) and no rendering test can see the difference.
+    # Interactive viewers can — Makie's `Camera3D` scales both
+    # pan (`2*norm(lookat-eye)/height*delta`) and zoom
+    # (`eyeposition = lookat - zoom_step*viewdir`) by exactly this distance,
+    # while rotation is angular and ignores it. RayMakie reconstructed the
+    # target as `eye + normalize(forward)`, pinning it to 1 unit, so on Crown
+    # (true distance 34.4, geometry ~90x43x100) a full pan drag moved the
+    # camera 0.14 units and a scroll click 0.10 — indistinguishable from a
+    # dead input, while rotation looked perfectly normal.
+    camera_lookat_distance::Float32
     sampler::Union{PBRTEntity, Nothing}
     integrator::Union{PBRTEntity, Nothing}
     pixel_filter::Union{PBRTEntity, Nothing}
@@ -185,6 +200,7 @@ function parse_pbrt_string(text::AbstractString;
     film = nothing
     camera = nothing
     camera_transform = Mat4f(I)
+    camera_lookat_distance = 0.0f0
     sampler = nothing
     integrator = nothing
     pixel_filter = nothing
@@ -199,6 +215,12 @@ function parse_pbrt_string(text::AbstractString;
 
     # Current transform matrix
     ctm = Mat4f(I)
+    # Eye-to-target distance of the `LookAt` that produced `ctm`, or 0 if `ctm`
+    # did not come from one. Concatenating a further `Translate`/`Rotate` keeps
+    # it valid (they are rigid); `Scale` does not, but pbrt scenes place the
+    # scale before the `LookAt` (Crown's leading `Scale -1 1 1`), so the
+    # `LookAt` is what sets it last.
+    ctm_lookat_distance = 0.0f0
     in_world = false
     attr_stack = PBRTAttrState[]
     attr = PBRTAttrState()
@@ -221,6 +243,7 @@ function parse_pbrt_string(text::AbstractString;
             params = parse_params!(ts)
             camera = PBRTEntity("Camera", type_str, params)
             camera_transform = ctm
+            camera_lookat_distance = ctm_lookat_distance
 
         elseif word == "Sampler"
             type_str = expect!(ts, TOK_STRING).value
@@ -246,6 +269,7 @@ function parse_pbrt_string(text::AbstractString;
             # the X-flip and rendered Crown horizontally mirrored vs the
             # pbrt-v4 reference EXR.
             ctm = ctm * pbrt_lookat(eye, target, up)
+            ctm_lookat_distance = Float32(norm(target - eye))
 
         elseif word == "Translate"
             x = Float32(parse(Float64, expect!(ts, TOK_NUMBER).value))
@@ -275,6 +299,7 @@ function parse_pbrt_string(text::AbstractString;
                         vals[2], vals[6], vals[10], vals[14],
                         vals[3], vals[7], vals[11], vals[15],
                         vals[4], vals[8], vals[12], vals[16])
+            ctm_lookat_distance = 0.0f0   # CTM replaced wholesale
 
         elseif word == "ConcatTransform"
             expect!(ts, TOK_LBRACKET)
@@ -288,18 +313,22 @@ function parse_pbrt_string(text::AbstractString;
 
         elseif word == "Identity"
             ctm = Mat4f(I)
+            ctm_lookat_distance = 0.0f0
 
         elseif word == "CoordSysTransform"
             name = expect!(ts, TOK_STRING).value
             if name == "camera"
                 ctm = camera_transform
+                ctm_lookat_distance = camera_lookat_distance
             end
 
         # ---- World block ----
 
         elseif word == "WorldBegin"
             camera_transform = ctm
+            camera_lookat_distance = ctm_lookat_distance
             ctm = Mat4f(I)
+            ctm_lookat_distance = 0.0f0
             attr = PBRTAttrState()
             in_world = true
 
@@ -432,7 +461,8 @@ function parse_pbrt_string(text::AbstractString;
     end
 
     return PBRTScene(
-        film, camera, camera_transform, sampler, integrator, pixel_filter,
+        film, camera, camera_transform, camera_lookat_distance,
+        sampler, integrator, pixel_filter,
         named_materials, named_media, named_textures,
         media_transforms,
         shapes, lights, base_dir,
