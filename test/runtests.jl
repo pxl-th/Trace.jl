@@ -7,30 +7,50 @@ using Raycore
 using JET
 using Lava
 
-include("materials.jl")
-include("type_stability.jl")
-include("film.jl")
-include("gpu_compat.jl")
-include("volpath_integration.jl")
-include("denoise.jl")
-include("test_caching_gc_correctness.jl")
-include("test_texture_wrap.jl")
-include("test_blackbody_emitter_scale.jl")
-include("test_ray_differentials.jl")
-include("test_checkerboard_texture.jl")
-include("test_const_texture_value.jl")
-include("test_workqueue.jl")
-include("test_hw_sw_parity.jl")
-include("test_update_material_null.jl")
-include("test_null_material_only_scene.jl")
-include("test_multitypeset_updates.jl")
-include("test_material_type_collapse.jl")
-include("test_bxdf_dispatch.jl")
-include("test_mantle_device.jl")
-include("test_precompile_statements.jl")
-include("test_pbrt_camera_lookat_distance.jl")
-include("test_volpath_graph.jl")
-include("test_volpath_per_iter_lifecycle.jl")
+# One outer testset around every file.
+#
+# These were bare top-level `include`s, and each file opens its own top-level
+# `@testset`. A top-level testset THROWS when it finishes with a failure, so the
+# first bad file aborted the run and every later include was silently skipped —
+# nothing in the output says "17 files did not run", it just looks like one
+# failing testset. That is how `denoise.jl` calling an unbound `KA` (from
+# 6ea9555, 2026-08-19) hid files 15 through 23 of this suite until 2026-08-24.
+#
+# Nested, they report instead of throwing, so one failure costs one file.
+const TEST_FILES = [
+    "materials.jl",
+    "type_stability.jl",
+    "film.jl",
+    "gpu_compat.jl",
+    "volpath_integration.jl",
+    "denoise.jl",
+    "test_caching_gc_correctness.jl",
+    "test_texture_wrap.jl",
+    "test_blackbody_emitter_scale.jl",
+    "test_ray_differentials.jl",
+    "test_checkerboard_texture.jl",
+    "test_const_texture_value.jl",
+    "test_workqueue.jl",
+    "test_hw_sw_parity.jl",
+    "test_update_material_null.jl",
+    "test_null_material_only_scene.jl",
+    "test_multitypeset_updates.jl",
+    "test_material_type_collapse.jl",
+    "test_bxdf_dispatch.jl",
+    "test_mantle_device.jl",
+    "test_precompile_statements.jl",
+    "test_pbrt_camera_lookat_distance.jl",
+    "test_volpath_graph.jl",
+    "test_volpath_per_iter_lifecycle.jl",
+]
+
+@testset "Hikari" begin
+    for fname in TEST_FILES
+        @testset "$fname" begin
+            include(fname)
+        end
+    end
+end
 
 # ── pbrt reference suite ────────────────────────────────────────────────────
 # Runs the full pbrt-v4 reference image comparison against every scene in
