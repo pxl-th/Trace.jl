@@ -1172,14 +1172,23 @@ function tessellate_sphere(radius::Float32; segments::Int=64,
         push!(normals, Vec3f(x * inv_radius, y * inv_radius, z * inv_radius))
         u = full_phi ? phi_step_full * (j - 1) / phimax :
                        (j - 1) / (n_verts_per_ring - 1)
-        v = (theta - theta_min) / max(theta_max - theta_min, 1f-8)
+        # v runs from the LOW-z end to the high-z end, which is the opposite of
+        # what the local `theta_min`/`theta_max` names suggest. pbrt's
+        # `thetaZMin` is `acos(min(zMin, zMax) / radius)` (shapes.h:126) and
+        # `acos` is decreasing, so its `thetaZMin` is the LARGER theta — the
+        # bottom of the sphere — and `v = (theta - thetaZMin)/(thetaZMax -
+        # thetaZMin)` (shapes.h:245) is 0 there, rising to 1 at the top.
+        # Reading those names geometrically instead gave `v = 1 - pbrt_v` on
+        # every sphere in the scene set, mirroring every texture and bump map
+        # about the equator.
+        v = (theta_max - theta) / max(theta_max - theta_min, 1f-8)
         push!(uvs, Point2f(u, v))
     end
 
     if has_top
         push!(points,  Point3f(0f0, 0f0,  radius))
         push!(normals, Vec3f(0f0, 0f0,  1f0))
-        push!(uvs,     Point2f(0f0, 0f0))
+        push!(uvs,     Point2f(0f0, 1f0))   # +z pole is v=1 in pbrt's parameterization
     end
     top_idx    = has_top ? 1 : 0
     first_ring = has_top ? 2 : 1
@@ -1197,7 +1206,7 @@ function tessellate_sphere(radius::Float32; segments::Int=64,
     if has_bottom
         push!(points,  Point3f(0f0, 0f0, -radius))
         push!(normals, Vec3f(0f0, 0f0, -1f0))
-        push!(uvs,     Point2f(0f0, 1f0))
+        push!(uvs,     Point2f(0f0, 0f0))   # -z pole is v=0
     end
     bottom_idx = has_bottom ? length(points) : 0
 
