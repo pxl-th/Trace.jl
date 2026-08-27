@@ -1,3 +1,4 @@
+using JET
 # GPU Compatibility Tests for VolPath Kernel Inner Functions
 #
 # Tests kernel inner functions for GPU compatibility issues using a custom JET analyzer.

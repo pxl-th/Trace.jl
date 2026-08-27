@@ -4,8 +4,12 @@ using GeometryBasics
 using LinearAlgebra
 using StaticArrays
 using Raycore
-using JET
 using Lava
+# NOT `using JET` here. Only `type_stability.jl` and `gpu_compat.jl` need it, and
+# it is a test-target dependency, so an environment without it made this line
+# throw before the first testset and took all 24 files down with it. The two
+# files that use it import it themselves; if JET is missing they fail and the
+# rest of the suite still runs, which is the point of the wrapper below.
 
 # One outer testset around every file.
 #
@@ -40,17 +44,10 @@ const TEST_FILES = [
     "test_mantle_device.jl",
     "test_precompile_statements.jl",
     "test_pbrt_camera_lookat_distance.jl",
+    "test_sphere_uv.jl",
     "test_volpath_graph.jl",
     "test_volpath_per_iter_lifecycle.jl",
 ]
-
-@testset "Hikari" begin
-    for fname in TEST_FILES
-        @testset "$fname" begin
-            include(fname)
-        end
-    end
-end
 
 # ── pbrt reference suite ────────────────────────────────────────────────────
 # Runs the full pbrt-v4 reference image comparison against every scene in
@@ -66,10 +63,23 @@ include(joinpath(@__DIR__, "pbrt", "test_pbrt_all_materials.jl"))
 
 const PBRT_SPP = parse(Int, get(ENV, "HIKARI_PBRT_SPP", "256"))
 
-if get(ENV, "HIKARI_SKIP_PBRT_SW", "false") != "true"
-    run_pbrt_suite(; samples=PBRT_SPP, hw_accel=false)
-end
+# One testset over the unit files AND the reference suite. The reference suite
+# has to be inside it: a top-level `@testset` throws when it ends with a
+# failure, so anything after it in this file is skipped. With the suite outside,
+# two unrelated unit errors were enough to silently skip the entire pbrt gate —
+# the run went green-ish in 95 seconds and never rendered a scene.
+@testset "Hikari" begin
+    for fname in TEST_FILES
+        @testset "$fname" begin
+            include(fname)
+        end
+    end
 
-if get(ENV, "HIKARI_SKIP_PBRT_HW", "false") != "true" && hw_rt_available()
-    run_pbrt_suite(; samples=PBRT_SPP, hw_accel=true)
+    if get(ENV, "HIKARI_SKIP_PBRT_SW", "false") != "true"
+        run_pbrt_suite(; samples=PBRT_SPP, hw_accel=false)
+    end
+
+    if get(ENV, "HIKARI_SKIP_PBRT_HW", "false") != "true" && hw_rt_available()
+        run_pbrt_suite(; samples=PBRT_SPP, hw_accel=true)
+    end
 end
