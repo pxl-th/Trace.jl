@@ -21,15 +21,15 @@
 
 using Test
 using Hikari
-using Lava
+using Lava, Mantle
 using Raycore
 using Adapt
 using GeometryBasics
 using GeometryBasics: normal_mesh, Tesselation, Sphere, Point3f, Vec3f, Point2f
 using LinearAlgebra: I
 
-const _BACKEND_M = Lava.LavaBackend()
-const _CTX_M = Lava.vk_context()
+const _BACKEND_M = Mantle.LavaBackend()
+const _CTX_M = Mantle.vk_context()
 
 @testset "VolPath per-iter lifecycle — no cascade fault" begin
     # Tiny scene: minimum HW RT setup to exercise the fault trigger.
@@ -54,7 +54,7 @@ const _CTX_M = Lava.vk_context()
         # Hard assertion: device must NOT have gone lost on any iter.
         # If close(vp)'s GC.gc(false) mitigation is removed (or breaks),
         # this trips reliably starting iter 5-6.
-        @test !Lava.device_lost(_CTX_M)
+        @test !Mantle.device_lost(_CTX_M)
         # Pixels must be sane (non-degenerate output).
         @test any(p -> (p.r + p.g + p.b) > 1f-4, img)
     end

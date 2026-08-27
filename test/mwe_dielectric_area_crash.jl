@@ -14,7 +14,7 @@ import KernelAbstractions as KA
 import Adapt
 
 ENV["VK_ICD_FILENAMES"] = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
-backend = Lava.LavaBackend()
+backend = Mantle.LavaBackend()
 
 scene_file = joinpath(@__DIR__, "pbrt/scenes/mat_dielectric_light_area.pbrt")
 r = Hikari.load_pbrt(scene_file; backend=backend, samples=1, max_depth=2)

@@ -17,7 +17,8 @@ using Adapt
 using KernelAbstractions: @kernel, @index, @Const
 import KernelAbstractions as KA
 using GPUArraysCore: @allowscalar
-# Lava is a hard dependency: `hw-rt.jl` below imports it unconditionally.
+# Mantle is a hard dependency: `hw-rt.jl` below imports it unconditionally.
+# Lava is too, for the device-side RT intrinsics `rt-pipeline.jl` calls.
 # (An earlier comment here called it weak and pointed at an ext that does not
 # exist — the include at the bottom of this file has never been conditional.)
 import Mantle
@@ -187,8 +188,8 @@ include("pbrt/scene_builder.jl")
 # Measured: parse 0.8 s + CPU build 5.3 s up front cuts the subsequent Lava-backed
 # build from 12.8 s to 9.3 s.
 #
-# `Lava.@setup_workload`/`@compile_workload` are PrecompileTools' macros
-# re-exported by Lava (the latter also wrapping Lava's frozen-kernel recording,
+# `Mantle.@setup_workload`/`@compile_workload`: PrecompileTools' macros re-exported
+# by Mantle (the latter also wrapping the frozen-kernel recording,
 # a no-op here since a CPU build compiles no SPIR-V), which is why Hikari needs
 # no direct PrecompileTools dependency.
 const _PRECOMPILE_SCENE = """
@@ -208,8 +209,8 @@ Shape "trianglemesh"
 
 include("precompile_statements.jl")
 
-Lava.@setup_workload begin
-    Lava.@compile_workload "hikari_scene_1" begin
+Mantle.@setup_workload begin
+    Mantle.@compile_workload "hikari_scene_1" begin
         pbrt = parse_pbrt_string(_PRECOMPILE_SCENE)
         # A CPU build specialises the scene builder on Array-backed types that a
         # Lava-only user never calls, so it is fair to ask whether it is dead

@@ -6,9 +6,10 @@ ENV["VK_ICD_FILENAMES"] = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
 using Hikari, Lava, GeometryBasics, FileIO
 
 # Monkey-patch Lava to dump SPIR-V before creating pipeline
-const _original_validate = Lava._validate_spirv
+# `_validate_spirv` was renamed to `validate_spirv` and is the compiler's.
+const _original_validate = Lava.validate_spirv
 let dump_counter = Ref(0)
-    global function Lava._validate_spirv(spirv_bytes, label, source_map)
+    global function Lava.validate_spirv(spirv_bytes, label, source_map)
         dump_counter[] += 1
         path = "/tmp/spirv_dump_$(dump_counter[]).spv"
         write(path, spirv_bytes)
@@ -18,7 +19,7 @@ let dump_counter = Ref(0)
     end
 end
 
-backend = Lava.LavaBackend()
+backend = Mantle.LavaBackend()
 println("Backend ready")
 flush(stdout)
 

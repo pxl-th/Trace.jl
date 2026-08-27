@@ -225,7 +225,7 @@ end
 # ============================================================================
 @testset "PBRT Scene Rendering" begin
     backend = if isdefined(Main, :Lava) && isdefined(Lava, :LavaBackend)
-        Lava.LavaBackend()
+        Mantle.LavaBackend()
     else
         KernelAbstractions.CPU()
     end

@@ -16,7 +16,7 @@
 # render/compare code so they can't drift.
 
 using Hikari
-using Lava
+using Lava, Mantle
 using FileIO
 using Statistics
 using Colors
@@ -30,7 +30,7 @@ const PBRT_BIN   = get(ENV, "PBRT_BIN", "/sim/Programmieren/VulkanDev/pbrt-v4/bu
 """Is hardware ray tracing available on the currently-bound Lava device?"""
 function hw_rt_available()
     try
-        Lava.vk_context().rt_pipeline_properties !== nothing
+        Mantle.vk_context().rt_pipeline_properties !== nothing
     catch
         false
     end
@@ -122,7 +122,7 @@ framebuffer. All knobs are explicit — no defaults baked into globals. When
 the hardware RT path.
 """
 function render_scene(scene_name::AbstractString;
-                      backend=Lava.LavaBackend(),
+                      backend=Mantle.LavaBackend(),
                       samples::Int=256,
                       max_depth::Union{Nothing,Int}=nothing,
                       hw_accel::Bool=false,

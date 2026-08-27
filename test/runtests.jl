@@ -4,7 +4,10 @@ using GeometryBasics
 using LinearAlgebra
 using StaticArrays
 using Raycore
-using Lava
+# Both: Lava for the device-side ray-tracing intrinsics `rt-pipeline.jl` calls,
+# Mantle for everything with a device behind it — the backend, arrays, the graph.
+using Lava, Mantle
+using Mantle
 # NOT `using JET` here. Only `type_stability.jl` and `gpu_compat.jl` need it, and
 # it is a test-target dependency, so an environment without it made this line
 # throw before the first testset and took all 24 files down with it. The two
@@ -22,6 +25,9 @@ using Lava
 #
 # Nested, they report instead of throwing, so one failure costs one file.
 const TEST_FILES = [
+    # Source-only, no GPU: put it first so the architecture ledger is reported
+    # before anything that can take a device down with it.
+    "test_no_lava_references.jl",
     "materials.jl",
     "type_stability.jl",
     "film.jl",

@@ -19,7 +19,7 @@ using Hikari, Lava, GeometryBasics, FileIO
 import KernelAbstractions as KA
 
 ENV["VK_ICD_FILENAMES"] = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
-backend = Lava.LavaBackend()
+backend = Mantle.LavaBackend()
 
 # This works (diffuse doesn't use shading tangents for specular reflection)
 println("Rendering diffuse...")

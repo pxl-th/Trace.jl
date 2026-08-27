@@ -64,7 +64,7 @@ function null_only_render(backend; unused_material::Bool, samples = 8, max_depth
 end
 
 @testset "a scene whose only material is a null medium boundary" begin
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
 
     @testset "the material set really is empty" begin
         scene = Hikari.Scene(; backend)

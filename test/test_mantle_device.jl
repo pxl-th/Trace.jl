@@ -11,19 +11,19 @@ using KernelAbstractions: @kernel, @index
 # `Mantle.Device(Lava)` caches one per `VkContext`, and this pins that Hikari
 # goes through that cache rather than around it.
 @testset "mantle_device reuses Lava's device" begin
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
     d = Hikari.mantle_device(backend)
 
     @test d === Hikari.mantle_device(backend)          # cached, not rebuilt
-    @test d.ctx === Lava.vk_context()                  # the context Hikari renders on
-    @test d.bq === Lava.vk_context().default_bq        # and its queue, not a new one
+    @test d.ctx === Mantle.vk_context()                  # the context Hikari renders on
+    @test d.bq === Mantle.vk_context().default_bq        # and its queue, not a new one
 end
 
 @testset "a graph can read Hikari's own buffers" begin
     # The property the port depends on: Mantle cannot ADOPT a foreign buffer
     # into its arena, but a pass can read one. Without this, moving one kernel
     # into a graph would drag in every producer of its inputs.
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
     dev = Hikari.mantle_device(backend)
     n = 256
     src = KA.allocate(backend, Float32, n)             # allocated the Hikari way
@@ -59,7 +59,7 @@ end
 end
 
 @testset "a work queue is a dispatch argument, and its count is the ndrange" begin
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
     dev = Hikari.mantle_device(backend)
     cap, want = 4096, 777
     mem = Hikari.DeviceMemory(backend)
@@ -98,7 +98,7 @@ end
     # each over its own count. They share one fused prepare and one barrier, so
     # a count going astray between them would show up as the wrong number of
     # elements written for that queue alone.
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
     dev = Hikari.mantle_device(backend)
     cap, k = 2048, 4
     mem = Hikari.DeviceMemory(backend)
@@ -132,7 +132,7 @@ end
 @testset "an empty queue dispatches nothing" begin
     # The ordinary case in a bounce loop, not an edge: every stage past the
     # depth where the rays died drains a queue nobody filled.
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
     dev = Hikari.mantle_device(backend)
     cap = 256
     mem = Hikari.DeviceMemory(backend)
@@ -159,7 +159,7 @@ end
     # the sample index, the camera, the scene re-adapted every call. A plan
     # resolves its arguments once, so a value packed at compile time would be
     # the one it was built with for ever.
-    backend = Lava.LavaBackend()
+    backend = Mantle.LavaBackend()
     dev = Hikari.mantle_device(backend)
     n = 64
     src = KA.allocate(backend, Float32, n)

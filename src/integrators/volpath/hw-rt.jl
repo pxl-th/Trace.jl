@@ -4,14 +4,15 @@
 # Uses only Raycore types and stubs -- no backend (Lava/Metal) imports.
 # Backend extensions in Raycore implement the actual dispatch.
 
-# The bare module too, not just the two names: `mantle_device` below needs
-# `Lava.LavaBackend` and hands the module itself to `Mantle.Device`.
-import Lava
-import Lava: HWTLAS, HWAdaptedAccel
+# `Mantle`, not `Lava`. The Vulkan runtime — acceleration structures, the
+# backend, the device — moved into Mantle on 2026-08-27; Lava is the SPIR-V
+# compiler and has none of these names any more.
+import Mantle
+import Mantle: HWTLAS, HWAdaptedAccel
 
 # Any backend with hw_accel=true creates an HWTLAS.  Parametrised on
 # `Raycore.Triangle{TriangleMeta}` because Hikari's scene API pushes meshes
-# with `TriangleMeta` per-face data — `Lava.HWTLAS(backend)`'s default
+# with `TriangleMeta` per-face data — `Mantle.HWTLAS(backend)`'s default
 # narrowing to `Triangle{UInt32}` would reject those pushes with a convert
 # error.
 default_accel(backend, ::Val{true}) = HWTLAS{Raycore.Triangle{TriangleMeta}}(backend)
@@ -120,13 +121,13 @@ shades_surfaces_inline(::HWAdaptedAccel) = true
 The Mantle device for a KernelAbstractions backend, which is what a graph
 allocates transients and records passes against.
 
-`Mantle.Device(Lava)` is cached one per `VkContext` and wraps that context's
-existing `default_bq`, so this reuses Lava's device rather than creating a
+`Mantle.Device(VulkanAPI())` is cached one per `VkContext` and wraps that context's
+existing `default_bq`, so this reuses the runtime's device rather than creating a
 second one — a second would mean a second `Pool` over one `VkDevice`, which is
 two allocators over the same memory.
 """
-mantle_device(::Lava.LavaBackend) = Mantle.Device(Lava)
-mantle_device(::KA.CPU) = Mantle.Device(Mantle.Host())
+mantle_device(::Mantle.LavaBackend) = Mantle.Device(Mantle.VulkanAPI())
+mantle_device(::KA.CPU) = Mantle.Device(Mantle.HostAPI())
 
 # Smallest kernel that reads one buffer and writes another, so a test can pin
 # that a Mantle pass reaches Hikari's own allocations. Lives here rather than in

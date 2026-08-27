@@ -103,7 +103,7 @@ function Film(
     end
 
     # A host film's memory is pooled too, and costs nothing to forget:
-    # `Mantle.Device(Host())` builds a FRESH pool per call, so the whole thing
+    # `Mantle.Device(HostAPI())` builds a FRESH pool per call, so the whole thing
     # is reachable only from this film and the GC reclaims it if `free!` is
     # never reached. On a device the pool is shared and cached, which is what
     # `retire!` and `Mantle.reclaim!` are for.

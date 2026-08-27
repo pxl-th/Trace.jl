@@ -23,11 +23,11 @@
 using Test
 using Hikari
 using Raycore
-using Lava
+using Lava, Mantle
 using GeometryBasics
 using GPUArraysCore: @allowscalar
 
-const _BACKEND = Lava.LavaBackend()
+const _BACKEND = Mantle.LavaBackend()
 
 function _mini_scene_with_null_medium_cube()
     scene = Hikari.Scene(; backend=_BACKEND)

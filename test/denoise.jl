@@ -156,7 +156,7 @@ import KernelAbstractions as KA
         # placeholder was a zero-length device array freed under the running
         # dispatch. Neither is reachable from a `Matrix` film. So: the same
         # inputs through both backends, and they have to agree.
-        backend = Lava.LavaBackend()
+        backend = Mantle.LavaBackend()
         gpu_scene = make_noisy_scene(backend)
         gfilm, _ = render_noisy(gpu_scene; backend = backend)
         cpu_scene = make_noisy_scene()

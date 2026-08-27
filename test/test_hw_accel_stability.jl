@@ -1,6 +1,6 @@
 using Test
 using Hikari
-using Lava
+using Lava, Mantle
 using Raycore
 using Adapt
 using GeometryBasics
@@ -66,15 +66,20 @@ function _nondegenerate(img)
 end
 
 function _snapshot()
-    mem = Lava.gpu_memory_usage()
-    (live_bytes=mem.live_bytes, live_bufs=mem.LIVE_BUFFERS,
-     pool_blocks=length(Lava.POOL_BLOCKS))
+    mem = Mantle.gpu_memory_usage()
+    # `POOL_BLOCKS` and `mem.LIVE_BUFFERS` were module-level globals and are
+    # gone: the pool is per DEVICE now (two devices used to share one block
+    # list, which served allocations off the wrong GPU), and the counter moved
+    # onto the returned named tuple. This file had not been updated and could
+    # not run.
+    (live_bytes = mem.live_bytes, live_bufs = mem.live_buffers,
+     pool_blocks = length(Mantle.pool(Mantle.vk_context()).blocks))
 end
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-const BACKEND = Lava.LavaBackend()
-const CTX = Lava.vk_context()
+const BACKEND = Mantle.LavaBackend()
+const CTX = Mantle.vk_context()
 
 @testset "HW RT stability — many renders on single scene" begin
     scene, handles = _make_scene(BACKEND)
@@ -90,7 +95,7 @@ const CTX = Lava.vk_context()
         img = _render_once(scene, BACKEND; samples=4, depth=2)
         @test size(img) == (48, 48)
         @test _nondegenerate(img)
-        @test !Lava.device_lost(CTX)
+        @test !Mantle.device_lost(CTX)
         last_img = img
     end
     GC.gc(true); GC.gc(true)
@@ -133,7 +138,7 @@ end
 
         img = _render_once(scene, BACKEND; samples=4, depth=2)
         @test _nondegenerate(img)
-        @test !Lava.device_lost(CTX)
+        @test !Mantle.device_lost(CTX)
     end
     GC.gc(true); GC.gc(true)
     final = _snapshot()
@@ -149,7 +154,7 @@ end
         scene_k, _ = _make_scene(BACKEND; n_spheres=2 + k)
         img_k = _render_once(scene_k, BACKEND; samples=4, depth=2)
         @test _nondegenerate(img_k)
-        @test !Lava.device_lost(CTX)
+        @test !Mantle.device_lost(CTX)
         scene_k = nothing  # drop ref so the HWTLAS can be finalized
     end
     GC.gc(true); GC.gc(true)

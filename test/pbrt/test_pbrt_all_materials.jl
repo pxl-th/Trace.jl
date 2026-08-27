@@ -10,8 +10,7 @@
 
 using Test
 using Hikari
-using Lava
-
+using Lava, Mantle
 include(joinpath(@__DIR__, "suite.jl"))
 
 # ── Defaults ────────────────────────────────────────────────────────────────
@@ -70,14 +69,14 @@ end
 # ── Main entry point ────────────────────────────────────────────────────────
 
 """
-    run_pbrt_suite(; backend=Lava.LavaBackend(), samples=DEFAULT_SPP,
+    run_pbrt_suite(; backend=Mantle.LavaBackend(), samples=DEFAULT_SPP,
                      hw_accel=false, media_energy=(0.80, 1.20))
 
 Run the full pbrt reference comparison under `@testset`s. All parameters are
 explicit — callers (runtests.jl, standalone invocation) pick the backend and
 hw_accel flag. Skips scenes whose `.pbrt` is missing.
 """
-function run_pbrt_suite(; backend=Lava.LavaBackend(),
+function run_pbrt_suite(; backend=Mantle.LavaBackend(),
                           samples::Int=DEFAULT_SPP,
                           hw_accel::Bool=false)
     label = hw_accel ? "HW RT" : "SW BVH"

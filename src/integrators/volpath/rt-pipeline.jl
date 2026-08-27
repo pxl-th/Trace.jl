@@ -15,6 +15,12 @@
 # `RayTracingPipeline(... chit_miss_take_args=true)` switch.  Both stages
 # look up their work item via `work_queue.items[lava_rt_launch_id_x() + 1]`.
 
+# The DEVICE-side intrinsics are Lava's — they are what a shader body calls, and
+# the compiler is what lowers them. The PIPELINE that dispatches them is Mantle's,
+# because building one needs a device.
+#
+# That split is the 2026-08-27 move in one import block: everything a kernel says
+# comes from the compiler, everything that runs one comes from the runtime.
 import Lava
 import Lava: lava_rt_launch_id_x, lava_rt_trace_ray,
              lava_rt_hit_object_trace_ray, lava_rt_reorder_thread,
@@ -22,8 +28,9 @@ import Lava: lava_rt_launch_id_x, lava_rt_trace_ray,
              lava_rt_payload_store_f32_at, lava_rt_payload_load_f32_at,
              lava_rt_primitive_id, lava_rt_instance_id,
              lava_rt_instance_custom_index, lava_rt_ray_tmax,
-             lava_rt_hit_bary_u, lava_rt_hit_bary_v,
-             RayTracingPipeline, trace_rays_indirect!
+             lava_rt_hit_bary_u, lava_rt_hit_bary_v
+import Mantle
+import Mantle: RayTracingPipeline, trace_rays_indirect!
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Raygen: pull the ray work item, fire `traceRay`, let chit/miss do the work.
@@ -542,12 +549,12 @@ not depend on which pipeline does the tracing.
 The body reads the scene out of the `Ref`s at record time, so a camera move or a
 new sample index does not rebuild the plan.
 """
-function trace_pass!(g, ::Lava.HWAdaptedAccel, state::VolPathState, refs,
+function trace_pass!(g, ::Mantle.HWAdaptedAccel, state::VolPathState, refs,
                      cur::WorkQueue, nxt::WorkQueue)
     Mantle.custom!(g, "trace") do p
         trace_uses!(p, state, cur, nxt)
         function ()
-            bq = Lava.vk_context().default_bq
+            bq = Mantle.vk_context().default_bq
             accel = refs.accel[]
             materials = refs.materials[]
             hwtlas = accel.hwtlas

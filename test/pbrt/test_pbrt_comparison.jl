@@ -8,8 +8,7 @@
 
 using Test
 using Hikari
-using Lava
-
+using Lava, Mantle
 include(joinpath(@__DIR__, "suite.jl"))
 
 # Force lavapipe for deterministic software rendering. Callers that want the
@@ -38,7 +37,7 @@ end
 
 # ── Parametrized suite ──────────────────────────────────────────────────────
 
-function run_pbrt_comparison(; backend=Lava.LavaBackend(),
+function run_pbrt_comparison(; backend=Mantle.LavaBackend(),
                                samples::Int=256, hw_accel::Bool=false)
     label = hw_accel ? "HW RT" : "SW BVH"
     @testset "PBRT vs Hikari ($label, $samples spp)" begin

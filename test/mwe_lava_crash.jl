@@ -9,7 +9,7 @@ using Hikari, Lava, GeometryBasics, FileIO
 import KernelAbstractions as KA
 using KernelAbstractions: @kernel, @index, synchronize, allocate
 
-backend = Lava.LavaBackend()
+backend = Mantle.LavaBackend()
 
 # Minimal kernel that mimics the crashing pattern
 @kernel function crash_kernel!(output, @Const(input), @Const(cos_vals), @Const(R_vals))
