@@ -1,143 +1,123 @@
 #!/usr/bin/env julia
 #
-# Render all pbrt test scenes with Hikari, compare against pre-committed
-# pbrt-v4 reference EXRs, and generate the comparison gallery for docs.
+# Build the pbrt comparison gallery from a recorded test run.
 #
-# Outputs (all under test/pbrt/):
-#   recorded/<name>.exr      - Hikari-rendered EXRs
-#   display/ref_<name>.png   - tonemapped pbrt reference
-#   display/rec_<name>.png   - tonemapped Hikari output
-#   display/gallery.html     - standalone comparison gallery
-#   display/scores.csv       - name,tile,energy per scene
+# This script renders nothing and decides nothing. The test suite
+# (`test_pbrt_all_materials.jl`, driven by `test/runtests.jl`) is the single
+# thing that renders scenes, compares them against the pbrt-v4 references and
+# decides pass/fail; as it goes it records each render and each metric under
+# `recorded/`. This reads that record and presents it.
 #
-# Exit code 1 if any scene fails energy (5%) or tile (<0.07) thresholds.
+# It used to do all of it itself — its own render pass, its own thresholds, its
+# own pass/fail — and the two had come apart in three separate ways:
+#
+#   * Both its render step and its tonemap step opened with
+#     `isfile(...) && continue`, so `recorded/` and `display/` were write-once.
+#     The committed gallery was months older than the renderer and no amount of
+#     rendering work could ever reach it.
+#   * It applied a looser band below 128 spp (tile 0.10, energy ±10 %) and
+#     defaulted to 32 spp, so it ran the relaxed band essentially always.
+#   * It carried a SCENE_OVERRIDES table reaching tile=0.55 for scenes the suite
+#     checks at 0.07, kept alive by a comment noting the underlying bugs had
+#     since been fixed.
+#
+# Inputs (written by the suite):
+#   recorded/<name>.exr           - SW renders
+#   recorded/hw/<name>.exr        - HW RT renders
+#   recorded/scores_{sw,hw}.csv   - the metrics the suite asserted on
+#
+# Outputs (all under test/pbrt/display/):
+#   ref_<name>.png                - tonemapped pbrt-v4 reference
+#   rec_<name>.png / rec_hw_...   - tonemapped Hikari output
+#   gallery.html / gallery_hw.html
+#   scores_{sw,hw}.csv            - copied alongside, so display/ is self-contained
+#
+# Usage:  julia --project=test/pbrt test/pbrt/run_comparison.jl
+# Exit code is 0 whenever a record could be presented; the suite reports failures.
 
 using FileIO, Colors
-using Hikari, Lava
 
 include(joinpath(@__DIR__, "suite.jl"))
 
-const RECORDED_DIR = joinpath(@__DIR__, "recorded")
-const DISPLAY_DIR  = joinpath(@__DIR__, "display")
-# 256 spp produces the cleanest gallery thumbnails locally; on CI
-# (lavapipe, no HW accel) it eats the 120-minute job timeout across 142
-# scenes, so we default to a lower spp there. Override with
-# `HIKARI_PBRT_SPP=256` to get the full gallery on capable hardware.
-const SPP          = parse(Int, get(ENV, "HIKARI_PBRT_SPP", "32"))
-const HW_ACCEL     = get(ENV, "HIKARI_HW_ACCEL", "false") == "true"
+const REFS_DIR    = joinpath(@__DIR__, "references")
+const DISPLAY_DIR = joinpath(@__DIR__, "display")
 
-mkpath(RECORDED_DIR)
-mkpath(DISPLAY_DIR)
-
-# ============================================================================
-# Helpers
-# ============================================================================
-
-function tonemap_to_png(exr_path, png_path)
-    isfile(png_path) && return
-    img = FileIO.load(exr_path)
-    out = similar(img, RGB{Float64})
-    for i in eachindex(img)
-        p = img[i]
-        r = Float64(red(p)); g = Float64(green(p)); b = Float64(blue(p))
-        r = r / (1.0 + r); g = g / (1.0 + g); b = b / (1.0 + b)
-        gamma(x) = x <= 0.0031308 ? 12.92x : 1.055 * x^(1/2.4) - 0.055
-        out[i] = RGB(gamma(clamp(r,0,1)), gamma(clamp(g,0,1)), gamma(clamp(b,0,1)))
-    end
-    FileIO.save(png_path, out)
-end
-
-# ============================================================================
-# Step 1: Render missing Hikari scenes
-# ============================================================================
-
-function render_all_missing(scene_files; backend, samples, hw_accel,
-                            scenes_dir, refs_dir, out_dir)
-    n_rendered = 0
-    for (i, fname) in enumerate(scene_files)
-        name    = replace(fname, ".pbrt" => "")
-        rec_exr = joinpath(out_dir, "$(name).exr")
-        isfile(rec_exr) && continue
-        ref_exr = joinpath(refs_dir, "$(name).exr")
-        isfile(ref_exr) || continue
-        try
-            fb = render_scene(name; backend, samples, hw_accel)
-            FileIO.save(rec_exr, fb)
-            n_rendered += 1
-            println("  [$i/$(length(scene_files))] $name")
-        catch e
-            println("  [$i/$(length(scene_files))] SKIP $name: $(sprint(showerror, e; context=:limit=>120))")
-        end
-    end
-    return n_rendered
-end
-
-println("Step 1: Rendering Hikari scenes at $SPP spp (hw_accel=$HW_ACCEL)...")
-scene_files = sort(filter(f -> endswith(f, ".pbrt"), readdir(SCENES_DIR)))
-backend = Lava.LavaBackend()
-n_rendered = render_all_missing(scene_files;
-    backend=backend, samples=SPP, hw_accel=HW_ACCEL,
-    scenes_dir=SCENES_DIR, refs_dir=REFS_DIR, out_dir=RECORDED_DIR)
-n_rendered > 0 && println("  Rendered $n_rendered scenes")
-
-# ============================================================================
-# Step 2: Compute scores and generate display PNGs
-# ============================================================================
-
-println("Step 2: Computing scores and generating display PNGs...")
-
-struct SceneResult
+struct SceneRow
     name::String
+    samples::Int
     tile::Float64
     energy::Float64
 end
 
-results = SceneResult[]
-for fname in scene_files
-    name = replace(fname, ".pbrt" => "")
-    ref_exr = joinpath(REFS_DIR, "$(name).exr")
-    rec_exr = joinpath(RECORDED_DIR, "$(name).exr")
-    (isfile(ref_exr) && isfile(rec_exr)) || continue
+# ── Reading the record ──────────────────────────────────────────────────────
 
-    tonemap_to_png(ref_exr, joinpath(DISPLAY_DIR, "ref_$(name).png"))
-    tonemap_to_png(rec_exr, joinpath(DISPLAY_DIR, "rec_$(name).png"))
-
-    ref_img = FileIO.load(ref_exr)
-    rec_img = FileIO.load(rec_exr)
-    push!(results, SceneResult(name,
-        tile_score(ref_img, rec_img),
-        energy_ratio(ref_img, rec_img)))
-end
-
-sort!(results; by=s -> (-abs(s.energy - 1.0), -s.tile))
-
-n = length(results)
-n_energy_ok = Base.count(s -> 0.95 < s.energy < 1.05, results)
-n_tile_ok = Base.count(s -> s.tile < 0.07, results)
-println("  $n scenes | energy within 5%: $n_energy_ok/$n | tile<0.07: $n_tile_ok/$n")
-
-# Write scores CSV
-open(joinpath(DISPLAY_DIR, "scores.csv"), "w") do io
-    println(io, "name,tile,energy")
-    for s in results
-        println(io, "$(s.name),$(s.tile),$(s.energy)")
+function read_record(hw_accel::Bool)
+    path = record_scores(hw_accel)
+    isfile(path) || return SceneRow[]
+    rows = SceneRow[]
+    for (i, line) in enumerate(eachline(path))
+        i == 1 && continue                      # header
+        isempty(strip(line)) && continue
+        f = split(line, ',')
+        length(f) >= 4 || error("$(path):$(i): expected at least 4 fields, got $(length(f))")
+        push!(rows, SceneRow(f[1], parse(Int, f[2]), parse(Float64, f[3]), parse(Float64, f[4])))
     end
+    return rows
 end
 
-# ============================================================================
-# Step 3: Generate standalone gallery HTML
-# ============================================================================
+# ── Tonemapping ─────────────────────────────────────────────────────────────
 
-println("Step 3: Generating gallery...")
-json_entries = map(results) do s
-    """{"name":"$(s.name)","tile":$(round(s.tile, digits=4)),"energy":$(round(s.energy, digits=4)),"ref":"ref_$(s.name).png","rec":"rec_$(s.name).png"}"""
+"""sRGB-encode an EXR and write it as a PNG. Always rewrites: a stale PNG next
+to a fresh render is the exact failure this script was rebuilt to remove."""
+function tonemap_to_png(exr_path, png_path)
+    img = FileIO.load(exr_path)
+    out = similar(img, RGB{Float64})
+    gamma(x) = x <= 0.0031308 ? 12.92x : 1.055 * x^(1 / 2.4) - 0.055
+    for i in eachindex(img)
+        p = img[i]
+        out[i] = RGB{Float64}(gamma(clamp(Float64(red(p)),   0, 1)),
+                              gamma(clamp(Float64(green(p)), 0, 1)),
+                              gamma(clamp(Float64(blue(p)),  0, 1)))
+    end
+    FileIO.save(png_path, out)
+    return nothing
 end
-json_array = "[\n" * join(json_entries, ",\n") * "\n]"
 
-gallery_html = """<!DOCTYPE html>
+# ── Gallery ─────────────────────────────────────────────────────────────────
+
+function build_gallery(rows::Vector{SceneRow}, hw_accel::Bool)
+    label     = hw_accel ? "HW RT" : "SW BVH"
+    rec_pfx   = hw_accel ? "rec_hw_" : "rec_"
+    html_name = hw_accel ? "gallery_hw.html" : "gallery.html"
+    dir       = record_dir(hw_accel)
+
+    # Worst first: the scenes worth looking at are the ones nearest the limits.
+    sorted = sort(rows; by = s -> (-abs(s.energy - 1.0), -s.tile))
+
+    entries = String[]
+    for s in sorted
+        ref_exr = joinpath(REFS_DIR, "$(s.name).exr")
+        rec_exr = joinpath(dir, "$(s.name).exr")
+        if !(isfile(ref_exr) && isfile(rec_exr))
+            println("  skipping $(s.name): missing $(isfile(ref_exr) ? "render" : "reference")")
+            continue
+        end
+        tonemap_to_png(ref_exr, joinpath(DISPLAY_DIR, "ref_$(s.name).png"))
+        tonemap_to_png(rec_exr, joinpath(DISPLAY_DIR, "$(rec_pfx)$(s.name).png"))
+        push!(entries, """{"name":"$(s.name)","tile":$(round(s.tile, digits=4)),"energy":$(round(s.energy, digits=4)),"ref":"ref_$(s.name).png","rec":"$(rec_pfx)$(s.name).png"}""")
+    end
+    isempty(entries) && return 0
+
+    samples = isempty(sorted) ? 0 : first(sorted).samples
+    n_pass  = count(s -> within_tolerance(s.tile, s.energy), sorted)
+
+    # Thresholds are interpolated from `suite.jl` rather than written out again —
+    # the JS reading different numbers than the suite is how this drifted before.
+    html = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<title>Hikari vs pbrt-v4 — $(label)</title>
 <style>
   body { margin:0; background:#111; font-family:monospace; }
   #header { color:#aaa; text-align:center; padding:12px 0 8px; font-size:13px; }
@@ -154,22 +134,21 @@ gallery_html = """<!DOCTYPE html>
 <div id="header">Loading...</div>
 <div id="grid"></div>
 <script>
-var scenes = $(json_array);
-var nEok = 0, nTok = 0;
-for (var i = 0; i < scenes.length; i++) {
-  if (scenes[i].energy > 0.95 && scenes[i].energy < 1.05) nEok++;
-  if (scenes[i].tile < 0.07) nTok++;
-}
+var TILE_MAX = $(TILE_THRESHOLD), E_LOW = $(ENERGY_LOW), E_HIGH = $(ENERGY_HIGH);
+var scenes = [
+$(join(entries, ",\n"))
+];
 document.getElementById('header').textContent =
-  scenes.length + ' scenes | energy within 5%: ' + nEok + '/' + scenes.length +
-  ' | tile<0.07: ' + nTok + '/' + scenes.length + ' | click to toggle';
+  '$(label), $(samples) spp | ' + scenes.length + ' scenes | within tolerance (tile<' +
+  TILE_MAX + ', energy ' + E_LOW + '-' + E_HIGH + '): $(n_pass)/' + scenes.length +
+  ' | click an image to toggle Hikari/pbrt-v4';
 
 var grid = document.getElementById('grid');
 for (var i = 0; i < scenes.length; i++) {
   (function(s) {
-    var eok = s.energy > 0.95 && s.energy < 1.05;
-    var sc = !eok ? '#E74C3C' : s.tile > 0.10 ? '#F39C12' : s.tile > 0.03 ? '#FDD835' : '#4CAF50';
-    var bc = (!eok || s.tile > 0.10) ? sc : '#333';
+    var eok = s.energy > E_LOW && s.energy < E_HIGH;
+    var sc = !eok ? '#E74C3C' : s.tile > TILE_MAX ? '#F39C12' : s.tile > TILE_MAX / 2 ? '#FDD835' : '#4CAF50';
+    var bc = (!eok || s.tile > TILE_MAX) ? sc : '#333';
     var ec = eok ? '#aaa' : '#E74C3C';
     var short = s.name.replace('mat_', '').replace(/_light_/g, ' + ');
 
@@ -207,21 +186,21 @@ for (var i = 0; i < scenes.length; i++) {
     wrap.appendChild(imgRec);
     wrap.appendChild(imgRef);
 
-    var label = document.createElement('div');
-    label.className = 'card-label';
-    label.textContent = 'Hikari';
+    var lbl = document.createElement('div');
+    lbl.className = 'card-label';
+    lbl.textContent = 'Hikari';
 
-    wrap.addEventListener('click', function(rec, lbl) {
+    wrap.addEventListener('click', function(rec, l) {
       return function() {
-        if (lbl.textContent === 'Hikari') { rec.style.opacity = '0'; lbl.textContent = 'pbrt-v4'; }
-        else { rec.style.opacity = '1'; lbl.textContent = 'Hikari'; }
+        if (l.textContent === 'Hikari') { rec.style.opacity = '0'; l.textContent = 'pbrt-v4'; }
+        else { rec.style.opacity = '1'; l.textContent = 'Hikari'; }
       };
-    }(imgRec, label));
+    }(imgRec, lbl));
 
     card.appendChild(title);
     card.appendChild(scores);
     card.appendChild(wrap);
-    card.appendChild(label);
+    card.appendChild(lbl);
     grid.appendChild(card);
   })(scenes[i]);
 }
@@ -229,59 +208,50 @@ for (var i = 0; i < scenes.length; i++) {
 </body>
 </html>
 """
-
-open(joinpath(DISPLAY_DIR, "gallery.html"), "w") do io
-    print(io, gallery_html)
-end
-println("  Gallery written to $(joinpath(DISPLAY_DIR, "gallery.html"))")
-
-# ============================================================================
-# Step 4: Assert thresholds
-# ============================================================================
-#
-# Use the same per-scene relaxation table that `test_pbrt_all_materials.jl`
-# uses for the runtests suite, with one extra knob: when CI renders at lower
-# spp (HIKARI_PBRT_SPP=32 vs 256), Monte-Carlo noise pushes a handful of
-# otherwise-clean scenes over the default thresholds, so we widen the
-# defaults too. Keeps the same "single source of truth" for known scene
-# limitations (image-map MIPMap gap, checkerboard bump on curved surfaces,
-# null-interface medium boundary) — see the per-entry comments on
-# `SCENE_OVERRIDES` below for the rationale. (The runtests path in
-# test_pbrt_all_materials.jl now gates these scenes at the tight uniform
-# band instead, since their underlying bugs were fixed; this standalone
-# comparison harness keeps the looser table for report generation.)
-
-const DEFAULT_TILE   = SPP >= 128 ? 0.07 : 0.10
-const DEFAULT_E_LOW  = SPP >= 128 ? 0.95 : 0.90
-const DEFAULT_E_HIGH = SPP >= 128 ? 1.05 : 1.10
-
-const SCENE_OVERRIDES = Dict{String, NTuple{3, Float64}}(
-    # (tile, energy_low, energy_high)
-    "tex_conductor_bumpmap_arealight"     => (0.10, 0.90, 1.10),
-    "tex_conductor_bumpmap_light_point"   => (0.12, 0.90, 1.10),
-    "shadow_bumpgold_dome_over_velvet"    => (0.55, 0.75, 1.10),
-    "medium_null_interface_homog"         => (0.20, 0.75, 1.30),
-)
-
-bad_energy = String[]
-bad_tile   = String[]
-for s in results
-    tile_thresh, e_low, e_high = get(SCENE_OVERRIDES, s.name,
-                                     (DEFAULT_TILE, DEFAULT_E_LOW, DEFAULT_E_HIGH))
-    s.tile >= tile_thresh        && push!(bad_tile,   s.name)
-    !(e_low < s.energy < e_high) && push!(bad_energy, s.name)
-end
-for name in bad_energy
-    s = results[findfirst(r -> r.name == name, results)]
-    println("  FAIL energy: $name energy=$(round(s.energy, digits=4))")
-end
-for name in bad_tile
-    s = results[findfirst(r -> r.name == name, results)]
-    println("  FAIL tile: $name tile=$(round(s.tile, digits=4))")
+    write(joinpath(DISPLAY_DIR, html_name), html)
+    cp(record_scores(hw_accel),
+       joinpath(DISPLAY_DIR, basename(record_scores(hw_accel))); force = true)
+    println("  $(label): $(length(entries)) scenes, $(n_pass) within tolerance -> $(html_name)")
+    return length(entries)
 end
 
-if !isempty(bad_energy) || !isempty(bad_tile)
-    error("pbrt comparison FAILED: $(length(bad_energy)) energy failures, $(length(bad_tile)) tile failures")
+# ── Main ────────────────────────────────────────────────────────────────────
+
+mkpath(DISPLAY_DIR)
+
+# Clear the previous page before building this one. Anything left behind is a
+# scene that is no longer in the record, and a directory holding some images
+# from this run and some from an older one is the failure mode this rewrite
+# exists to remove — `display/` is an output, not an accumulator.
+for f in readdir(DISPLAY_DIR)
+    if startswith(f, "ref_") || startswith(f, "rec_") ||
+       startswith(f, "gallery") || startswith(f, "scores")
+        rm(joinpath(DISPLAY_DIR, f))
+    end
 end
 
-println("All $n scenes pass thresholds.")
+total = 0
+for hw_accel in (false, true)
+    rows = read_record(hw_accel)
+    if isempty(rows)
+        println("No $(hw_accel ? "HW RT" : "SW BVH") record at $(record_scores(hw_accel)) — skipping.")
+        continue
+    end
+    global total += build_gallery(rows, hw_accel)
+end
+
+if total == 0
+    error("""
+          No recorded run to present.
+
+          The gallery is built from what the test suite recorded, so run the
+          suite first:
+
+              julia --project=. dev/Hikari/test/runtests.jl
+
+          That writes recorded/<name>.exr and recorded/scores_sw.csv (plus
+          recorded/hw/ when HW RT runs), which this script turns into
+          display/gallery.html.
+          """)
+end
+println("Gallery written to $(DISPLAY_DIR)")

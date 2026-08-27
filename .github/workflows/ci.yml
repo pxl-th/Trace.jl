@@ -118,13 +118,21 @@ jobs:
       - uses: julia-actions/cache@v2
       - name: Install comparison dependencies
         run: julia --project=test/pbrt -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+      # Two steps, because rendering and presenting are separate now: the suite
+      # renders, checks and records, and run_comparison.jl only turns that
+      # record into a page. It used to do both, with its own thresholds, and
+      # those had drifted looser than the suite's.
       - name: Render and compare
         env:
-          # 256 spp on lavapipe across 142 scenes blows past the 120-min
-          # job budget; 32 spp is enough to populate a representative
-          # gallery on CI. Local devs can bump it back to 256 for a
-          # higher-fidelity build.
+          # 256 spp on lavapipe across the scene set blows past the 120-min job
+          # budget; 32 spp populates a representative gallery. That is BELOW the
+          # noise floor the ±5 % band assumes, so scenes will show as failing
+          # here that pass at 256 spp on real hardware — this job builds a
+          # report, the normal test job is what decides pass/fail.
           HIKARI_PBRT_SPP: "32"
+        continue-on-error: true
+        run: julia --project=test/pbrt test/pbrt/test_pbrt_all_materials.jl
+      - name: Build gallery
         run: julia --project=test/pbrt test/pbrt/run_comparison.jl
       - uses: actions/upload-artifact@v4
         with:
