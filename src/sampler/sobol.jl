@@ -218,6 +218,31 @@ end
 end
 
 """
+    mod24(x::UInt64) -> UInt32
+
+`x % 24`, computed in 32-bit arithmetic.
+
+A 64-bit integer division, which is what `x % UInt64(24)` lowers to. Apple GPUs
+have no 64-bit integer divider at all and SPIR-V drivers generally emulate one,
+so this single operation cost more than everything around it: measured on an M5,
+a 16-iteration loop over `mix_bits` alone ran in 0.69 ms over 350k threads and
+the same loop with one `% UInt64(24)` added ran in 4.09 ms. It WAS the ZSobol
+sampler — 98 % of `sample_1d`, which was 22 % of the frame.
+
+Exact, not approximate. Writing `x = hi·2³² + lo` and using `2³² ≡ 16 (mod 24)`:
+
+    x ≡ 16·(hi mod 24) + (lo mod 24)   (mod 24)
+
+The intermediate is at most `16·23 + 23 = 391`, so the three remaining
+remainders are 32-bit and each compiles to a multiply-and-shift by a constant.
+"""
+@inline function mod24(x::UInt64)::UInt32
+    hi = (x >> 32) % UInt32
+    lo = x % UInt32
+    return (UInt32(16) * (hi % UInt32(24)) + (lo % UInt32(24))) % UInt32(24)
+end
+
+"""
     zsobol_get_sample_index(morton_index, dimension, log2_spp, n_base4_digits, matrices) -> UInt64
 
 Compute the permuted sample index for ZSobol sampling.
@@ -263,7 +288,7 @@ ensuring good sample distribution across pixels while maintaining low-discrepanc
         # Compute permutation index from higher digits and dimension
         higher_digits = morton_index >> (digit_shift + Int32(2))
         hash_val = mix_bits(higher_digits ⊻ (UInt64(0x55555555) * u_uint64(dimension)))
-        p = u_int32((hash_val >> 24) % UInt64(24)) + Int32(1)  # 1-indexed
+        p = u_int32(mod24(hash_val >> 24)) + Int32(1)  # 1-indexed
 
         # Permutation lookup
         permuted_digit = lookup_permutation(matrices, p, digit)

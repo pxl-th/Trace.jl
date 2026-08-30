@@ -97,11 +97,32 @@ end
 # pbrt-v4 textures.cpp:191 `bf`: triangle-filtered 1D checkerboard of radius r
 # centred at x. When the filter support stays inside one cell this is the exact
 # ±1 point sample (which also covers r == 0, i.e. no derivatives available).
+#
+# The result is CLAMPED to [-1, 1]. That is not a change to the filter, it is
+# the filter's own invariant: `bf` is a triangle-filtered ±1 square wave, so it
+# cannot leave [-1, 1] mathematically. The expression below can, because it is a
+# second difference divided by `r * r` — near a cell boundary with a small
+# radius the numerator is all cancellation and the division amplifies the noise.
+# Measured on Float32: at `x = 1.0f0, r = 1f-6` it returns **59604.6**.
+#
+# pbrt has the identical expression and the identical blow-up, and gets away
+# with it because C++ carries the damage as a NaN: the caller's
+# `(1-w)*tex1 + w*tex2` extrapolates to a large negative roughness and
+# `std::sqrt` of that is NaN, so one pixel is wrong. Julia's `sqrt` THROWS on a
+# negative real, so the same value takes the whole dispatch down —
+# `tex_conductor_checker_rough_light_point` and its dielectric twin died with
+# `DomainError: This operation requires a complex input to return a complex
+# result` on both the software and hardware paths.
+#
+# Clamping recovers the right answer rather than merely bounding the wrong one:
+# where the division is ill-conditioned the filter support is far smaller than a
+# cell, which is the point-sample case, and a point sample IS ±1.
 @propagate_inbounds function checker_bf(x::Float32, r::Float32)
     if floor(x - r) == floor(x + r)
         return 1f0 - 2f0 * Float32(unsafe_trunc(Int32, floor(x)) & Int32(1))
     end
-    return (checker_d(x + r) - 2f0 * checker_d(x) + checker_d(x - r)) / (r * r)
+    v = (checker_d(x + r) - 2f0 * checker_d(x) + checker_d(x - r)) / (r * r)
+    return clamp(v, -1f0, 1f0)
 end
 
 # Checkerboard() 2D branch + UVMapping::Map fused, then the

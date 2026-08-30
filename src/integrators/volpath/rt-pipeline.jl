@@ -549,8 +549,18 @@ not depend on which pipeline does the tracing.
 The body reads the scene out of the `Ref`s at record time, so a camera move or a
 new sample index does not rebuild the plan.
 """
-function trace_pass!(g, ::Mantle.HWAdaptedAccel, state::VolPathState, refs,
+function trace_pass!(g, accel_t::Mantle.AdaptedAccel, state::VolPathState, refs,
                      cur::WorkQueue, nxt::WorkQueue)
+    # A hardware accel does not imply a ray-tracing PIPELINE. Vulkan hands an
+    # SBT to the driver; Metal traverses through a linked function called from
+    # the shading kernel, which is the generic compute path below this method.
+    # Both are hardware traversal — the question is who invokes the hit shaders,
+    # and that is a backend capability rather than a property of the accel type.
+    if !Mantle.supports_rt_pipeline(accel_t)
+        return invoke(trace_pass!,
+                      Tuple{Any, Any, VolPathState, Any, WorkQueue, WorkQueue},
+                      g, accel_t, state, refs, cur, nxt)
+    end
     Mantle.custom!(g, "trace") do p
         trace_uses!(p, state, cur, nxt)
         function ()
@@ -559,7 +569,7 @@ function trace_pass!(g, ::Mantle.HWAdaptedAccel, state::VolPathState, refs,
             materials = refs.materials[]
             hwtlas = accel.hwtlas
             hwtlas === nothing &&
-                error("trace_pass!(HWAdaptedAccel): accel.hwtlas was stripped before dispatch")
+                error("trace_pass!(AdaptedAccel): accel.hwtlas was stripped before dispatch")
             trace_rays_indirect!(bq, vp_rt_pipeline(materials), hwtlas.hw_tlas,
                 cur, nxt,
                 state.escaped_queue,

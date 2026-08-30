@@ -118,7 +118,7 @@ end
 
 Render `scene_name` with Hikari's VolPath integrator and return a host-side
 framebuffer. All knobs are explicit — no defaults baked into globals. When
-`hw_accel=true` the scene is built with `HWTLAS` and VolPath dispatches to
+`hw_accel=true` the scene is built with `VulkanTLAS` and VolPath dispatches to
 the hardware RT path.
 """
 function render_scene(scene_name::AbstractString;

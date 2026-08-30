@@ -164,10 +164,10 @@ function Base.close(vp::VolPath)
     return nothing
 end
 
-# Scene adaptation dispatch — overridden for HWAdaptedAccel in hikari_integration.jl
+# Scene adaptation dispatch — overridden for AdaptedAccel in hikari_integration.jl
 adapt_scene_for_render(backend, scene, ::VolPath) = Adapt.adapt(backend, scene)
 
-# Camera medium detection dispatch — overridden for HWAdaptedAccel in hikari_integration.jl
+# Camera medium detection dispatch — overridden for AdaptedAccel in hikari_integration.jl
 detect_initial_medium(backend, accel, media_interfaces, camera_pos, ::VolPath) =
     detect_camera_medium(backend, accel, media_interfaces, camera_pos)
 
@@ -180,7 +180,7 @@ trace returns; the software BVH only records hits and leaves shading to the
 post-hoc kernels. Only true for rays that never enter a medium — see
 `chit_owns_surface` in `render!`.
 
-The `HWAdaptedAccel` method lives in `hw-rt.jl`, with the other overrides on
+The `AdaptedAccel` method lives in `hw-rt.jl`, with the other overrides on
 the accel axis.
 """
 shades_surfaces_inline(accel) = false

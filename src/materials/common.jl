@@ -151,6 +151,35 @@ overflow protection to protect against.
 end
 
 """
+    complex_div(a::Complex{Float32}, b::Complex{Float32}) -> Complex{Float32}
+
+Complex division in Float32, following pbrt-v4's `operator/` in
+`util/complex.h` rather than `Base.:/(::Complex, ::Complex)`.
+
+Same reason as [`complex_sqrt`](@ref) above, one step further. Base's version is
+overflow-safe by WIDENING: `inv(::Complex{Float32})` calls `widen`, which
+promotes to `Complex{Float64}`. Vulkan tolerates that — the device has
+`Float64`, so it is merely slow. **Apple GPUs do not have `Float64` at all**, and
+the compile fails outright:
+
+    InvalidIRError: unsupported use of double value
+      inv @ complex.jl:474  /  @ complex.jl:354  fr_complex @ materials/common.jl
+
+pbrt does not widen, and does not need to for the same reason given above: with
+`cosθ ∈ [0,1]` and measured η/k of order 0.1–10, `b.re² + b.im²` cannot overflow
+a `Float32`. The reciprocal is taken once and multiplied through, as pbrt does.
+"""
+@inline function complex_div(a::Complex{Float32}, b::Complex{Float32})
+    are, aim = reim(a)
+    bre, bim = reim(b)
+    scale = 1f0 / (bre * bre + bim * bim)
+    return Complex{Float32}(scale * (are * bre + aim * bim),
+                            scale * (aim * bre - are * bim))
+end
+
+@inline complex_div(a::Float32, b::Complex{Float32}) = complex_div(Complex{Float32}(a, 0f0), b)
+
+"""
     fr_complex(cos_theta_i, eta, k) -> Float32
 
 Compute Fresnel reflectance for a conductor using complex IOR (matches pbrt-v4's FrComplex).
@@ -168,11 +197,13 @@ This uses the exact same formula as pbrt-v4 with complex arithmetic.
 
     # Complex IOR and Snell's law (pbrt-v4 FrComplex)
     eta_c = Complex{Float32}(eta, k)
-    sin2_theta_t = sin2_theta_i / (eta_c * eta_c)
+    # `complex_div`, not `/`: Base's complex division widens to `Float64`, which
+    # an Apple GPU cannot compile at all. See its docstring.
+    sin2_theta_t = complex_div(sin2_theta_i, eta_c * eta_c)
     cos_theta_t = complex_sqrt(1f0 - sin2_theta_t)
 
-    r_parl = (eta_c * cos_theta_i - cos_theta_t) / (eta_c * cos_theta_i + cos_theta_t)
-    r_perp = (cos_theta_i - eta_c * cos_theta_t) / (cos_theta_i + eta_c * cos_theta_t)
+    r_parl = complex_div(eta_c * cos_theta_i - cos_theta_t, eta_c * cos_theta_i + cos_theta_t)
+    r_perp = complex_div(cos_theta_i - eta_c * cos_theta_t, cos_theta_i + eta_c * cos_theta_t)
 
     return (abs2(r_parl) + abs2(r_perp)) * 0.5f0
 end

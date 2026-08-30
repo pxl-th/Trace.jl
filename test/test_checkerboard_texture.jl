@@ -97,3 +97,50 @@ end
     @test Hikari.srgb_to_linear(0.5f0) ≈ ((0.5f0 + 0.055f0) / 1.055f0)^2.4f0
     @test Hikari.srgb_to_linear(1f0) ≈ 1f0
 end
+
+# ── the analytic filter's own bound ───────────────────────────────────────────
+#
+# `checker_bf` is a triangle-filtered ±1 square wave, so |bf| <= 1 by
+# construction. The expression that computes it is a second difference divided
+# by `r * r`, and near a cell boundary with a small radius the numerator is all
+# cancellation — at `x = 1.0f0, r = 1f-6` it evaluated to 59604.6 before the
+# clamp, a factor of sixty thousand over its own bound.
+#
+# That is not a cosmetic overshoot. The caller mixes with it as
+# `(1 - w) * tex1 + w * tex2`, so a huge `w` extrapolates far outside the two
+# texture values: for the `tex_conductor_checker_rough_light_point` scene's
+# 0.01/0.3 roughness pair it produced roughness = -5.15e8, and
+# `roughness_to_α` is `sqrt`. C++ answers `std::sqrt(-x)` with a NaN and loses
+# one pixel; Julia THROWS, and the whole GPU dispatch dies with
+# `DomainError: This operation requires a complex input to return a complex
+# result`. Both that scene and its dielectric twin failed that way on the
+# software and hardware paths alike.
+@testset "checker_bf cannot leave [-1, 1]" begin
+    bf = Hikari.checker_bf
+
+    # The exact case that killed the dispatch.
+    @test abs(bf(1.0f0, 1f-6)) <= 1f0
+
+    # Cell boundaries at every scale of radius: this is where `floor(x - r)` and
+    # `floor(x + r)` disagree, so the point-sample early-out does not fire and
+    # the ill-conditioned division is taken.
+    for x in Float32[-4, -2, -1, 0, 1, 2, 3, 8, 17],
+        r in Float32[1f-7, 1f-6, 1f-5, 1f-4, 1f-3, 1f-2, 0.1, 0.5, 1, 2]
+        v = bf(x, r)
+        @test isfinite(v)
+        @test -1f0 <= v <= 1f0
+    end
+
+    # …and away from boundaries too, over a sweep that mixes both branches.
+    for x in range(-20f0, 20f0; length = 401), r in Float32[1f-6, 1f-3, 0.25f0, 1.5f0]
+        v = bf(Float32(x), r)
+        @test isfinite(v) && -1f0 <= v <= 1f0
+    end
+
+    # The clamp must not disturb the well-conditioned cases the other testsets
+    # pin: a radius that keeps the support inside one cell is the exact point
+    # sample, and `+1` / `-1` are its only two values.
+    @test bf(0.25f0, 0.1f0) == 1f0
+    @test bf(1.25f0, 0.1f0) == -1f0
+    @test bf(2.25f0, 0.1f0) == 1f0
+end

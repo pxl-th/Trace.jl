@@ -8,7 +8,7 @@
 # backend, the device — moved into Mantle on 2026-08-27; Lava is the SPIR-V
 # compiler and has none of these names any more.
 import Mantle
-import Mantle: HWTLAS, HWAdaptedAccel
+import Mantle: HWTLAS, AdaptedAccel
 
 # Any backend with hw_accel=true creates an HWTLAS.  Parametrised on
 # `Raycore.Triangle{TriangleMeta}` because Hikari's scene API pushes meshes
@@ -72,7 +72,7 @@ end
     end
 end
 
-function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera;
+function fill_aux_buffers!(film::Film, scene::Scene{<:AdaptedAccel}, camera;
                            has_infinite_lights::Bool=false,
                            cull_mask::UInt32=UInt32(0xFF))
     hwtlas = scene.accel.hwtlas
@@ -84,7 +84,7 @@ function fill_aux_buffers!(film::Film, scene::Scene{<:HWAdaptedAccel}, camera;
     n = h * w
     miss_depth = has_infinite_lights ? Float32(1e30) : Inf32
 
-    accel = Adapt.adapt(backend, hwtlas)  # CPU-form HWAdaptedAccel; LavaAdaptor
+    accel = Adapt.adapt(backend, hwtlas)  # CPU-form AdaptedAccel; LavaAdaptor
                                            # will strip hwtlas at kernel-arg time
     hw_fill_aux_kernel!(backend)(
         film.depth, film.normal, film.albedo,
@@ -99,16 +99,19 @@ end
 # VolPath Dispatch Overrides
 # ============================================================================
 
-function detect_initial_medium(backend, accel::HWAdaptedAccel, mi, pos, vp::VolPath)
+function detect_initial_medium(backend, accel::AdaptedAccel, mi, pos, vp::VolPath)
     return Raycore.SetKey()
 end
 
 # The per-material closest-hit shaders shade a hit before the trace returns.
-shades_surfaces_inline(::HWAdaptedAccel) = true
+# Only when the backend actually runs closest-hit shaders from an SBT. With an
+# inline ray query the shading kernel keeps control, so surfaces are shaded by
+# the ordinary material pass rather than inside the trace.
+shades_surfaces_inline(a::AdaptedAccel) = Mantle.supports_rt_pipeline(a)
 
 # Tracing needs no HW override. It used to: extract_rays → prepare_indirect →
 # cmd_trace_rays_indirect_khr → process. Inline ray queries on
-# `Raycore.closest_hit(::HWAdaptedAccel, ray)` collapse that to a single
+# `Raycore.closest_hit(::AdaptedAccel, ray)` collapse that to a single
 # dispatch, so `vp_trace_and_shade!` covers both backends.
 
 # ============================================================================
@@ -126,8 +129,10 @@ existing `default_bq`, so this reuses the runtime's device rather than creating 
 second one — a second would mean a second `Pool` over one `VkDevice`, which is
 two allocators over the same memory.
 """
-mantle_device(::Mantle.LavaBackend) = Mantle.Device(Mantle.VulkanAPI())
-mantle_device(::KA.CPU) = Mantle.Device(Mantle.HostAPI())
+# `Mantle.Device(backend)` dispatches on the KernelAbstractions backend itself,
+# so this needs no per-backend method and no backend import — which is what the
+# header of this file promises.
+mantle_device(backend) = Mantle.Device(backend)
 
 # Smallest kernel that reads one buffer and writes another, so a test can pin
 # that a Mantle pass reaches Hikari's own allocations. Lives here rather than in

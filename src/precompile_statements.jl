@@ -33,6 +33,21 @@
 function _precompile_statements()
     ok = 0
     total = 0
+    # Every signature below names `Mantle.LavaBackend`, `Mantle.LavaArray` or
+    # `Mantle.VkContext`. Since 2026-08-28 those live in `MantleVulkanExt`, not
+    # in `Mantle`, and the extension only loads where Vulkan and Lava both do —
+    # not on a Mac, and not in a CI runner without a loader.
+    #
+    # A guard rather than a `try` per line, for the reason the header gives:
+    # `precompile` EVALUATES these type expressions, so an unreachable name is
+    # an `UndefVarError` at load and not a statement that quietly returns
+    # `false`. Returning `(0, 0)` keeps `test_precompile_statements.jl`'s
+    # "attempted == succeeded" contract true where there is nothing to attempt.
+    #
+    # They also need REPOINTING at the extension the next time this file is
+    # regenerated on a Vulkan machine: `Mantle.LavaBackend` no longer resolves
+    # even where the backend IS loaded.
+    isdefined(Mantle, :LavaBackend) || return (ok, total)
     total += 1; ok += precompile(Tuple{Hikari.VolPath, Hikari.Scene{Raycore.TLAS{Mantle.LavaBackend}, Raycore.MultiTypeSet{Mantle.LavaBackend}, Raycore.MultiTypeSet{Mantle.LavaBackend}, Raycore.MultiTypeSet{Mantle.LavaBackend}, Mantle.LavaArray{Hikari.MediumInterfaceIdx, 1}, Base.RefValue{Tuple{Raycore.Bounds3, GeometryBasics.HyperSphere{3, Float32}}}}, Hikari.Film{Mantle.LavaArray{ColorTypes.RGB{Float32}, 2}, Mantle.LavaArray{ColorTypes.RGBA{Float32}, 2}, Mantle.LavaArray{ColorTypes.RGB{Float32}, 2}, Mantle.LavaArray{GeometryBasics.Vec{3, Float32}, 2}, Mantle.LavaArray{Float32, 2}}, Hikari.PerspectiveCamera})  # 5849.3 ms
     total += 1; ok += precompile(Tuple{typeof(Core.kwcall), NamedTuple{(:backend, :samples, :max_depth), Tuple{Mantle.LavaBackend, Int64, Int64}}, typeof(Hikari.load_pbrt), String})  # 4337.3 ms
     total += 1; ok += precompile(Tuple{Type{Mantle.VkContext}})  # 2374.7 ms

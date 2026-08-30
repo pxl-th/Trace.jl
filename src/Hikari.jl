@@ -153,7 +153,7 @@ include("integrators/volpath/surface-eval.jl")
 # The sample as Mantle graphs — needs every stage's kernel to exist
 include("integrators/volpath/graph.jl")
 include("integrators/volpath/volpath.jl")
-# Hardware RT dispatch (uses Raycore's backend-agnostic HWTLAS/HWAdaptedAccel interface)
+# Hardware RT dispatch (uses Raycore's backend-agnostic HWTLAS/AdaptedAccel interface)
 include("integrators/volpath/hw-rt.jl")
 # RT pipeline (raygen+closesthit+miss via VkRayTracingPipelineKHR + SBT) variant
 include("integrators/volpath/rt-pipeline.jl")

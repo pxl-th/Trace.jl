@@ -14,7 +14,7 @@ using LinearAlgebra: I
 #   * UAF / stale-BDA from `sync!` + `unsafe_free!` interplay under real
 #     integrator load (primary rays + shadow rays + aux buffers).
 #   * Pipeline / SBT lifetime regressions across multiple `VolPath` calls
-#     against the same `HWTLAS`.
+#     against the same `VulkanTLAS`.
 #   * Mesh-mutation regressions in the `delete!` + `push!` + `sync!` path
 #     while the RT pipeline is live.
 #   * Cross-scene state leakage: a second `hw_accel=true` scene in the
@@ -155,7 +155,7 @@ end
         img_k = _render_once(scene_k, BACKEND; samples=4, depth=2)
         @test _nondegenerate(img_k)
         @test !Mantle.device_lost(CTX)
-        scene_k = nothing  # drop ref so the HWTLAS can be finalized
+        scene_k = nothing  # drop ref so the VulkanTLAS can be finalized
     end
     GC.gc(true); GC.gc(true)
     final = _snapshot()

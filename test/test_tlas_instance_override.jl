@@ -1,7 +1,7 @@
 # TLAS Per-Instance Interface Override — Stress Tests
 #
 # Exercises the Phase-C refactor across both SW (StaticTLAS) and HW RT
-# (HWTLAS → PrecomputedHitsAccel) paths:
+# (VulkanTLAS → PrecomputedHitsAccel) paths:
 #
 #   - `push!(scene, mesh, materials::Vector, transforms::Vector)` builds
 #     ONE BLAS + N instances; each instance's material routes through
@@ -210,7 +210,7 @@ _channel_maxes(img) = (
                                         Hikari.RGBSpectrum(30f0)))
         Hikari.sync!(scene)
 
-        # HWTLAS structure: 1 floor BLAS + 1 sphere BLAS = 2 total, 5 instances,
+        # VulkanTLAS structure: 1 floor BLAS + 1 sphere BLAS = 2 total, 5 instances,
         # 2 batches (floor=1, sphere=4). All sphere instances share the second BLAS;
         # their per-instance custom_indices are distinct nonzero overrides.
         @test length(scene.accel.blas_list) == 2

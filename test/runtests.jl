@@ -37,6 +37,7 @@ const TEST_FILES = [
     "test_caching_gc_correctness.jl",
     "test_texture_wrap.jl",
     "test_blackbody_emitter_scale.jl",
+    "test_sobol_mod24.jl",
     "test_ray_differentials.jl",
     "test_checkerboard_texture.jl",
     "test_const_texture_value.jl",

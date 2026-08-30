@@ -6,7 +6,7 @@ reaching into a Vulkan runtime, and the list existed to stop it growing while th
 runtime was moved out. On 2026-08-27 it was: **22 names across 3 files.**
 
 The move happened. Lava is a Julia→SPIR-V compiler with no Vulkan dependency, and
-everything Hikari used to reach for — `LavaBackend`, `HWTLAS`, `vk_context`,
+everything Hikari used to reach for — `LavaBackend`, `VulkanTLAS`, `vk_context`,
 `RayTracingPipeline`, `@compile_workload` — is Mantle's. What is left is 13
 names in ONE file, and they are a different kind of thing entirely:
 

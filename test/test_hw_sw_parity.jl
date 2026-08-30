@@ -112,7 +112,7 @@ else
                      backend=backend, hw=false, samples=samples, depth=depth)
     @test size(img_sw) == (res, res)
 
-    # HW path — fresh scene with its own HWTLAS so nothing is reused between
+    # HW path — fresh scene with its own VulkanTLAS so nothing is reused between
     # the two renders (test_tlas_instance_override.jl documents that a HW
     # render after another render in the same session can DEVICE_LOST; a
     # fresh scene gives HW RT a clean state).
