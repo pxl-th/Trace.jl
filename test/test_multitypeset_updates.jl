@@ -28,7 +28,7 @@ using GPUArraysCore: @allowscalar
 
 # ── Test helpers ────────────────────────────────────────────────────────────
 
-const _BACKEND = Mantle.LavaBackend()
+const _BACKEND = MVE.LavaBackend()
 
 function _channel_means(img)
     r = mean(Float32(p.r) for p in img)
@@ -133,8 +133,8 @@ end
 @testset "J3: RGBGridMedium animation loop is bounded" begin
     scene, handle = _make_grid_volume_scene(; σ_s=0.3f0)
 
-    bytes_before    = Mantle.gpu_live_bytes()
-    bufs_before     = Mantle.live_buffer_count()
+    bytes_before    = MVE.gpu_live_bytes()
+    bufs_before     = MVE.live_buffer_count()
     media_before    = length(scene.media)
     texarrs_before  = length(scene.media.texture_gpu_arrays)
 
@@ -152,13 +152,13 @@ end
     end
     GC.gc(true)
 
-    @info "J3: post-animation state" media=length(scene.media) texarrs=length(scene.media.texture_gpu_arrays) bytes=Mantle.gpu_live_bytes() bufs=Mantle.live_buffer_count()
+    @info "J3: post-animation state" media=length(scene.media) texarrs=length(scene.media.texture_gpu_arrays) bytes=MVE.gpu_live_bytes() bufs=MVE.live_buffer_count()
 
     @test length(scene.media)                       == media_before
     @test length(scene.media.texture_gpu_arrays)    == texarrs_before
     # GPU memory may shift slightly due to deferred-free timing; bound the
     # delta tightly so a real leak is visible.
-    @test Mantle.gpu_live_bytes() - bytes_before <= 32 * 1024 * 1024  # +32 MiB ceiling
+    @test MVE.gpu_live_bytes() - bytes_before <= 32 * 1024 * 1024  # +32 MiB ceiling
 end
 
 # ── J4. HW RT picks up material updates the same as SW ─────────────────────
@@ -195,10 +195,10 @@ end
 
 @testset "J5: render + update_material! loop is stable" begin
     scene, handle = _make_sphere_scene(; hw_accel=false)
-    ctx = Mantle.vk_context()
+    ctx = MVE.vk_context()
 
-    bytes_before = Mantle.gpu_live_bytes()
-    bufs_before  = Mantle.live_buffer_count()
+    bytes_before = MVE.gpu_live_bytes()
+    bufs_before  = MVE.live_buffer_count()
 
     for k in 1:20
         # Cycle the material colour each iteration.
@@ -208,7 +208,7 @@ end
         Hikari.update_material!(scene, handle.interface,
                                  Hikari.Diffuse(Kd=Hikari.RGBSpectrum(r, g, b)))
         img = _render(scene; samples=4, res=16)
-        @test !Mantle.device_lost(ctx)
+        @test !MVE.device_lost(ctx)
         m = _channel_means(img)
         @test (m.r + m.g + m.b) > 0.001f0   # non-degenerate output
     end
@@ -221,8 +221,8 @@ end
     # tighter contract on RADV doesn't quietly slip.
     is_llvmpipe = occursin("llvmpipe", lowercase(ctx.device_name))
     bytes_budget = is_llvmpipe ? 256 * 1024 * 1024 : 64 * 1024 * 1024
-    @test Mantle.gpu_live_bytes() - bytes_before <= bytes_budget
-    @test Mantle.live_buffer_count() - bufs_before <= 16              # +16 bufs
+    @test MVE.gpu_live_bytes() - bytes_before <= bytes_budget
+    @test MVE.live_buffer_count() - bufs_before <= 16              # +16 bufs
 end
 
 # ── J6. Adapted-snapshot freshness contract ────────────────────────────────

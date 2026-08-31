@@ -32,8 +32,8 @@ using Hikari, Lava, Raycore, Adapt
 using GeometryBasics
 using GeometryBasics: normal_mesh, Tesselation, Rect3f, Sphere, Point3f, Vec3f, Point2f
 
-const _BE_M7  = Mantle.LavaBackend()
-const _CTX_M7 = Mantle.vk_context()
+const _BE_M7  = MVE.LavaBackend()
+const _CTX_M7 = MVE.vk_context()
 
 _build_a(backend) = let s = Hikari.Scene(; backend=backend, hw_accel=true)
     push!(s, normal_mesh(Tesselation(Sphere(Point3f(0,0,0.35), 0.35f0), 8)),
@@ -71,7 +71,7 @@ if get(ENV, "LAVA_RUN_CASCADE_REPRO", "0") == "1"
     @testset "MWE-7: A→B scene switch (cascade fix regression)" begin
         sa = _build_a(_BE_M7)
         _render_one(sa)
-        @test !Mantle.device_lost(_CTX_M7)  # A render must be clean
+        @test !MVE.device_lost(_CTX_M7)  # A render must be clean
 
         sb = _build_b(_BE_M7)
         crashed = false
@@ -81,7 +81,7 @@ if get(ENV, "LAVA_RUN_CASCADE_REPRO", "0") == "1"
             crashed = true
             @info "MWE-7 caught exception: $(typeof(e))"
         end
-        crashed = crashed || Mantle.device_lost(_CTX_M7)
+        crashed = crashed || MVE.device_lost(_CTX_M7)
         @test !crashed   # was @test_broken before the pin!/pin_leaves! fix.
     end
 end

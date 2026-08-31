@@ -7,7 +7,18 @@ using Raycore
 # Both: Lava for the device-side ray-tracing intrinsics `rt-pipeline.jl` calls,
 # Mantle for everything with a device behind it — the backend, arrays, the graph.
 using Lava, Mantle
-using Mantle
+
+# The Vulkan backend module, for the test files that name backend internals.
+#
+# Hikari's own source does not, and must not — it goes through Mantle's portable
+# API. Its TESTS do: `Mantle.LavaBackend`, `Mantle.vk_flush!` and friends, which
+# since the 2026-08-27 split live in `MantleVulkanExt` rather than in Mantle. A
+# `Main`-level binding serves every file, since they are all `include`d here.
+const MVE = Base.get_extension(Mantle, :MantleVulkanExt)
+MVE === nothing && error(
+    "MantleVulkanExt is not loaded, so no GPU backend is available. `using Lava` " *
+    "above should have pulled Vulkan in with it — check that Lava still depends " *
+    "on Vulkan (see Lava's `test_compiler_runtime_split.jl`).")
 # NOT `using JET` here. Only `type_stability.jl` and `gpu_compat.jl` need it, and
 # it is a test-target dependency, so an environment without it made this line
 # throw before the first testset and took all 24 files down with it. The two
@@ -54,6 +65,7 @@ const TEST_FILES = [
     "test_sphere_uv.jl",
     "test_volpath_graph.jl",
     "test_volpath_per_iter_lifecycle.jl",
+    "test_trace_pass_rebind.jl",
 ]
 
 # ── pbrt reference suite ────────────────────────────────────────────────────

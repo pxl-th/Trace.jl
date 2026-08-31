@@ -27,7 +27,7 @@ using Lava, Mantle
 using GeometryBasics
 using GPUArraysCore: @allowscalar
 
-const _BACKEND = Mantle.LavaBackend()
+const _BACKEND = MVE.LavaBackend()
 
 function _mini_scene_with_null_medium_cube()
     scene = Hikari.Scene(; backend=_BACKEND)

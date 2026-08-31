@@ -47,6 +47,31 @@ function _precompile_statements()
     # They also need REPOINTING at the extension the next time this file is
     # regenerated on a Vulkan machine: `Mantle.LavaBackend` no longer resolves
     # even where the backend IS loaded.
+    # ── THIS FILE IS STALE AND MUST BE REGENERATED ───────────────────────────
+    #
+    # The guard below is wrong twice over, and the second reason is why it has
+    # not simply been fixed.
+    #
+    # 1. `isdefined(Mantle, :LavaBackend)` is false on EVERY machine since
+    #    2026-08-27: the name lives in `MantleVulkanExt`. So every statement
+    #    below is skipped, and Hikari's 29.6 s → 6.9 s startup win is gone.
+    #    `test_precompile_statements.jl` asserts `total > 0`, which is what says
+    #    so — it fails, and should keep failing until this is regenerated.
+    #
+    # 2. Repointing it at the extension (measured 2026-08-31) does NOT work: the
+    #    signatures are stale too, and `precompile` EVALUATES them, so a type
+    #    that no longer type-checks throws rather than returning `false` —
+    #
+    #        TypeError: in CompiledDispatch, in A, expected A<:Tuple,
+    #                   got Type{MantleVulkanExt.IterPlan{…}}
+    #
+    #    which takes Hikari's own precompilation down with it. `CompiledDispatch`
+    #    gained parameters in the graph move; every signature naming it is wrong.
+    #
+    # So the guard stays, deliberately, as the lesser of the two: skipped and
+    # flagged by a failing test, rather than unloadable. The fix is to regenerate
+    # from a `--trace-compile-timing` run as the header describes, on a Vulkan
+    # machine, and to write `MVE.` where the backend types are named.
     isdefined(Mantle, :LavaBackend) || return (ok, total)
     total += 1; ok += precompile(Tuple{Hikari.VolPath, Hikari.Scene{Raycore.TLAS{Mantle.LavaBackend}, Raycore.MultiTypeSet{Mantle.LavaBackend}, Raycore.MultiTypeSet{Mantle.LavaBackend}, Raycore.MultiTypeSet{Mantle.LavaBackend}, Mantle.LavaArray{Hikari.MediumInterfaceIdx, 1}, Base.RefValue{Tuple{Raycore.Bounds3, GeometryBasics.HyperSphere{3, Float32}}}}, Hikari.Film{Mantle.LavaArray{ColorTypes.RGB{Float32}, 2}, Mantle.LavaArray{ColorTypes.RGBA{Float32}, 2}, Mantle.LavaArray{ColorTypes.RGB{Float32}, 2}, Mantle.LavaArray{GeometryBasics.Vec{3, Float32}, 2}, Mantle.LavaArray{Float32, 2}}, Hikari.PerspectiveCamera})  # 5849.3 ms
     total += 1; ok += precompile(Tuple{typeof(Core.kwcall), NamedTuple{(:backend, :samples, :max_depth), Tuple{Mantle.LavaBackend, Int64, Int64}}, typeof(Hikari.load_pbrt), String})  # 4337.3 ms

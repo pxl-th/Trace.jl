@@ -561,39 +561,49 @@ function trace_pass!(g, accel_t::Mantle.AdaptedAccel, state::VolPathState, refs,
                       Tuple{Any, Any, VolPathState, Any, WorkQueue, WorkQueue},
                       g, accel_t, state, refs, cur, nxt)
     end
-    Mantle.custom!(g, "trace") do p
+    # `trace!`, not `custom!`. The body used to be a closure that opened the
+    # queue itself, packed its own arguments into per-frame scratch and called
+    # `trace_rays_indirect!`. That is what `custom!` is for — work the graph
+    # declares but does not model — and tracing is not that: it is one launch
+    # with arguments, which is what `Trace` says. Two things follow from the
+    # change and both are the point.
+    #
+    #   * The arguments live in the plan's argument memory at a fixed offset, so
+    #     `rebind!` can rewrite them and a hardware-RT plan can be BAKED. Under
+    #     `custom!` the address baked into the captured command buffer pointed
+    #     into a scratch slab the pool later rewound.
+    #   * The `Ref`s go in as `Ref`s. `rawargs` runs `argvalue` over them at every
+    #     record and rebind, which is how a new sample index or a rebuilt accel
+    #     reaches a plan compiled once — the old body did the same by hand.
+    #
+    # `vp_rt_pipeline` is resolved here rather than per record because the
+    # per-material closest-hit set decides the shader binding table: a different
+    # material set is a different pipeline, and that is a recompile either way.
+    Mantle.compute!(g, "trace") do p
         trace_uses!(p, state, cur, nxt)
-        function ()
-            bq = Mantle.vk_context().default_bq
-            accel = refs.accel[]
-            materials = refs.materials[]
-            hwtlas = accel.hwtlas
-            hwtlas === nothing &&
-                error("trace_pass!(AdaptedAccel): accel.hwtlas was stripped before dispatch")
-            trace_rays_indirect!(bq, vp_rt_pipeline(materials), hwtlas.hw_tlas,
-                cur, nxt,
-                state.escaped_queue,
-                state.medium_sample_queue,
-                state.per_material_queue,
-                state.hit_surface_queue,
-                state.hit_area_light_queue,
-                state.pixel_L,
-                accel, refs.media_interfaces[], refs.media[], materials, refs.lights[],
-                state.rgb2spec_table,
-                state.bvh_nodes,
-                state.infinite_light_indices,
-                state.light_to_bit_trail,
-                state.num_infinite_lights,
-                state.num_bvh_lights,
-                state.num_lights,
-                state.max_depth,
-                refs.regularize[],
-                state.sobol_rng, refs.sample_idx[],
-                refs.camera[], refs.samples_per_pixel[],
-                state.rr_depth;
-                n_rays = cur.size,
-            )
-            return nothing
-        end
+        Mantle.trace!(p,
+            vp_rt_pipeline(refs.materials[]),
+            refs.accel,
+            (cur, nxt,
+             state.escaped_queue,
+             state.medium_sample_queue,
+             state.per_material_queue,
+             state.hit_surface_queue,
+             state.hit_area_light_queue,
+             state.pixel_L,
+             refs.accel, refs.media_interfaces, refs.media, refs.materials, refs.lights,
+             state.rgb2spec_table,
+             state.bvh_nodes,
+             state.infinite_light_indices,
+             state.light_to_bit_trail,
+             state.num_infinite_lights,
+             state.num_bvh_lights,
+             state.num_lights,
+             state.max_depth,
+             refs.regularize,
+             state.sobol_rng, refs.sample_idx,
+             refs.camera, refs.samples_per_pixel,
+             state.rr_depth),
+            Mantle.DeviceRange(cur.size))
     end
 end

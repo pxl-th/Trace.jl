@@ -37,7 +37,7 @@ end
 
 # ── Parametrized suite ──────────────────────────────────────────────────────
 
-function run_pbrt_comparison(; backend=Mantle.LavaBackend(),
+function run_pbrt_comparison(; backend=MVE.LavaBackend(),
                                samples::Int=256, hw_accel::Bool=false)
     label = hw_accel ? "HW RT" : "SW BVH"
     @testset "PBRT vs Hikari ($label, $samples spp)" begin

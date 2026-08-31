@@ -91,8 +91,8 @@ end
 
 @testset "HW RT vs SW BVH rendering parity" begin
 
-backend = Mantle.LavaBackend()
-ctx = Mantle.vk_context()
+backend = MVE.LavaBackend()
+ctx = MVE.vk_context()
 
 if ctx.rt_pipeline_properties === nothing
     @info "HW RT unavailable on this device — skipping HW vs SW parity test"
@@ -123,7 +123,7 @@ else
     @test size(img_hw) == (res, res)
 
     # Neither path should have tripped DEVICE_LOST.
-    @test !Mantle.device_lost(ctx)
+    @test !MVE.device_lost(ctx)
 
     # Both renders must produce non-degenerate output (not all black, not
     # all saturated).  This catches gross regressions: a pipeline that

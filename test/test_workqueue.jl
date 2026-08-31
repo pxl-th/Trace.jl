@@ -36,7 +36,7 @@ end
 end
 
 @testset "WorkQueue" begin
-    backend = Mantle.LavaBackend()
+    backend = MVE.LavaBackend()
 
     @testset "construction" begin
         mem = DeviceMemory(backend)
