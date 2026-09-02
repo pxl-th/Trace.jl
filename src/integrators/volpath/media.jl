@@ -1478,7 +1478,7 @@ function build_majorant_grid(density::AbstractArray{Float32,3}, res::Vec3i)
     build_majorant_kernel!(backend)(
         grid.voxels, density, Int32(res[1]), Int32(res[2]), Int32(res[3]),
         Int32(nx), Int32(ny), Int32(nz); ndrange=n_voxels)
-    KA.synchronize(backend)
+    Mantle.waitidle(mantle_device(backend))
     return grid
 end
 
@@ -1520,7 +1520,7 @@ function build_majorant_grid!(grid::MajorantGrid, density::AbstractArray{Float32
     build_majorant_kernel!(backend)(
         grid.voxels, density, Int32(res[1]), Int32(res[2]), Int32(res[3]),
         Int32(nx), Int32(ny), Int32(nz); ndrange=n_voxels)
-    KA.synchronize(backend)
+    Mantle.waitidle(mantle_device(backend))
     return grid
 end
 

@@ -208,7 +208,7 @@ function fill_aux_buffers!(film::Film, scene, camera; has_infinite_lights::Bool=
         accel, camera, miss_depth;
         ndrange = length(albedo)
     )
-    KA.synchronize(backend)
+    Mantle.waitidle(mantle_device(backend))
     return film
 end
 

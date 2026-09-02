@@ -39,6 +39,8 @@ const TEST_FILES = [
     # Source-only, no GPU: put it first so the architecture ledger is reported
     # before anything that can take a device down with it.
     "test_no_lava_references.jl",
+    # Same kind of ledger, one layer up: who Hikari asks to wait for the GPU.
+    "test_no_ka_synchronize.jl",
     "materials.jl",
     "type_stability.jl",
     "film.jl",

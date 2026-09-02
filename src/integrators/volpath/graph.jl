@@ -386,7 +386,7 @@ function round_passes!(g, state::VolPathState, refs, cur::WorkQueue, nxt::WorkQu
 end
 
 """
-    rounds_graph(dev, state, refs, n; …)
+    rounds_passes!(g, state, refs, n; …)
 
 `n` consecutive bounces in ONE graph, starting from ray queue A.
 
@@ -406,9 +406,8 @@ there is one of these and not two: the ping-pong is now an implementation detail
 of the recording. `n` rounds starting at A end at A when `n` is even, which is
 what lets the same plan run back to back.
 """
-function rounds_graph(dev, state::VolPathState, refs, n::Integer;
-                      chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
-    g = Mantle.Graph(dev)
+function rounds_passes!(g, state::VolPathState, refs, n::Integer;
+                        chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     cur, nxt = state.ray_queue_a, state.ray_queue_b
     for _ in 1:n
         round_passes!(g, state, refs, cur, nxt;
@@ -418,6 +417,7 @@ function rounds_graph(dev, state::VolPathState, refs, n::Integer;
     return g
 end
 
+
 """
 The head of a sample: clear the film, empty the ray queue, generate camera rays.
 
@@ -425,8 +425,7 @@ The clear and the reset share a pass because they touch disjoint memory, so
 nothing orders them against each other — the fact the `concurrent_dispatch_group`
 around them was there to assert.
 """
-function setup_graph(dev, state::VolPathState, refs, cur::WorkQueue)
-    g = Mantle.Graph(dev)
+function setup_passes!(g, state::VolPathState, refs, cur::WorkQueue)
     Mantle.compute!(g, "clear") do p
         Mantle.use(p, state.pixel_L; write = true)
         Mantle.use(p, cur.size; write = true)
@@ -450,10 +449,10 @@ function setup_graph(dev, state::VolPathState, refs, cur::WorkQueue)
     return g
 end
 
+
 """This sample's spectral radiance, weighted into the RGB accumulators."""
-function accumulate_graph(dev, state::VolPathState, refs)
+function accumulate_passes!(g, state::VolPathState, refs)
     n_pixels = Int(state.width) * Int(state.height)
-    g = Mantle.Graph(dev)
     Mantle.compute!(g, "accumulate") do p
         Mantle.use(p, state.pixel_L; read = true)
         Mantle.use(p, state.wavelengths_per_pixel; read = true)
@@ -474,10 +473,10 @@ function accumulate_graph(dev, state::VolPathState, refs)
     return g
 end
 
+
 """The divide that turns the accumulators into the picture."""
-function finalize_graph(dev, state::VolPathState, framebuffer)
+function finalize_passes!(g, state::VolPathState, framebuffer)
     n_pixels = Int(state.width) * Int(state.height)
-    g = Mantle.Graph(dev)
     Mantle.compute!(g, "finalize") do p
         Mantle.use(p, state.pixel_rgb; read = true)
         Mantle.use(p, state.pixel_weight_sum; read = true)
@@ -487,6 +486,55 @@ function finalize_graph(dev, state::VolPathState, framebuffer)
                           state.width, state.height),
                          n_pixels)
     end
+    return g
+end
+
+finalize_graph(dev, state::VolPathState, framebuffer) =
+    finalize_passes!(Mantle.Graph(dev), state, framebuffer)
+
+"""
+    sample_graph(dev, state, refs, max_depth; …) -> Graph
+
+A whole sample as one graph: setup, the bounce loop, accumulate.
+
+The loop is a `Mantle.repeat!` gated on the ray queue's own live count. That is
+the whole reason this can be one graph — the host neither reads that count nor
+decides how many rounds run, so there is nothing to break the recording up for.
+
+**The body is TWO rounds, and two is the minimum rather than a tuning knob.** A
+round reads one ray queue and writes the other, so an odd body would leave the
+queues swapped and the next iteration would read the wrong one; two returns them
+to where it found them, which is what makes one recording valid for every
+iteration. It also fixes the overshoot: the loop can only stop on an even
+boundary, so at most one dead round runs after the rays are gone.
+
+This replaces a host loop that drained the pipeline every eight rounds to read
+the same counter. Eight was that drain's amortisation constant — `live_rounds/8`
+stalls per sample, bought with up to seven dead rounds of overshoot — and with
+the test on the device there is nothing left to amortise.
+
+`finalize` is not here. It is one dispatch, and `render!` takes a kwarg to skip
+it between samples: a per-call decision, which is the one thing a single
+recording cannot express.
+"""
+function sample_graph(dev, state::VolPathState, refs, max_depth::Int32;
+                      chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
+    a = state.ray_queue_a
+    g = Mantle.Graph(dev)
+    setup_passes!(g, state, refs, a)
+    d = Int(max_depth)
+    if d >= 2
+        Mantle.repeat!(g, d ÷ 2; while_nonzero = a.size) do _
+            rounds_passes!(g, state, refs, 2;
+                           chit_owns_surface, has_media, has_lights)
+        end
+    end
+    # An odd depth has one round the pairs cannot cover. It runs unconditionally:
+    # a round on an empty queue is every stage sizing itself to zero work, which
+    # is what makes the loop legal in the first place.
+    isodd(d) && rounds_passes!(g, state, refs, 1;
+                               chit_owns_surface, has_media, has_lights)
+    accumulate_passes!(g, state, refs)
     return g
 end
 
@@ -527,22 +575,28 @@ Base.:(==)(a::PlanKey, b::PlanKey) =
 The compiled plans for one `(integrator state, scene shape, film)`, and the
 `Ref`s a run writes its per-sample values into.
 
-`chunk` is [`EXIT_CHECK_INTERVAL`](@ref) bounces in one plan and `tail` is
-whatever is left over, or `nothing` when the depth divides evenly. Both start
-from ray queue A, so the loop runs `chunk` back to back and `tail` once — the
-chunk length is even, which is what makes that legal.
+Two plans, because a sample is two things: everything that produces the picture,
+and the divide that writes it out. `sample` holds setup, the whole bounce loop
+and accumulate; it used to be four plans driven by a host `while` loop, which
+existed only so the host could read the ray count between chunks.
 """
 struct VPPlans{R}
     key::PlanKey
     refs::R
-    setup::Mantle.Plan
-    chunk::Union{Nothing,Mantle.Plan}
-    chunk_rounds::Int
-    tail::Union{Nothing,Mantle.Plan}
-    tail_rounds::Int
-    accumulate::Mantle.Plan
+    sample::Mantle.Plan
     finalize::Mantle.Plan
 end
+
+"""
+Whether `build_plans` returns compiled plans — `bake!`ed, replayed rather than
+re-recorded. `false` by default, and the reason is measured; see `build_plans`.
+
+Flip it to compare the two in ONE session, which is the only comparison that
+means anything: a driver update moved both sides of this by more than the
+difference between them.
+"""
+const BAKE_PLANS = Ref(false)
+
 
 """
     build_plans(...) -> VPPlans
@@ -553,77 +607,88 @@ once.
 function build_plans(backend, state::VolPathState, framebuffer, refs, max_depth::Int32;
                      chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     dev = mantle_device(backend)
-    a = state.ray_queue_a
     key = PlanKey(typeof(refs), framebuffer, state.per_material_queue,
                   chit_owns_surface, has_media, has_lights, max_depth)
-    nchunk, ntail = chunking(max_depth)
-    plan(n) = n == 0 ? nothing :
-        Mantle.Plan(rounds_graph(dev, state, refs, n;
-                                 chit_owns_surface, has_media, has_lights))
     plans = VPPlans(key, refs,
-                    Mantle.Plan(setup_graph(dev, state, refs, a)),
-                    plan(nchunk), nchunk,
-                    plan(ntail), ntail,
-                    Mantle.Plan(accumulate_graph(dev, state, refs)),
+                    Mantle.Plan(sample_graph(dev, state, refs, max_depth;
+                                             chit_owns_surface, has_media, has_lights)),
                     Mantle.Plan(finalize_graph(dev, state, framebuffer)))
+    # Interpreted or compiled. `Mantle.Plan` turns the graph into passes,
+    # barriers and pipelines; `bake!` is the phase after that, recording the
+    # command buffers once so `run!` replays them instead of rebuilding them
+    # every sample. Both are real modes and this picks one.
+    #
+    # INTERPRETED by default, and that is a measurement rather than an opinion.
+    # Paired sweep, both modes in one process, RTX 4000 Ada, 2026-08-31, hw_accel,
+    # median of three with `min` within 1% of `median` on both sides:
+    #
+    #     crown          2.262 s -> 2.312 s   -2.2 %
+    #     bunny_cloud    1.925 s -> 1.946 s   -1.0 %
+    #     killeroo_gold  0.785 s -> 0.811 s   -3.3 %
+    #     materials      0.651 s -> 0.664 s   -2.0 %
+    #     black_hole     0.852 s -> 0.822 s   +3.5 %
+    #
+    # Compiled is not slower for want of batching: it halves the submissions
+    # (155 per render against 313 on materials, counted at `flush_counter`). Nor
+    # is it wrong — the output is bit identical, at every sample count from 1 to
+    # 16. What has not been isolated is where the 2-3 % goes; the open candidate
+    # is that a replayed command buffer must be begun `SIMULTANEOUS_USE`, which
+    # gives up optimisations a `ONE_TIME_SUBMIT` buffer gets.
+    #
+    # Measured the other way on the PREVIOUS driver — 1.037x on materials and
+    # 1.045x on crown, compiled ahead — so this is worth re-running rather than
+    # believing. That is what the switch is for.
+    #
+    # Here rather than left to the caller because the caller cannot know: whether
+    # a plan can be baked is a property of the graph, and this function built it.
+    # Doing it at construction is also what keeps `bake!`'s argument ring in
+    # phase — the recordings are taken before the plan has ever run.
+    if BAKE_PLANS[]
+        for p in allplans(plans)
+            Mantle.bake!(p)
+        end
+    end
     return plans
 end
 
 """Every plan of a sample, in the order a sample runs them."""
-allplans(p::VPPlans) = filter(!isnothing,
-                              (p.setup, p.chunk, p.tail, p.accumulate, p.finalize))
+allplans(p::VPPlans) = (p.sample, p.finalize)
 
-# NOT baked, and the reason is measured rather than assumed.
+# On baking, which `build_plans` above can do and does not do by default.
 #
-# `Mantle.bake!` replays a capture instead of re-recording, and the host saving
-# is real — a round's recording is 0.101 ms and its replay 0.0058 ms. But
-# `Lava.replay!` waits on a semaphore for the PREVIOUS replay, so replays are
-# serialised against each other: an ordering that a single recording expresses
-# with an intra-submission barrier becomes a GPU round-trip between submissions.
-# That is free for what capture was built for — one plan replayed once per
-# inference step — and it is not free for a renderer that replays a chunk four
-# times a sample and thirty-two samples a frame.
+# `Mantle.bake!` is the compiled mode: it records the plan once and replays the
+# recording, where an unbaked `run!` re-records every time. The host saving is
+# real — a round's recording is 0.101 ms and its replay 0.0058 ms — and it used
+# to be swallowed whole by how a replay reached the queue. `replay!` submitted on
+# its own, behind a semaphore wait on the previous replay, so replays were
+# serialised against each other: an ordering that one recording expresses with an
+# intra-submission barrier became a GPU round-trip between submissions. Measured
+# then, paired and interleaved in one session: at a chunk of 8 rounds baking COST
+# 5.2 % on medium_null, and only at a chunk of 64 — the whole sample in one plan,
+# hence one replay — did it win 14.5 %.
 #
-# Paired and interleaved, unbaked against baked, in one session: at a chunk of 8
-# rounds baking costs +5.2 % on medium_null, and at a chunk of 64 — the whole
-# sample in one plan, hence ONE replay — it wins 14.5 %. Which is the
-# serialisation, changing sign exactly where the model says it should. The
-# whole-sample plan is not the way out: it gives up the early exit, worth far
-# more than 14.5 % on any scene whose rays die early.
+# That is gone. A replay is appended to the batch the host is already recording
+# and leaves in the same `vkQueueSubmit2`, so there is no wait and no extra
+# submission. Re-measured 2026-08-31 on an RTX 4000 Ada, every plan below baked,
+# paired in one session against the same integrator:
 #
-# Three things had to be right before that comparison meant anything, and each
-# is a trap worth knowing: `bake!` RUNS the plan as it captures it (so the
-# accumulate pass would contribute a spurious sample); a baked plan replays the
-# arguments it captured unless `Mantle.rebind!` writes new ones; and `rebind!`
-# cannot reach a `custom!` pass's arguments, which is the hardware RT trace.
+#     materials  1200x900   10 spp  depth 50    0.744 s -> 0.717 s   1.037x
+#     crown      1000x1400  16 spp  depth 100   2.226 s -> 2.130 s   1.045x
+#
+# Both bit identical to the interpreted render, at every sample count from 1 to 8
+# and at 10 and 16. So the chunk stays at 8 — the early exit is worth far more
+# than either number — and baking is now a win rather than a cost.
+#
+# Four things had to be right before any of this could be compared, and each was
+# wrong at some point, so each is worth knowing: `bake!` used to RUN the plan as
+# it captured it (the accumulate pass would contribute a spurious sample); a
+# baked plan replayed the arguments it captured unless the caller remembered
+# `Mantle.rebind!`; `rebind!` could not reach a `custom!` pass's arguments, which
+# is what the hardware RT trace used to be; and a recording belongs to the
+# argument slot it was captured in, which `bake!` got wrong for any plan that had
+# already run. All four are fixed and pinned by tests in Mantle.
 
 
-"""
-    chunking(max_depth) -> (chunk_rounds, tail_rounds)
-
-How a sample's bounces split into plans.
-
-The whole depth in one plan would be the fewest submissions, and it would cost
-the early exit — which is the thing that makes a deep scene affordable, since
-rays die long before `max_depth` and every dead round still costs its commands.
-So the split is the exit's own granularity: it already only looks every
-[`EXIT_CHECK_INTERVAL`](@ref) rounds, so a plan of exactly that many gives up
-nothing it was not giving up already, and the host speaks once per eight bounces
-instead of once per bounce.
-
-The chunk length has to be EVEN, or the ray queues would not be back where the
-plan expects them for the next run. `EXIT_CHECK_INTERVAL` is 8; a tail that is
-odd is fine, because a tail runs last.
-"""
-function chunking(max_depth::Integer)
-    d = Int(max_depth)
-    k = Int(EXIT_CHECK_INTERVAL)
-    isodd(k) && throw(ArgumentError(
-        "EXIT_CHECK_INTERVAL must be even: a chunk of rounds has to leave the ray " *
-        "queues where the next chunk expects them, and an odd count leaves them " *
-        "swapped."))
-    d >= k ? (k, d % k) : (0, d)
-end
 
 """
     ensure_plans!(state, film, backend, scene parts..., per-render values...) -> refs

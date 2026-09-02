@@ -210,7 +210,7 @@ function postprocess!(film::Film;
     kernel!(dst, src, film.depth, exp_f32, tonemap_mode, inv_gamma, apply_gamma, wp_f32,
             mask_escaped, bg_r, bg_g, bg_b, Int32(size(src, 1)), Int32(size(src, 2));
             ndrange=length(src))
-    KernelAbstractions.synchronize(backend)
+    Mantle.waitidle(mantle_device(backend))
 
     return film.postprocess
 end

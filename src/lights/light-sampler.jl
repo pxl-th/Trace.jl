@@ -254,7 +254,7 @@ function PowerLightSampler(lights::Raycore.MultiTypeSet; scene_radius::Float32=1
     # Launch kernel to compute powers
     kernel = estimate_powers_kernel!(backend)
     kernel(powers_gpu, lights_static, scene_radius; ndrange=n)
-    KA.synchronize(backend)
+    Mantle.waitidle(mantle_device(backend))
 
     # Copy back to CPU for alias table construction (sequential algorithm)
     powers = Array(powers_gpu)

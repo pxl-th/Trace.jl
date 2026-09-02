@@ -91,7 +91,7 @@ function fill_aux_buffers!(film::Film, scene::Scene{<:AdaptedAccel}, camera;
         camera, film.crop_bounds.p_min,
         miss_depth, Int32(w), Int32(h),
         accel; ndrange=n)
-    KA.synchronize(backend)
+    Mantle.waitidle(mantle_device(backend))
     return film
 end
 

@@ -54,7 +54,6 @@ mutable struct VolPathState{Backend}
     # Ray queues (double-buffered for iteration)
     ray_queue_a::WorkQueue{VPRayWorkItem}
     ray_queue_b::WorkQueue{VPRayWorkItem}
-    current_ray_queue::Symbol  # :a or :b
 
     # Medium sample queue (rays in medium with bounded t_max from intersection)
     medium_sample_queue::WorkQueue{VPMediumSampleWorkItem}
@@ -252,7 +251,7 @@ function VolPathState(
     return VolPathState(
         backend,
         mem,
-        ray_queue_a, ray_queue_b, :a,
+        ray_queue_a, ray_queue_b,
         medium_sample_queue, medium_scatter_queue,
         hit_surface_queue, shadow_queue, escaped_queue,
         hit_area_light_queue,
@@ -300,18 +299,4 @@ end
 # State Helpers
 # ============================================================================
 
-"""Get the current ray queue based on the queue selector."""
-function current_ray_queue(state::VolPathState)
-    state.current_ray_queue == :a ? state.ray_queue_a : state.ray_queue_b
-end
-
-"""Get the next ray queue (the one not currently active)."""
-function next_ray_queue(state::VolPathState)
-    state.current_ray_queue == :a ? state.ray_queue_b : state.ray_queue_a
-end
-
-"""Swap the ray queue selector."""
-function swap_ray_queues!(state::VolPathState)
-    state.current_ray_queue = state.current_ray_queue == :a ? :b : :a
-end
 
