@@ -588,14 +588,16 @@ struct VPPlans{R}
 end
 
 """
-Whether `build_plans` returns compiled plans — `bake!`ed, replayed rather than
-re-recorded. `false` by default, and the reason is measured; see `build_plans`.
+Whether `build_plans` records its plans up front rather than leaving the first
+`run!` to do it.
 
-Flip it to compare the two in ONE session, which is the only comparison that
-means anything: a driver update moved both sides of this by more than the
-difference between them.
+`false` by default, and it no longer selects between two modes: `Mantle.run!`
+records on the first run of any plan it can record, so this only moves WHEN that
+happens. Kept because "record before the timing loop" is the difference between
+a first sample that includes the recording and one that does not, which is what
+made every earlier comparison of the two modes hard to read.
 """
-const BAKE_PLANS = Ref(false)
+const RECORD_PLANS = Ref(false)
 
 
 """
@@ -613,39 +615,23 @@ function build_plans(backend, state::VolPathState, framebuffer, refs, max_depth:
                     Mantle.Plan(sample_graph(dev, state, refs, max_depth;
                                              chit_owns_surface, has_media, has_lights)),
                     Mantle.Plan(finalize_graph(dev, state, framebuffer)))
-    # Interpreted or compiled. `Mantle.Plan` turns the graph into passes,
-    # barriers and pipelines; `bake!` is the phase after that, recording the
-    # command buffers once so `run!` replays them instead of rebuilding them
-    # every sample. Both are real modes and this picks one.
+    # There is one mode now. `Mantle.Plan` turns the graph into passes, barriers
+    # and pipelines; recording writes the command buffers, and `run!` does it on
+    # the first run if nothing else has. This only moves that cost out of the
+    # first sample.
     #
-    # INTERPRETED by default, and that is a measurement rather than an opinion.
-    # Paired sweep, both modes in one process, RTX 4000 Ada, 2026-08-31, hw_accel,
-    # median of three with `min` within 1% of `median` on both sides:
-    #
-    #     crown          2.262 s -> 2.312 s   -2.2 %
-    #     bunny_cloud    1.925 s -> 1.946 s   -1.0 %
-    #     killeroo_gold  0.785 s -> 0.811 s   -3.3 %
-    #     materials      0.651 s -> 0.664 s   -2.0 %
-    #     black_hole     0.852 s -> 0.822 s   +3.5 %
-    #
-    # Compiled is not slower for want of batching: it halves the submissions
-    # (155 per render against 313 on materials, counted at `flush_counter`). Nor
-    # is it wrong — the output is bit identical, at every sample count from 1 to
-    # 16. What has not been isolated is where the 2-3 % goes; the open candidate
-    # is that a replayed command buffer must be begun `SIMULTANEOUS_USE`, which
-    # gives up optimisations a `ONE_TIME_SUBMIT` buffer gets.
-    #
-    # Measured the other way on the PREVIOUS driver — 1.037x on materials and
-    # 1.045x on crown, compiled ahead — so this is worth re-running rather than
-    # believing. That is what the switch is for.
-    #
-    # Here rather than left to the caller because the caller cannot know: whether
-    # a plan can be baked is a property of the graph, and this function built it.
-    # Doing it at construction is also what keeps `bake!`'s argument ring in
-    # phase — the recordings are taken before the plan has ever run.
-    if BAKE_PLANS[]
+    # The old comparison — interpreted against compiled — measured 2-3 % in
+    # favour of interpreted on an RTX 4000 Ada on 2026-08-31 (crown -2.2 %,
+    # bunny_cloud -1.0 %, killeroo_gold -3.3 %, materials -2.0 %, black_hole
+    # +3.5 %), and the other way on the driver before it. The open candidate for
+    # that gap was `SIMULTANEOUS_USE`, which a replayed command buffer had to be
+    # begun with; a recording is begun with NO flags now, because there is one
+    # per argument slot and the ring guarantees the previous submission of that
+    # exact buffer has completed. Worth re-measuring rather than believing —
+    # neither number is comparable across the change.
+    if RECORD_PLANS[]
         for p in allplans(plans)
-            Mantle.bake!(p)
+            Mantle.record!(p)
         end
     end
     return plans
@@ -654,20 +640,19 @@ end
 """Every plan of a sample, in the order a sample runs them."""
 allplans(p::VPPlans) = (p.sample, p.finalize)
 
-# On baking, which `build_plans` above can do and does not do by default.
+# On recording, which `build_plans` above can do up front.
 #
-# `Mantle.bake!` is the compiled mode: it records the plan once and replays the
-# recording, where an unbaked `run!` re-records every time. The host saving is
-# real — a round's recording is 0.101 ms and its replay 0.0058 ms — and it used
-# to be swallowed whole by how a replay reached the queue. `replay!` submitted on
-# its own, behind a semaphore wait on the previous replay, so replays were
-# serialised against each other: an ordering that one recording expresses with an
-# intra-submission barrier became a GPU round-trip between submissions. Measured
-# then, paired and interleaved in one session: at a chunk of 8 rounds baking COST
-# 5.2 % on medium_null, and only at a chunk of 64 — the whole sample in one plan,
-# hence one replay — did it win 14.5 %.
+# Recording writes the command buffers once; a run submits them. The host saving
+# is real — a round's recording is 0.101 ms and submitting it 0.0058 ms — and it
+# used to be swallowed whole by how a replay reached the queue. `replay!`
+# submitted on its own, behind a semaphore wait on the previous replay, so
+# replays were serialised against each other: an ordering that one recording
+# expresses with an intra-submission barrier became a GPU round-trip between
+# submissions. Measured then, paired and interleaved in one session: at a chunk
+# of 8 rounds baking COST 5.2 % on medium_null, and only at a chunk of 64 — the
+# whole sample in one plan, hence one replay — did it win 14.5 %.
 #
-# That is gone. A replay is appended to the batch the host is already recording
+# That is gone. A recording is appended to the batch the host is already building
 # and leaves in the same `vkQueueSubmit2`, so there is no wait and no extra
 # submission. Re-measured 2026-08-31 on an RTX 4000 Ada, every plan below baked,
 # paired in one session against the same integrator:
@@ -677,7 +662,7 @@ allplans(p::VPPlans) = (p.sample, p.finalize)
 #
 # Both bit identical to the interpreted render, at every sample count from 1 to 8
 # and at 10 and 16. So the chunk stays at 8 — the early exit is worth far more
-# than either number — and baking is now a win rather than a cost.
+# than either number.
 #
 # Four things had to be right before any of this could be compared, and each was
 # wrong at some point, so each is worth knowing: `bake!` used to RUN the plan as
@@ -686,8 +671,9 @@ allplans(p::VPPlans) = (p.sample, p.finalize)
 # `Mantle.rebind!`; `rebind!` could not reach a `custom!` pass's arguments, which
 # is what the hardware RT trace used to be; and a recording belongs to the
 # argument slot it was captured in, which `bake!` got wrong for any plan that had
-# already run. All four are fixed and pinned by tests in Mantle.
-
+# already run. All four are fixed and pinned by tests in Mantle, and three of the
+# four are unreachable now — `run!` records, rebinds and rotates for itself, and
+# `custom!` is gone.
 
 
 """

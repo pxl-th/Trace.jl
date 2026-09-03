@@ -20,14 +20,16 @@ reason this file is about the trace alone: its indirect command is written by
 `fast_prepare_indirect!`, a dispatch inside the captured buffer, so a replay
 re-executes it and rewrites its own region.)
 
-`Mantle.rebindable` knew, and refused: `rebind!` throws on a plan with a `custom!`
+`Mantle.rebindable` knew, and refused: `rebind!` threw on a plan with a `custom!`
 pass rather than quietly leaving it stale. Which meant hardware ray tracing could
-not be baked at all — one of the two things `bake!` exists for.
+not be recorded at all — the whole point of recording.
 
-So the assertions are: no plan of a hardware render has a `custom!` pass; every
-one is rebindable; and `rebind!` on a BAKED plan really does rewrite the trace's
-argument bytes, which is the part that would silently do nothing if the trace
-ever went back to packing its own.
+`custom!` has since been deleted from Mantle, along with `rebindable`, so the
+first of those assertions is now about a pass kind that does not exist. It stays
+as a pass-kind whitelist instead: every pass of a hardware render is one of the
+kinds the graph models. And `rebind!` on a RECORDED plan really does rewrite the
+trace's argument bytes, which is the part that would silently do nothing if the
+trace ever went back to packing its own.
 """
 
 using Test
@@ -67,12 +69,11 @@ end
     @test !isempty(plans)
 
     @testset "no plan reaches for the escape hatch" begin
+        modelled = (:compute, :render, :copy, :update)
         for pl in plans
-            kinds = [pp.pass.kind for pp in pl.passes]
-            @test (:custom in kinds) == false
-            # The property that follows from it, asked directly: this is what
-            # `bake!` needs and what threw before.
-            @test Mantle.rebindable(pl)
+            for pp in pl.passes
+                @test pp.pass.kind in modelled
+            end
         end
     end
 
@@ -92,11 +93,11 @@ end
         @test t.argsize > 0
         refs = vp.state.plans.refs
 
-        Mantle.bake!(pl)
-        @test pl.baked !== nothing        # threw for a `custom!` plan
+        Mantle.record!(pl)
+        @test Mantle.recorded(pl)         # threw for a `custom!` plan
 
-        # `slotbase` after baking, not before: `bake!` takes the slot the
-        # recording names for the rest of its life and stops rotating.
+        # `slotbase` after recording, not before: `record!` leaves the ring on
+        # the slot whose recording is current.
         off = Mantle.slotbase(pl.args) + t.argoff
         bytes() = copy(unsafe_wrap(Array, pl.args.ptr + off, t.argsize))
 
