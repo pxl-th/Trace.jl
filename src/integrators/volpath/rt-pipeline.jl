@@ -21,14 +21,16 @@
 #
 # That split is the 2026-08-27 move in one import block: everything a kernel says
 # comes from the compiler, everything that runs one comes from the runtime.
-import Lava
-import Lava: lava_rt_launch_id_x, lava_rt_trace_ray,
-             lava_rt_hit_object_trace_ray, lava_rt_reorder_thread,
-             lava_rt_hit_object_execute_shader,
-             lava_rt_payload_store_f32_at, lava_rt_payload_load_f32_at,
-             lava_rt_primitive_id, lava_rt_instance_id,
-             lava_rt_instance_custom_index, lava_rt_ray_tmax,
-             lava_rt_hit_bary_u, lava_rt_hit_bary_v
+# DELETED in phase 1.5: see Mantle/docs/mantle-owns-it.md
+#
+# `import Lava` and the thirteen `lava_rt_*` intrinsics. This was the ONLY
+# reason a renderer that reaches the GPU through Mantle for everything else
+# named a backend at load time — and once Lava depended on Vulkan again, the
+# reason Hikari stopped loading on any machine without a Vulkan driver.
+#
+# The hardware path (`hw-rt.jl`) never needed it: it imports `Mantle: HWTLAS,
+# AdaptedAccel` and nothing else, and it is what runs on Metal. Phase 2.1 gives
+# these intrinsics vendor-free names in KernelInterface.
 import Mantle
 import Mantle: RayTracingPipeline, trace_rays_indirect!
 

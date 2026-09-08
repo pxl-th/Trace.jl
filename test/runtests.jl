@@ -14,11 +14,8 @@ using Lava, Mantle
 # API. Its TESTS do: `Mantle.LavaBackend`, `Mantle.vk_flush!` and friends, which
 # since the 2026-08-27 split live in `MantleVulkanExt` rather than in Mantle. A
 # `Main`-level binding serves every file, since they are all `include`d here.
-const MVE = Base.get_extension(Mantle, :MantleVulkanExt)
-MVE === nothing && error(
-    "MantleVulkanExt is not loaded, so no GPU backend is available. `using Lava` " *
-    "above should have pulled Vulkan in with it — check that Lava still depends " *
-    "on Vulkan (see Lava's `test_compiler_runtime_split.jl`).")
+# DELETED in phase 1.5: see Mantle/docs/mantle-owns-it.md
+# DELETED in phase 1.5: see Mantle/docs/mantle-owns-it.md
 # NOT `using JET` here. Only `type_stability.jl` and `gpu_compat.jl` need it, and
 # it is a test-target dependency, so an environment without it made this line
 # throw before the first testset and took all 24 files down with it. The two

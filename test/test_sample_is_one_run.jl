@@ -22,7 +22,7 @@ using Test, Hikari, Mantle, Raycore, GeometryBasics
 using GeometryBasics: normal_mesh, Tesselation, Sphere, Point3f, Point2f
 
 # Bound by runtests.jl; bound here so the file also works standalone.
-@isdefined(MVE) || (MVE = Base.get_extension(Mantle, :MantleVulkanExt))
+# DELETED in phase 1.5: see Mantle/docs/mantle-owns-it.md
 
 function onerun_scene(backend)
     scene = Hikari.Scene(; backend = backend)
