@@ -13,7 +13,7 @@
 # Both `closest_hit` and `miss` receive the same BDA argument signature as
 # the raygen (queues, materials, etc.) — see Lava's
 # `RayTracingPipeline(... chit_miss_take_args=true)` switch.  Both stages
-# look up their work item via `work_queue.items[lava_rt_launch_id_x() + 1]`.
+# look up their work item via `work_queue.items[rt_launch_id_x() + 1]`.
 
 # The DEVICE-side intrinsics are Lava's — they are what a shader body calls, and
 # the compiler is what lowers them. The PIPELINE that dispatches them is Mantle's,
@@ -57,7 +57,7 @@ import Mantle: RayTracingPipeline, trace_rays_indirect!
     rr_depth::Int32,
 )
     sample_idx = @inbounds sample_idx_ref[Int32(1)]
-    lid = lava_rt_launch_id_x()
+    lid = rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
     ray = work.ray
 
@@ -69,7 +69,7 @@ import Mantle: RayTracingPipeline, trace_rays_indirect!
     #      now with the reordered warp, so vp_closesthit_shade runs coherently.
     # On hardware/drivers that do not support SER, the SPIR-V emitter falls
     # back to the implicit-trace path automatically (no SER opcodes emitted).
-    lava_rt_hit_object_trace_ray(
+    rt_hit_object_trace_ray(
         UInt32(0),                    # ray flags
         UInt32(0xFF),                 # cull mask
         UInt32(0),                    # SBT record offset
@@ -78,8 +78,8 @@ import Mantle: RayTracingPipeline, trace_rays_indirect!
         Float32(ray.o[1]), Float32(ray.o[2]), Float32(ray.o[3]), Float32(ray.t_min),
         Float32(ray.d[1]), Float32(ray.d[2]), Float32(ray.d[3]), Float32(ray.t_max),
     )
-    lava_rt_reorder_thread()
-    lava_rt_hit_object_execute_shader()
+    rt_reorder_thread()
+    rt_hit_object_execute_shader()
     return nothing
 end
 
@@ -109,16 +109,16 @@ end
 )
     sample_idx = @inbounds sample_idx_ref[Int32(1)]
     camera = @inbounds camera_ref[Int32(1)]
-    lid = lava_rt_launch_id_x()
+    lid = rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
 
     # Hit info from RT intrinsics.
-    t_hit = lava_rt_ray_tmax()
-    prim_id = lava_rt_primitive_id()
-    inst_id = lava_rt_instance_id()
-    inst_custom_idx = lava_rt_instance_custom_index()
-    bu = lava_rt_hit_bary_u()
-    bv = lava_rt_hit_bary_v()
+    t_hit = rt_ray_tmax()
+    prim_id = rt_primitive_id()
+    inst_id = rt_instance_id()
+    inst_custom_idx = rt_instance_custom_index()
+    bu = rt_hit_bary_u()
+    bv = rt_hit_bary_v()
     bary = SVector{3,Float32}(1f0 - bu - bv, bu, bv)
 
     # Look up the triangle from the per-instance flat array.
@@ -157,7 +157,7 @@ end
     # NOTE on alpha test: the compute+ray-query kernel does a 16-iteration
     # alpha-test loop here.  In the RT pipeline that belongs in an `anyhit`
     # shader (the GPU re-invokes anyhit per intersection candidate and we
-    # call `lava_rt_ignore_intersection()` to skip).  This first
+    # call `rt_ignore_intersection()` to skip).  This first
     # implementation does NOT have an anyhit; scenes with alpha textures
     # will treat them as opaque under HW RT.  Add anyhit as a follow-up
     # when the basic chit-shading variant is shown to win.
@@ -235,7 +235,7 @@ end
     rr_depth::Int32,
 )
     sample_idx = @inbounds sample_idx_ref[Int32(1)]
-    lid = lava_rt_launch_id_x()
+    lid = rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
     if has_medium(work.medium_idx)
         push!(medium_sample_queue, VPMediumSampleWorkItem(work))
@@ -285,15 +285,15 @@ struct VPClosesthitTyped{T} end
 ) where {T}
     sample_idx = @inbounds sample_idx_ref[Int32(1)]
     camera = @inbounds camera_ref[Int32(1)]
-    lid = lava_rt_launch_id_x()
+    lid = rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
 
-    t_hit = lava_rt_ray_tmax()
-    prim_id = lava_rt_primitive_id()
-    inst_id = lava_rt_instance_id()
-    inst_custom_idx = lava_rt_instance_custom_index()
-    bu = lava_rt_hit_bary_u()
-    bv = lava_rt_hit_bary_v()
+    t_hit = rt_ray_tmax()
+    prim_id = rt_primitive_id()
+    inst_id = rt_instance_id()
+    inst_custom_idx = rt_instance_custom_index()
+    bu = rt_hit_bary_u()
+    bv = rt_hit_bary_v()
     bary = SVector{3,Float32}(1f0 - bu - bv, bu, bv)
 
     @inbounds tri_idx = Int(accel.offsets[inst_id + UInt32(1)]) + Int(prim_id) + 1

@@ -12,7 +12,6 @@ GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 ImageCore = "a09fc81d-aa75-5fe9-8630-4744c3626534"
 ImageIO = "82e4d734-157c-48bb-816b-45c225c6df19"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
-Lava = "3a680b1f-cb25-4bee-9cf7-bc880b76dc8c"
 Mantle = "8f4c1f2e-6a3d-4b71-9c05-2e7d8a1b6f34"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
@@ -37,7 +36,6 @@ StructArrays = "0.6.18"
 Zlib_jll = "1.3.1"
 
 [sources]
-Lava = {url = "https://github.com/SimonDanisch/Lava.jl", rev = "sd/nvidia"}
 Mantle = {url = "https://github.com/SimonDanisch/Mantle.jl", rev = "sd/mantle-dev"}
 Raycore = {url = "https://github.com/JuliaGeometry/Raycore.jl", rev = "sd/with-texture"}
 
