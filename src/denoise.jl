@@ -171,12 +171,17 @@ Applies a 5x5 filter with edge-stopping weights.
     @Const(depth),   # Float32 matrix
     @Const(width::Int32), @Const(height::Int32),
     @Const(step_size::Int32),
-    @Const(sigma_color::Float32),
-    @Const(sigma_normal::Float32),
-    @Const(sigma_depth::Float32)
+    # One-element device arrays (`GPURef`s): the plan is recorded once, and a
+    # `DenoiseConfig` that changes between runs reaches it through these.
+    @Const(sigma_color_ref),
+    @Const(sigma_normal_ref),
+    @Const(sigma_depth_ref)
 )
     idx = @index(Global)
     num_pixels = width * height
+    sigma_color = sigma_color_ref[1]
+    sigma_normal = sigma_normal_ref[1]
+    sigma_depth = sigma_depth_ref[1]
 
      if idx <= num_pixels
         # Convert linear index to 2D coordinates (row, col) for Julia matrices
@@ -322,9 +327,17 @@ function denoise_plan!(film::Film, config::DenoiseConfig)
     n_pixels = width * height
     mem = DeviceMemory(backend)
     scratch = alloc!(mem, eltype(film.framebuffer), size(film.framebuffer))
-    refs = (sigma_color = Ref(config.sigma_color),
-            sigma_normal = Ref(config.sigma_normal),
-            sigma_depth = Ref(config.sigma_depth))
+    # `GPURef`s, not `Ref`s: a `Ref` is read once, at `record!`, and a plan
+    # records once — Mantle refuses one in a dispatch for exactly that reason.
+    # A `GPURef` holds the value on the device and `r[] = x` stores into it
+    # before the next run, which is what `denoise_plan!` does above when the
+    # config changes. Owned by `mem`, so `free!` takes them with the scratch.
+    refs = (sigma_color = Mantle.GPURef(mem.dev, config.sigma_color),
+            sigma_normal = Mantle.GPURef(mem.dev, config.sigma_normal),
+            sigma_depth = Mantle.GPURef(mem.dev, config.sigma_depth))
+    for r in refs
+        own!(mem, r)
+    end
 
     g = Mantle.Graph(mantle_device(backend))
     for i in 1:config.iterations
@@ -337,6 +350,9 @@ function denoise_plan!(film::Film, config::DenoiseConfig)
             Mantle.use(p, dst; write = true)
             Mantle.use(p, film.normal; read = true)
             Mantle.use(p, film.depth; read = true)
+            Mantle.use(p, refs.sigma_color; read = true)
+            Mantle.use(p, refs.sigma_normal; read = true)
+            Mantle.use(p, refs.sigma_depth; read = true)
             Mantle.dispatch!(p, atrous_denoise_kernel!,
                              (dst, src, film.normal, film.depth,
                               Int32(width), Int32(height), step,
@@ -355,7 +371,8 @@ function denoise_plan!(film::Film, config::DenoiseConfig)
                              (film.framebuffer, scratch, Int32(n_pixels)), n_pixels)
         end
     end
-    made = DenoisePlan(film.framebuffer, config.iterations, scratch, refs, Mantle.Plan(g), mem)
+    made = DenoisePlan(film.framebuffer, config.iterations, scratch, refs,
+                       Mantle.record!(Mantle.Plan(g)), mem)
     film.denoise_plan[] = made
     return made
 end

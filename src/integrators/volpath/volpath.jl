@@ -60,6 +60,25 @@ mutable struct VolPath <: Integrator
     # (cull_mask & instance_mask) != 0 are visible to rays from this integrator.
     # Default 0xFF matches all instances (identical to old hard-coded behavior).
     cull_mask::UInt32
+
+    # The scene this integrator's plans listen to: `sync!` and the scene
+    # mutators drop the plans of every listening integrator, which is what lets
+    # a render compare nothing. `nothing` until the first `render!` registers.
+    listening_to::Any
+
+    # The adapted scene behind those plans. `Adapt.adapt(backend, scene)` is a
+    # bag of VIEWS over the scene's device arrays, so a mutation that writes
+    # in place (a refit, a surgical same-type `push!`) is visible through it,
+    # and one that changes shape announces itself through `notify_scene_changed`
+    # — which drops this via `invalidate!`. It used to be rebuilt on every
+    # sample: a few hundred bytes of wrapper construction per sample, for
+    # nothing.
+    adapted::Any
+
+    # The per-run refs of the current plans, typed (see `PerRun`): `nothing`
+    # until the first `render!` builds plans, and again when they are dropped.
+    # The plans own the object; this is the typed handle to it.
+    perrun::Union{Nothing, PerRun{PerspectiveCamera}, PerRun{MatrixCamera}}
 end
 
 """
@@ -124,12 +143,52 @@ function VolPath(;
         nothing,           # initial_medium_key
         nothing,           # filter_sampler_gpu
         cull_mask,
+        nothing,           # listening_to
+        nothing,           # adapted
+        nothing,           # perrun
     )
     # No GC finalizer — the VolPathState is shared with scene_state.integrator_state,
     # so proactive free! from a finalizer would free arrays still in use by the render loop.
     # GPU memory is freed by: explicit close(screen), or LavaArray's own DataRef finalizers.
     return vp
 end
+
+"""
+    invalidate!(vp::VolPath)
+
+Drop the plans `vp` recorded — and the adapted scene they were built from —
+so the next `render!` adapts and builds again. Scene edits do this themselves
+— `sync!(scene)` and the scene mutators notify every integrator listening to
+the scene. The adaptation goes WITH the plans: a software TLAS is adapted as a
+snapshot of its node and instance arrays, and an edit that rebuilds it makes
+new ones, so plans rebuilt from the cached adaptation traced the geometry from
+before the edit (nine spheres after the scene was down to one) and the
+accel's dirty flag was never consumed. What has no verb is the integrator's own
+fields: `max_depth`, `regularize`, `samples_per_pixel`, `max_component_value`,
+`filter_params` and `filter_sampler_data` are baked into the plans at
+`record!`, so a caller who reassigns them between renders calls this once.
+(The per-run values — camera, initial medium, filter params, sample index —
+are `GPURef`s and never need this: they are written per run, not baked.)
+"""
+function invalidate!(vp::VolPath)
+    # The adaptation first, whether or not there are plans: it is what an edit
+    # made stale, and `render!` re-adapts (which is the `sync!` that consumes
+    # the accel's flag) when it finds none. The medium the camera starts in was
+    # detected through it, so that goes too.
+    vp.adapted = nothing
+    vp.initial_medium_key = nothing
+    st = vp.state
+    (st === nothing || st.plans === nothing) && return nothing
+    # Same contract as `rebuild_plans!`: the plans go back
+    # without a wait; their regions are retired, not released.
+    free!(st.plans)
+    st.plans = nothing
+    vp.perrun = nothing
+    return nothing
+end
+
+# The scene-side verb (see `notify_scene_changed` in scene.jl).
+invalidate_plans!(vp::VolPath) = invalidate!(vp)
 
 """
     Base.close(vp::VolPath)
@@ -149,8 +208,18 @@ function Base.close(vp::VolPath)
     vp.state = nothing
     vp.initial_medium_camera_pos = nothing
     vp.initial_medium_key = nothing
+    vp.listening_to = nothing
+    vp.adapted = nothing
+    vp.perrun = nothing
     return nothing
 end
+
+# Whether the accel carries a topology change nothing has announced yet. Scene
+# mutators notify themselves; this reads the flag Raycore's accel-level
+# `push!`/`delete!` set, for callers who mutated below the scene API.
+# `transforms_dirty` is deliberately excluded: a refit writes the same buffers
+# in place, and a recorded plan survives it.
+scene_dirty(scene::Scene) = scene.accel.dirty
 
 # Scene adaptation dispatch — overridden for AdaptedAccel in hikari_integration.jl
 adapt_scene_for_render(backend, scene, ::VolPath) = Adapt.adapt(backend, scene)
@@ -201,16 +270,27 @@ Following pbrt-v4's GetCameraSample: samples the filter, computes offset and wei
     pdf_per_pixel,
     filter_weight_per_pixel,
     @Const(height::Int32),
-    @Const(camera),
-    @Const(camera_needs_time::Bool),  # camera.shutter_open != shutter_close
-    @Const(camera_needs_lens::Bool),  # camera.lens_radius > 0
-    @Const(sample_idx::Int32),
-    @Const(initial_medium_idx),
-    @Const(filter_params::GPUFilterParams),
+    @Const(camera_ref),         # GPURef: one-element device array holding the camera
+    @Const(sample_idx_ref),
+    @Const(initial_medium_ref), # GPURef{SetKey}: the medium the camera starts in
+    @Const(filter_params_ref),  # GPURef{GPUFilterParams}
     filter_sampler_data,  # GPUFilterSamplerData or nothing for Box/Triangle
     rng  # SobolRNG passed via Adapt
 )
     idx = @index(Global)
+    # See `vp_trace_and_shade_kernel!`: the sample index is a `Mantle.GPURef`.
+    # So are the camera, the initial medium and the filter params — per-run
+    # values the recorded commands hold the ADDRESS of, written by an `Update`
+    # in the run's own submission. What a run changes never rebuilds the plan.
+    sample_idx = sample_idx_ref[Int32(1)]
+    camera = camera_ref[Int32(1)]
+    initial_medium_idx = initial_medium_ref[Int32(1)]
+    filter_params = filter_params_ref[Int32(1)]
+    # The effects flags were computed CPU-side and passed as arguments; with the
+    # camera behind a ref they would need refs of their own. They are two field
+    # reads on a value already in registers, so the kernel computes them.
+    camera_needs_time = camera_uses_motion_blur(camera)  # shutter_open != shutter_close
+    camera_needs_lens = camera_uses_lens(camera)         # lens_radius > 0
     num_pixels = rng.width * height
 
     @inbounds if idx <= num_pixels
@@ -438,7 +518,15 @@ function finalize_film!(vp::VolPath, film::Film)
     plans === nothing && throw(ArgumentError(
         "finalize_film!: no plans yet — the divide is a graph pass, and the graph " *
         "is built by the first `render!`. Render a sample before finalizing."))
-    plans.key.framebuffer === film.framebuffer || throw(ArgumentError(
+    run_finalize!(plans, film.framebuffer)
+    return nothing
+end
+
+# The barrier `runsample!` is, for the finalize plan: `VolPathState.plans` is
+# `Any`, so the framebuffer check and the `run!` would otherwise be dynamic
+# reads at this level. Inside, the plan is concrete.
+function run_finalize!(plans::VPPlans, fb)
+    plans.framebuffer === fb || throw(ArgumentError(
         "finalize_film!: this film is not the one the plans were built for. A pass " *
         "names its target when the plan is compiled, so finalizing into another " *
         "film would write the one that was rendered. Render this film first."))
@@ -479,18 +567,106 @@ function render!(
     height, width = size(img)
     backend = KA.get_backend(img)
 
-    # Adapt scene for kernel dispatch (TLAS → StaticTLAS, MultiTypeSet → StaticMultiTypeSet).
-    # Cheap: `Adapt.adapt(backend, scene.accel)` reads `scene.accel.static_tlas`
-    # after a no-op `sync!`. Do NOT cache this return across calls — consumers
-    # MUST re-read per dispatch so scene mutations (push!/delete!) are visible.
-    adapted = adapt_scene_for_render(backend, scene, vp)
+    # Scene edits announce themselves: the mutators and `sync!` call
+    # `notify_scene_changed`, which drops this integrator's plans. The one
+    # channel that cannot notify is a mutation of the accel BELOW the scene API
+    # (Raycore's `push!`/`delete!` set a flag and know nothing of Hikari), so
+    # that flag is read here, once, before `adapt`'s internal `sync!` consumes
+    # it. Two field reads; no value is compared.
+    scene_dirty(scene) && notify_scene_changed(scene)
+    # Registration makes this integrator a listener, so the notifications above
+    # reach its plans. One pointer compare on the hit path. A DIFFERENT scene
+    # drops the cached adaptation with the registration.
+    if vp.listening_to !== scene
+        vp.adapted = nothing
+        listen_scene!(scene, vp)
+        vp.listening_to = scene
+    end
+
+    # The adapted scene views, cached on the integrator. One nothing-check on
+    # the hit path; the medium detect below reads through it, and a scene
+    # mutation drops it with the plans.
+    adapted = vp.adapted
+    if adapted === nothing
+        adapted = adapt_scene_for_render(backend, scene, vp)
+        vp.adapted = adapted
+    end
+
+    # The medium the camera starts in can change with the camera — a call
+    # argument, not an event. One compare on the hit; the detect runs once per
+    # distinct position. Before the branch: the build needs the key.
+    camera_pos = get_camera_position(camera)
+    initial_medium = if vp.initial_medium_camera_pos === camera_pos && vp.initial_medium_key !== nothing
+        vp.initial_medium_key::SetKey
+    else
+        key = detect_initial_medium(backend, adapted.accel, adapted.media_interfaces, camera_pos, vp)::SetKey
+        vp.initial_medium_camera_pos = camera_pos
+        vp.initial_medium_key = key
+        key
+    end
+
+    # The reads that remain: plans built for THIS film, holding a ref of THIS
+    # camera's type. Everything else — the state, the queues, the build itself
+    # — hangs off the rebuild branch, which an event takes (`invalidate!` drops
+    # the state) or a first call. The film and the camera are call ARGUMENTS,
+    # which cannot announce themselves; scene mutation never comes through here
+    # at all.
+    plans = vp.state === nothing ? nothing : vp.state.plans
+    if plans === nothing || plans.framebuffer !== img || !holdscamera(vp.perrun, camera)
+        rebuild_render_state!(vp, scene, film, camera, backend, initial_medium)
+        plans = (vp.state::VolPathState).plans
+    end
+
+    # The film's count of samples taken is the caller's; the device keeps its
+    # own, incremented by the sample plan's first pass (see `resetsamples!`).
+    # Zero here is the one thing the host has to say about it: a film that was
+    # cleared starts the device's count over.
+    film.iteration_index[] == 0 && resetsamples!(vp.perrun)
+    film.iteration_index[] += Int32(1)
+
+    # A sample's whole host input to the recorded plans: the per-run values
+    # that CHANGED, stored through their refs — nothing at all for a still
+    # scene. Through `vp.perrun`, typed as a union over the camera type, so
+    # the compare is static and boxes nothing; `plans` is `Any`.
+    storechanged!(vp.perrun, camera, initial_medium, vp.filter_params)
+    # A sample is one plan: setup, the bounce loop, accumulate. The loop's exit
+    # test runs on the device — `Mantle.repeat!` gated on the ray queue's live
+    # count — so there is no chunking, no host read of that count, and nothing
+    # to wait for between rounds.
+    runsample!(plans)
+
+    # Update film: divide weighted sum by weight sum (pbrt-v4 style).
+    # The kwarg lets batched callers (RayMakie's colorbuffer loop) skip the
+    # intermediate framebuffer writes between samples and only finalize once
+    # at the end — saves a 1.4 Mpx dispatch per sample on killeroo.
+    if finalize_framebuffer
+        finalize_film!(vp, film)
+    end
+
+    return nothing
+end
+
+"""
+    rebuild_render_state!(vp, scene, film, camera, backend, initial_medium)
+
+Build everything a sample needs that does not change between samples: the
+`VolPathState`, the per-material queues, the filter sampler's device copy and
+the plans themselves. Reached from `render!` on the first sample and after an
+invalidation event — never on the reuse path, so there is nothing to check
+here; the state-rebuild condition answers the film the plans were just dropped
+for.
+"""
+function rebuild_render_state!(vp::VolPath, scene::AbstractScene, film::Film,
+                               camera::Camera, backend, initial_medium)
+    img = film.framebuffer
+    height, width = size(img)
+    adapted = vp.adapted::Scene  # set by render! just above
     accel = adapted.accel
     materials = adapted.materials
     media = adapted.media
     media_interfaces = adapted.media_interfaces
     lights = adapted.lights
 
-    # Allocate or validate state
     # Note: Rebuild state if lights changed (num_lights mismatch) to update light sampler
     n_lights = length(lights)
     # `hit_area_light_queue` and the per-material typed queues are vestigial
@@ -546,54 +722,30 @@ function render!(
     pmq_capacity = chit_owns_surface ? 1 : n_pixels
     ensure_per_material_queue!(state, materials, pmq_capacity)
 
-    # Get current iteration index and increment
-    sample_idx = film.iteration_index[] + Int32(1)
-    film.iteration_index[] = sample_idx
-
-    # Detect which medium the camera is inside (vacuum if outside all media)
-    # Cached: camera position doesn't change between samples, so detect once per render
-    camera_pos = get_camera_position(camera)
-    if vp.initial_medium_camera_pos === camera_pos && vp.initial_medium_key !== nothing
-        initial_medium = vp.initial_medium_key
-    else
-        initial_medium = detect_initial_medium(backend, accel, media_interfaces, camera_pos, vp)
-        vp.initial_medium_camera_pos = camera_pos
-        vp.initial_medium_key = initial_medium
-    end
-
-    # Adapt filter sampler data to GPU — cache on struct to avoid re-uploading every sample
+    # Adapt filter sampler data to GPU — cache on struct to avoid re-uploading
     if vp.filter_sampler_gpu === nothing
         vp.filter_sampler_gpu = Adapt.adapt(backend, vp.filter_sampler_data)
     end
 
-    # Compute camera effects flags CPU-side so the kernel doesn't have to
-    # walk getproperty chains into Camera.core.shutter_*.  These are uniform
-    # across all pixels of the render.
-    refs = ensure_plans!(state, film, backend,
-                         accel, media_interfaces, media, materials, lights,
-                         camera, camera_uses_motion_blur(camera), camera_uses_lens(camera),
-                         initial_medium, vp.filter_params, vp.filter_sampler_gpu,
-                         vp.regularize, Int32(vp.samples_per_pixel),
-                         vp.max_component_value, vp.max_depth, sample_idx;
-                         chit_owns_surface = chit_owns_surface,
-                         has_media = has_media,
-                         has_lights = length(lights) > 0)
-    plans = state.plans
-
-    # A sample is one plan: setup, the bounce loop, accumulate. The loop's exit
-    # test runs on the device — `Mantle.repeat!` gated on the ray queue's live
-    # count — so there is no chunking, no host read of that count, and nothing
-    # to wait for between rounds.
-    Mantle.run!(plans.sample)
-
-    # Update film: divide weighted sum by weight sum (pbrt-v4 style).
-    # The kwarg lets batched callers (RayMakie's colorbuffer loop) skip the
-    # intermediate framebuffer writes between samples and only finalize once
-    # at the end — saves a 1.4 Mpx dispatch per sample on killeroo.
-    if finalize_framebuffer
-        finalize_film!(vp, film)
-    end
-
+    # The camera effects flags the kernel used to get as arguments are computed
+    # on the device now — with the camera behind a `GPURef` they would need refs
+    # of their own, and they are two field reads on a value already in registers.
+    rebuild_plans!(state, film, backend,
+                   accel, media_interfaces, media, materials, lights,
+                   camera,
+                   initial_medium, vp.filter_params, vp.filter_sampler_gpu,
+                   vp.regularize, Int32(vp.samples_per_pixel),
+                   vp.max_component_value, vp.max_depth;
+                   chit_owns_surface = chit_owns_surface,
+                   has_media = has_media,
+                   has_lights = length(lights) > 0)
+    # The typed handle to what the plans just made. The union names the camera
+    # types a sample can be rendered with; another is a plan the field cannot
+    # hold, said here rather than as a TypeError.
+    pr = (state.plans::VPPlans).perrun
+    pr isa Union{PerRun{PerspectiveCamera}, PerRun{MatrixCamera}} || throw(ArgumentError(
+        "VolPath renders with a PerspectiveCamera or a MatrixCamera, not a $(typeof(camera))"))
+    vp.perrun = pr
     return nothing
 end
 

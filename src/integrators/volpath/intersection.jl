@@ -288,11 +288,21 @@ end
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
     max_depth::Int32, do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera,
+    sobol_rng, sample_idx_ref,
+    camera_ref,
     samples_per_pixel::Int32,
     rr_depth::Int32,
 )
+    # The sample index is a `Mantle.GPURef`, so it arrives as a one-element
+    # device array and the recorded commands hold its ADDRESS. That is what lets
+    # one recording render every sample: the plan is written once and the host
+    # writes this number with one `cmd_update_buffer` per run. It was an `Int32`
+    # packed into the arguments of every dispatch that reads it, which is why a
+    # recorded plan needed the whole per-run repack.
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
+    # The camera is a `GPURef` for the same reason: a moved camera is an update
+    # in the run's own submission, not a new plan.
+    camera = @inbounds camera_ref[Int32(1)]
     # ─── Medium ray: trace and defer all shading to the medium pipeline ───
     if has_medium(work.medium_idx)
         hit, primitive, t_hit, barycentric, inst_idx = Raycore.closest_hit(accel, work.ray)

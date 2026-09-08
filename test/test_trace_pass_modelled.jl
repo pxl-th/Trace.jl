@@ -16,20 +16,21 @@ scratch region whose bump pointer has since been rewound and handed to whatever
 recorded next. Not stale values, aliased ones.
 
 (An indirect DISPATCH is fine in the same situation, and the contrast is the
-reason this file is about the trace alone: its indirect command is written by
-`fast_prepare_indirect!`, a dispatch inside the captured buffer, so a replay
-re-executes it and rewrites its own region.)
+reason this file is about the trace alone: its indirect command is written by a
+prepare kernel inside the recorded buffer, so a run re-executes it and rewrites
+its own region.)
 
-`Mantle.rebindable` knew, and refused: `rebind!` threw on a plan with a `custom!`
-pass rather than quietly leaving it stale. Which meant hardware ray tracing could
-not be recorded at all — the whole point of recording.
+`Mantle.rebindable` knew, and refused: the per-run argument rewrite threw on a
+plan with a `custom!` pass rather than quietly leaving it stale. Which meant
+hardware ray tracing could not be recorded at all — the whole point of recording.
 
-`custom!` has since been deleted from Mantle, along with `rebindable`, so the
-first of those assertions is now about a pass kind that does not exist. It stays
-as a pass-kind whitelist instead: every pass of a hardware render is one of the
-kinds the graph models. And `rebind!` on a RECORDED plan really does rewrite the
-trace's argument bytes, which is the part that would silently do nothing if the
-trace ever went back to packing its own.
+`custom!` has since been deleted from Mantle, along with `rebindable` and the
+per-run rewrite itself. So the first of those assertions is now about a pass kind
+that does not exist, and stays as a pass-kind whitelist: every pass of a hardware
+render is one of the kinds the graph models. The second becomes what replaced the
+rewrite — the trace is packed with the ADDRESS of `refs.sample_idx`, a
+`Mantle.GPURef`, so the same recorded raygen renders a different sample every
+run and the argument bytes never move.
 """
 
 using Test
@@ -86,34 +87,32 @@ end
                      (d for pp in pl.passes for d in pp.dispatches))]
     @test !isempty(traced)
 
-    @testset "plan $i: arguments live in the plan, and rebind! rewrites them" for
+    @testset "plan $i: the trace's arguments live in the plan" for
             (i, pl) in enumerate(traced)
         t = first(d for pp in pl.passes for d in pp.dispatches
                   if d isa Mantle.CompiledTrace)
         @test t.argsize > 0
-        refs = vp.state.plans.refs
+        plans = vp.state.plans
 
         Mantle.record!(pl)
         @test Mantle.recorded(pl)         # threw for a `custom!` plan
 
-        # `slotbase` after recording, not before: `record!` leaves the ring on
-        # the slot whose recording is current.
-        off = Mantle.slotbase(pl.args) + t.argoff
-        bytes() = copy(unsafe_wrap(Array, pl.args.ptr + off, t.argsize))
+        bytes() = copy(unsafe_wrap(Array, pl.args.ptr + t.argoff, t.argsize))
 
-        refs.sample_idx[] = Int32(3)
-        Mantle.rebind!(pl)
-        a = bytes()
+        before = bytes()
+        plans.perrun.sample_idx[] = Int32(3)
+        Mantle.run!(pl)
+        plans.perrun.sample_idx[] = Int32(99)
+        Mantle.run!(pl)
+        Mantle.waitfor!(pl)
 
-        refs.sample_idx[] = Int32(99)
-        Mantle.rebind!(pl)
-        b = bytes()
-
-        # The sample index is one of the trace's arguments, so a rebind that
-        # reached it changed the slot. Under `custom!` this was unreachable:
-        # `rebind!` threw, and had it not, it would have walked a pass with
-        # nothing in `dispatches` to repack.
-        @test a != b
+        # The argument bytes do NOT move — that is the whole of what a `GPURef`
+        # buys. Under `custom!` the trace packed its own arguments into queue
+        # scratch the pool later rewound; under the per-run rewrite they were
+        # host stores into memory a submission could still be reading. Now they
+        # are written once, at `record!`, and the sample index reaches the raygen
+        # through the address they hold.
+        @test bytes() == before
     end
 
     close(vp)

@@ -19,9 +19,14 @@ default_accel(backend, ::Val{true}) = HWTLAS{Raycore.Triangle{TriangleMeta}}(bac
 
 # Scene sync! for HWTLAS scenes
 function sync!(scene::Scene{<:HWTLAS})
+    # Same contract as the TLAS method: invalidate plans only when the sync!
+    # actually rebuilds (`dirty`); a transforms-only refit writes the same
+    # buffers in place and a recorded plan survives it.
+    changed = scene.accel.dirty
     Raycore.sync!(scene.accel)
     bound = Raycore.world_bound(scene.accel)
     scene.bounds[] = (bound, bounding_sphere(bound))
+    changed && notify_scene_changed(scene)
     return scene
 end
 

@@ -547,11 +547,15 @@ concern from materials)."""
     max_depth::Int32,
     do_regularize::Bool,
     sobol_rng,
-    sample_idx::Int32,
-    camera,
+    sample_idx_ref,
+    camera_ref,
     samples_per_pixel::Int32,
     rr_depth::Int32,
 ) where T
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
+    # Behind a `GPURef`, like the sample index: a moved camera is an update in
+    # the run's own submission, not a new plan.
+    camera = @inbounds camera_ref[Int32(1)]
     # The typed queue carries 4-byte indices; the hit payload lives once in
     # the shared hit_surface_queue.
     work = hit_surface_queue.items[typed.idx]

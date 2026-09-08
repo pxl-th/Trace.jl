@@ -36,7 +36,7 @@ end
                          (Mantle.use(p, dst; write = true),
                           Mantle.use(p, src; read = true), 3f0), n)
     end
-    Mantle.run!(Mantle.Plan(g))
+    Mantle.run!(Mantle.record!(Mantle.Plan(g)))   # run! never records
     @test all(==(6f0), Array(Mantle.storage(dst)))
 end
 
@@ -78,7 +78,7 @@ end
                          (q, Mantle.use(p, out; write = true)),
                          Mantle.DeviceRange(q.size; max = cap))
     end
-    Mantle.run!(Mantle.Plan(g))
+    Mantle.run!(Mantle.record!(Mantle.Plan(g)))   # run! never records
     KA.synchronize(backend)
 
     # The drain covered exactly what the fill pushed. Both halves matter: the
@@ -122,7 +122,7 @@ end
                              Mantle.DeviceRange(q.size; max = cap))
         end
     end
-    Mantle.run!(Mantle.Plan(g))
+    Mantle.run!(Mantle.record!(Mantle.Plan(g)))   # run! never records
     KA.synchronize(backend)
     @test [count(!=(0f0), Array(o)) for o in outs] == wants
 
@@ -147,33 +147,45 @@ end
                          (q, Mantle.use(p, out; write = true)),
                          Mantle.DeviceRange(q.size; max = cap))
     end
-    Mantle.run!(Mantle.Plan(g))
+    Mantle.run!(Mantle.record!(Mantle.Plan(g)))   # run! never records
     KA.synchronize(backend)
     @test all(==(7f0), Array(out))
 
     Hikari.free!(mem)
 end
 
-@testset "a Ref argument is read per run, not per plan" begin
+# A `GPURef` arrives as a one-element device array, so the kernel reads
+# through it. The address in the packed arguments never changes; what is
+# behind it does.
+@kernel function _probe_readref!(dst, @Const(src), kref)
+    i = @index(Global)
+    @inbounds dst[i] = src[i] * kref[1]
+end
+
+@testset "a per-run value reaches a recorded plan through its GPURef" begin
     # How everything that changes between samples reaches a recorded dispatch:
-    # the sample index, the camera, the scene re-adapted every call. A plan
-    # resolves its arguments once, so a value packed at compile time would be
-    # the one it was built with for ever.
+    # the sample index, the camera. NOT by re-reading a `Ref` — a plan packs
+    # its arguments once, at `record!`, and a `Ref` is frozen there. A value
+    # that moves between runs is a `GPURef`, rewritten by an `Update` as a
+    # command in the run's own submission. (Mantle's
+    # test_recorded_run_semantics.jl pins both halves; this keeps the question
+    # at Hikari's device boundary.)
     backend = MVE.LavaBackend()
     dev = Hikari.mantle_device(backend)
     n = 64
     src = KA.allocate(backend, Float32, n)
     KA.fill!(src, 1f0)
     dst = Mantle.Buffer(dev, zeros(Float32, n))
-    scale = Ref(3f0)
+    scale = Mantle.GPURef(dev, 3f0)
 
     g = Mantle.Graph(dev)
     Mantle.compute!(g, "scale") do p
-        Mantle.dispatch!(p, Hikari.mantle_probe_scale!,
-                         (Mantle.use(p, dst; write = true),
-                          Mantle.use(p, src; read = true), scale), n)
+        Mantle.use(p, dst; write = true)
+        Mantle.use(p, src; read = true)
+        Mantle.use(p, scale; read = true)
+        Mantle.dispatch!(p, _probe_readref!, (dst, src, scale), n)
     end
-    plan = Mantle.Plan(g)
+    plan = Mantle.record!(Mantle.Plan(g))
     Mantle.run!(plan)
     KA.synchronize(backend)
     @test all(==(3f0), Array(Mantle.storage(dst)))

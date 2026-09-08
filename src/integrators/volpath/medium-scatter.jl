@@ -132,8 +132,9 @@ end
     bvh_nodes, infinite_light_indices,
     num_infinite_lights::Int32, num_bvh_lights::Int32,
     num_lights::Int32,
-    sobol_rng, sample_idx::Int32,
+    sobol_rng, sample_idx_ref,
 )
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
     medium_direct_lighting_inner!(
         shadow_queue,
         work, lights, rgb2spec_table,
@@ -222,8 +223,9 @@ end
     work,
     ray_queue,
     max_depth::Int32,
-    sobol_rng, sample_idx::Int32,
+    sobol_rng, sample_idx_ref,
 )
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
     medium_scatter_inner!(ray_queue, work, max_depth, sobol_rng, sample_idx)
 end
 

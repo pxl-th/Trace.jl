@@ -73,7 +73,7 @@ function _snapshot()
     # onto the returned named tuple. This file had not been updated and could
     # not run.
     (live_bytes = mem.live_bytes, live_bufs = mem.live_buffers,
-     pool_blocks = length(Mantle.pool(MVE.vk_context()).blocks))
+     pool_blocks = length(Mantle.pool(MVE.lavadevice(MVE.vk_context())).blocks))
 end
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

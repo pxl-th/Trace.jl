@@ -99,32 +99,42 @@ accumulates!(p, x) = use!(p, x; read = true, write = true, unordered = true)
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    render_refs(...) -> NamedTuple of Ref
+    render_refs(...) -> NamedTuple
 
-What changes between two calls to `render!` while the plans stay the same: the
-adapted scene (rebuilt every call), the sample index, and everything the caller
-can set on the integrator between samples.
+What a sample is rendered with. Two kinds of value:
 
-They are `Ref`s because a compiled dispatch resolves its arguments once and a
-recording reads them per run — `Mantle` dereferences a `Ref` at record time for
-exactly this. The types have to stay put, which is what [`PlanKey`](@ref)
-checks: a scene whose adapted accel is a different type gets its own plans
-rather than arguments packed to the wrong layout.
+- **Per-run values are `Mantle.GPURef`s** — `camera`, `initial_medium`,
+  `filter_params`, `sample_idx`. Device storage at an address that does not
+  move: every dispatch that reads one is packed with that address, once, and
+  a new value is stored through the ref (`ref[] = x`) and lands in the run's
+  own submission. So one recording renders every sample, and a moved camera
+  is one command, not a new plan. `sample_idx` is not even that: the sample
+  plan's first pass increments it on the device, and the host stores to it
+  only to start the count over (see [`resetsamples!`](@ref)).
+- **Everything else is baked** — resolved when the plans record and fixed for
+  as long as they live. A change to any of them is a scene or integrator edit,
+  and those invalidate the plans where they happen (`sync!(scene)`, the scene
+  mutators, [`invalidate!`](@ref)) — nothing is compared per sample.
+
+They were ALL `Ref`s, and a `Ref` meant "re-read me every run": Mantle rewrote
+the argument bytes of every dispatch holding one, per run, on the host. Measured
+on the fused sample that is 602 writes to move 268 bytes — and because those
+bytes could be in flight, the plan needed three copies of its arguments and a
+wait to rotate between them.
 """
 render_refs(accel, media_interfaces, media, materials, lights,
-            camera, camera_needs_time::Bool, camera_needs_lens::Bool,
-            initial_medium, filter_params, filter_sampler,
+            camera::Mantle.GPURef, initial_medium::Mantle.GPURef{SetKey},
+            filter_params::Mantle.GPURef{GPUFilterParams}, filter_sampler,
+            sample_idx::Mantle.GPURef{Int32},
             regularize::Bool, samples_per_pixel::Int32,
             max_component_value::Float32) =
-    (accel = Ref(accel), media_interfaces = Ref(media_interfaces),
-     media = Ref(media), materials = Ref(materials), lights = Ref(lights),
-     camera = Ref(camera), camera_needs_time = Ref(camera_needs_time),
-     camera_needs_lens = Ref(camera_needs_lens),
-     initial_medium = Ref(initial_medium),
-     filter_params = Ref(filter_params), filter_sampler = Ref(filter_sampler),
-     sample_idx = Ref(Int32(0)), regularize = Ref(regularize),
-     samples_per_pixel = Ref(samples_per_pixel),
-     max_component_value = Ref(max_component_value))
+    (accel = accel, media_interfaces = media_interfaces,
+     media = media, materials = materials, lights = lights,
+     camera = camera, initial_medium = initial_medium,
+     filter_params = filter_params, filter_sampler = filter_sampler,
+     sample_idx = sample_idx, regularize = regularize,
+     samples_per_pixel = samples_per_pixel,
+     max_component_value = max_component_value)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Kernels the graph needs and the KA path did not
@@ -179,6 +189,8 @@ either way.
 function trace_pass!(g, accel, state::VolPathState, refs, cur::WorkQueue, nxt::WorkQueue)
     Mantle.compute!(g, "trace") do p
         trace_uses!(p, state, cur, nxt)
+        Mantle.use(p, refs.sample_idx; read = true)
+        Mantle.use(p, refs.camera; read = true)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_trace_and_shade_kernel!, cur, nxt,
                           state.escaped_queue, state.medium_sample_queue,
@@ -242,6 +254,7 @@ function medium_dl_pass!(g, state::VolPathState, refs)
     Mantle.compute!(g, "medium-dl") do p
         use!(p, state.medium_scatter_queue; read = true)
         use!(p, state.shadow_queue; read = true, write = true)
+        Mantle.use(p, refs.sample_idx; read = true)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_medium_direct_lighting_kernel!,
                           state.medium_scatter_queue, state.shadow_queue,
@@ -261,6 +274,7 @@ function medium_scatter_pass!(g, state::VolPathState, refs, nxt::WorkQueue)
     Mantle.compute!(g, "medium-scatter") do p
         use!(p, state.medium_scatter_queue; read = true)
         use!(p, nxt; read = true, write = true)
+        Mantle.use(p, refs.sample_idx; read = true)
         Mantle.dispatch!(p, workqueue_map_kernel!,
                          (vp_medium_scatter_kernel!, state.medium_scatter_queue,
                           nxt, state.max_depth, state.sobol_rng, refs.sample_idx),
@@ -320,6 +334,8 @@ function shade_pass!(g, state::VolPathState, refs, nxt::WorkQueue)
         use!(p, state.hit_surface_queue; read = true)
         use!(p, nxt; read = true, write = true)
         accumulates!(p, state.pixel_L)
+        Mantle.use(p, refs.sample_idx; read = true)
+        Mantle.use(p, refs.camera; read = true)
         for q in state.per_material_queue.queues
             Mantle.dispatch!(p, workqueue_map_kernel!,
                              (vp_shade_material_kernel!, q,
@@ -370,7 +386,7 @@ gated: medium direct lighting is its only producer.
 function round_passes!(g, state::VolPathState, refs, cur::WorkQueue, nxt::WorkQueue;
                        chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     reset_pass!(g, state, nxt)
-    trace_pass!(g, refs.accel[], state, refs, cur, nxt)
+    trace_pass!(g, refs.accel, state, refs, cur, nxt)
     if has_media
         medium_sample_pass!(g, state, refs, nxt)
         has_lights && medium_dl_pass!(g, state, refs)
@@ -438,11 +454,14 @@ function setup_passes!(g, state::VolPathState, refs, cur::WorkQueue)
         Mantle.use(p, state.wavelengths_per_pixel; write = true)
         Mantle.use(p, state.pdf_per_pixel; write = true)
         Mantle.use(p, state.filter_weight_per_pixel; write = true)
+        Mantle.use(p, refs.sample_idx; read = true)
+        Mantle.use(p, refs.camera; read = true)
+        Mantle.use(p, refs.initial_medium; read = true)
+        Mantle.use(p, refs.filter_params; read = true)
         Mantle.dispatch!(p, vp_generate_camera_rays_kernel!,
                          (cur, state.wavelengths_per_pixel, state.pdf_per_pixel,
                           state.filter_weight_per_pixel, state.height,
-                          refs.camera, refs.camera_needs_time, refs.camera_needs_lens,
-                          refs.sample_idx, refs.initial_medium,
+                          refs.camera, refs.sample_idx, refs.initial_medium,
                           refs.filter_params, refs.filter_sampler, state.sobol_rng),
                          Int(state.width) * Int(state.height))
     end
@@ -521,6 +540,17 @@ function sample_graph(dev, state::VolPathState, refs, max_depth::Int32;
                       chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     a = state.ray_queue_a
     g = Mantle.Graph(dev)
+    # The sample counter lives on the device: one thread, one increment, ordered
+    # by its declared read and write ahead of every pass that reads the index.
+    # The per-run values a sample CAN change — the camera, the initial medium,
+    # the filter — are `GPURef`s the plan registers as host-writable by their
+    # declared reads; a store through one lands in the run's own submission,
+    # ahead of the recorded commands that read it. Everything else was fixed at
+    # `record!`.
+    Mantle.compute!(g, "next sample") do p
+        Mantle.use(p, refs.sample_idx; read = true, write = true)
+        Mantle.dispatch!(p, vp_next_sample_kernel!, (refs.sample_idx,), 1; group = 1)
+    end
     setup_passes!(g, state, refs, a)
     d = Int(max_depth)
     if d >= 2
@@ -538,103 +568,171 @@ function sample_graph(dev, state::VolPathState, refs, max_depth::Int32;
     return g
 end
 
+@kernel function vp_next_sample_kernel!(sample_idx)
+    i = @index(Global)
+    if i == 1
+        @inbounds sample_idx[1] += Int32(1)
+    end
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Building and keeping them
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-What the compiled plans were built against.
-
-A plan bakes the resources its passes name and the types its `Ref`s hold, so
-each of these is a reason to build new ones rather than reuse: a different film,
-a different set of material types, a scene that grew its first medium. The
-per-render *values* are not here — that is what the `Ref`s are for.
-"""
-struct PlanKey
-    refs::DataType
-    framebuffer::Any
-    per_material_queue::Any
-    chit_owns_surface::Bool
-    has_media::Bool
-    has_lights::Bool
-    max_depth::Int32
-end
-
-# Identity for the resources, equality for the flags — a `LavaArray` compared
-# with `==` would read the device back.
-Base.:(==)(a::PlanKey, b::PlanKey) =
-    a.refs === b.refs &&
-    a.framebuffer === b.framebuffer &&
-    a.per_material_queue === b.per_material_queue &&
-    a.chit_owns_surface == b.chit_owns_surface &&
-    a.has_media == b.has_media &&
-    a.has_lights == b.has_lights &&
-    a.max_depth == b.max_depth
-
-"""
-The compiled plans for one `(integrator state, scene shape, film)`, and the
-`Ref`s a run writes its per-sample values into.
+The compiled plans for one scene shape, film and integrator configuration.
 
 Two plans, because a sample is two things: everything that produces the picture,
 and the divide that writes it out. `sample` holds setup, the whole bounce loop
 and accumulate; it used to be four plans driven by a host `while` loop, which
 existed only so the host could read the ray count between chunks.
+
+There is no key and no per-sample comparison: `refs` holds the values the plans
+were packed with, the per-run ones as `GPURef`s a store lands in the run's own
+submission — and `stored` what was last stored to them, which is the one thing
+a sample compares against (see [`storechanged!`](@ref)). The plans live until the scene or the integrator is edited —
+which is where they are dropped (`sync!(scene)`, the scene mutators,
+[`invalidate!`](@ref)) — or the film's framebuffer is replaced, which is the one
+identity a `render!` still checks, because the film is a per-call argument and
+no verb announces its swap.
 """
-struct VPPlans{R}
-    key::PlanKey
-    refs::R
-    sample::Mantle.Plan
-    finalize::Mantle.Plan
+# `S` and `F`, not a bare `Mantle.Plan`. `Plan{D}` is parametric, so the
+# unparameterised field type is a UnionAll and `plans.sample` comes back
+# abstract — which makes `Mantle.run!(plans.sample)` a dynamic call that boxes
+# its argument: 1015 bytes a sample, on a `run!` that costs 338 by itself.
+#
+# Mutable, because `VolPathState.plans` is `Any` (its type is scene-dependent)
+# and a read of an IMMUTABLE struct through an `Any` field copies it onto the
+# heap — every sample, once per `render!` and again in `finalize_film!`. A
+# reference crosses the same boundary for free, and identity (`===`) is what
+# the invalidation tests pin.
+mutable struct VPPlans{P,S,F}
+    framebuffer::Any
+    # The per-run refs and what they were last stored with (see `PerRun`). The
+    # plans own it: `free!` frees the refs with the plans.
+    perrun::P
+    sample::S
+    finalize::F
 end
 
 """
-Whether `build_plans` records its plans up front rather than leaving the first
-`run!` to do it.
+    PerRun{C <: Camera}
 
-`false` by default, and it no longer selects between two modes: `Mantle.run!`
-records on the first run of any plan it can record, so this only moves WHEN that
-happens. Kept because "record before the timing loop" is the difference between
-a first sample that includes the recording and one that does not, which is what
-made every earlier comparison of the two modes hard to read.
+The values a recorded sample reads per run — the camera, the initial medium,
+the filter parameters, the sample index — as the `GPURef`s the plan's commands
+hold the address of, and what each was last stored with. A call argument
+cannot announce itself, so identity against `stored_*` is how a sample knows
+what to store, and a still scene stores nothing.
+
+Parametric in the camera type, and reached through `VolPath.perrun`, a field
+typed as the small union over the camera types — NOT through
+`VolPathState.plans`: that field is `Any`, and a compare or a store made
+through it was a dynamic call that boxed the camera it was handed, 684 bytes
+every sample of a still scene. Through the union the compare is bitwise and
+the store is a typed `ref[] = x`.
 """
-const RECORD_PLANS = Ref(false)
+mutable struct PerRun{C <: Camera}
+    const camera::Mantle.GPURef{C}
+    const initial_medium::Mantle.GPURef{SetKey}
+    const filter_params::Mantle.GPURef{GPUFilterParams}
+    const sample_idx::Mantle.GPURef{Int32}
+    stored_camera::C
+    stored_medium::SetKey
+    stored_filter::GPUFilterParams
+end
+
+function PerRun(dev, camera::C, initial_medium::SetKey, filter_params::GPUFilterParams,
+                sample_idx::Int32) where {C <: Camera}
+    return PerRun{C}(Mantle.GPURef(dev, camera), Mantle.GPURef(dev, initial_medium),
+                     Mantle.GPURef(dev, filter_params), Mantle.GPURef(dev, sample_idx),
+                     camera, initial_medium, filter_params)
+end
+
+# Does `perrun` hold a ref of this camera's type? A camera of another type
+# needs new plans: the ref's type is baked into every dispatch that reads it.
+holdscamera(::PerRun{C}, ::C) where {C <: Camera} = true
+holdscamera(::PerRun, ::Camera) = false
+holdscamera(::Nothing, ::Camera) = false
+
+"""
+    runsample!(plans)
+
+Run the sample plan.
+
+A function barrier, and the whole reason it exists: `VolPathState.plans` is
+`Any` — it holds a `VPPlans` whose type depends on the scene — so every field
+read through it is dynamic. One dynamic call here makes `plans.sample` concrete
+inside, where the `run!` is a static call on a `Plan{D}`.
+"""
+runsample!(plans::VPPlans) = Mantle.run!(plans.sample)
+
+"""
+    storechanged!(perrun, camera, initial_medium, filter_params)
+
+Store the per-sample values that changed since the last store, by identity
+against what was last stored — a call argument cannot announce itself, so this
+is the one compare a sample makes per value. A still scene stores nothing, and
+a moved camera stores the camera and nothing else.
+
+Typed all the way: `perrun` arrives through `VolPath.perrun`, a union over the
+camera type, so this is a static call whose compares are bitwise. It used to
+take the plans, which are `Any` on the state, and the dynamic call boxed the
+camera it was handed every sample.
+"""
+function storechanged!(pr::PerRun{C}, camera::C, initial_medium::SetKey,
+                       filter_params::GPUFilterParams) where {C <: Camera}
+    if pr.stored_camera !== camera
+        pr.camera[] = camera
+        pr.stored_camera = camera
+    end
+    if pr.stored_medium !== initial_medium
+        pr.initial_medium[] = initial_medium
+        pr.stored_medium = initial_medium
+    end
+    if pr.stored_filter !== filter_params
+        pr.filter_params[] = filter_params
+        pr.stored_filter = filter_params
+    end
+    return nothing
+end
+
+"""
+    resetsamples!(perrun)
+
+Start the device's sample count over. The sample plan's first pass increments
+`sample_idx` on the device, so the host never feeds it a number per sample;
+`film.iteration_index` stays the caller's count of samples taken. A film that
+was cleared reads zero there, and that is the one event this hears: a store of
+zero, so the next sample is sample one again.
+"""
+function resetsamples!(pr::PerRun)
+    pr.sample_idx[] = Int32(0)
+    return nothing
+end
+
 
 
 """
-    build_plans(...) -> VPPlans
+    build_plans(backend, state, framebuffer, refs, perrun, max_depth; ...) -> VPPlans
 
 Compile the sample. Called when the key changes, which for a still scene is
-once.
+once. `perrun` holds the per-run refs `refs` names and what they were made
+with, so the first sample compares against it and stores nothing.
+
+`Mantle.Plan` turns the graph into passes, barriers and pipelines; recording
+writes the command buffers, and `run!` does it on the first run. A caller who
+wants that cost outside a timing loop calls `Mantle.record!` on each of
+[`allplans`](@ref) first.
 """
-function build_plans(backend, state::VolPathState, framebuffer, refs, max_depth::Int32;
+function build_plans(backend, state::VolPathState, framebuffer, refs, perrun::PerRun,
+                     max_depth::Int32;
                      chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
     dev = mantle_device(backend)
-    key = PlanKey(typeof(refs), framebuffer, state.per_material_queue,
-                  chit_owns_surface, has_media, has_lights, max_depth)
-    plans = VPPlans(key, refs,
-                    Mantle.Plan(sample_graph(dev, state, refs, max_depth;
-                                             chit_owns_surface, has_media, has_lights)),
-                    Mantle.Plan(finalize_graph(dev, state, framebuffer)))
-    # There is one mode now. `Mantle.Plan` turns the graph into passes, barriers
-    # and pipelines; recording writes the command buffers, and `run!` does it on
-    # the first run if nothing else has. This only moves that cost out of the
-    # first sample.
-    #
-    # The old comparison — interpreted against compiled — measured 2-3 % in
-    # favour of interpreted on an RTX 4000 Ada on 2026-08-31 (crown -2.2 %,
-    # bunny_cloud -1.0 %, killeroo_gold -3.3 %, materials -2.0 %, black_hole
-    # +3.5 %), and the other way on the driver before it. The open candidate for
-    # that gap was `SIMULTANEOUS_USE`, which a replayed command buffer had to be
-    # begun with; a recording is begun with NO flags now, because there is one
-    # per argument slot and the ring guarantees the previous submission of that
-    # exact buffer has completed. Worth re-measuring rather than believing —
-    # neither number is comparable across the change.
-    if RECORD_PLANS[]
-        for p in allplans(plans)
-            Mantle.record!(p)
-        end
-    end
-    return plans
+    g = sample_graph(dev, state, refs, max_depth;
+                     chit_owns_surface, has_media, has_lights)
+    # Recorded here, once: `run!` submits the recording and never records.
+    return VPPlans(framebuffer, perrun, Mantle.record!(Mantle.Plan(g)),
+                   Mantle.record!(Mantle.Plan(finalize_graph(dev, state, framebuffer))))
 end
 
 """Every plan of a sample, in the order a sample runs them."""
@@ -671,69 +769,62 @@ allplans(p::VPPlans) = (p.sample, p.finalize)
 # `Mantle.rebind!`; `rebind!` could not reach a `custom!` pass's arguments, which
 # is what the hardware RT trace used to be; and a recording belongs to the
 # argument slot it was captured in, which `bake!` got wrong for any plan that had
-# already run. All four are fixed and pinned by tests in Mantle, and three of the
-# four are unreachable now — `run!` records, rebinds and rotates for itself, and
-# `custom!` is gone.
+# already run. All four are pinned by tests in Mantle and all four are
+# unreachable now — `run!` records for itself, `custom!` is gone, and the only
+# value a run feeds is a `GPURef` the commands hold the address of, so there is
+# no rebinding and no ring to be out of phase with.
 
 
 """
-    ensure_plans!(state, film, backend, scene parts..., per-render values...) -> refs
+    rebuild_plans!(state, film, backend, scene parts..., per-render values...)
 
-The plans for this render, built if the key moved and reused otherwise, with
-every per-render value written into the `Ref`s the compiled dispatches read.
-Returns the refs so the caller can set the sample index it is about to render.
-
-The values are written on the cache hit *and* the miss: a rebuild takes them
-from its arguments, and a reuse has to overwrite last call's.
+Build this render's plans fresh, retiring the old ones. Reached from
+`rebuild_render_state!`, which runs on the first sample and on invalidation
+events — never on the reuse path, so there is nothing to check here. What this
+decided per sample by comparing, events decide now: `sync!(scene)` and the
+scene mutators for the scene, [`invalidate!`](@ref) for the integrator's own
+fields; the film is a call argument, and the caller reads its identity once
+per sample.
 """
-function ensure_plans!(state::VolPathState, film::Film, backend,
-                       accel, media_interfaces, media, materials, lights,
-                       camera, camera_needs_time::Bool, camera_needs_lens::Bool,
-                       initial_medium, filter_params, filter_sampler,
-                       regularize::Bool, samples_per_pixel::Int32,
-                       max_component_value::Float32, max_depth::Int32,
-                       sample_idx::Int32;
-                       chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
+function rebuild_plans!(state::VolPathState, film::Film, backend,
+                        accel, media_interfaces, media, materials, lights,
+                        camera, initial_medium::SetKey, filter_params, filter_sampler,
+                        regularize::Bool, samples_per_pixel::Int32,
+                        max_component_value::Float32, max_depth::Int32;
+                        chit_owns_surface::Bool, has_media::Bool, has_lights::Bool)
+    # The old plans go back without a wait. Their recordings may well still be in
+    # flight; `Mantle.free!` retires the regions rather than releasing them, so
+    # the pool hands those bytes on only once the device says so. This used to be
+    # `KA.synchronize(backend)` first.
+    state.plans === nothing || free!(state.plans)
+    dev = mantle_device(backend)
+    # One device slot per per-run value, addressed by the recorded commands and
+    # stored through when a value changes (`storechanged!`) — the plan itself
+    # is never touched. The sample counter starts where the film's count is,
+    # so plans rebuilt mid-progression continue the sequence rather than
+    # replaying sample one.
+    perrun = PerRun(dev, camera, initial_medium, filter_params, film.iteration_index[])
     refs = render_refs(accel, media_interfaces, media, materials, lights,
-                       camera, camera_needs_time, camera_needs_lens,
-                       initial_medium, filter_params, filter_sampler,
+                       perrun.camera, perrun.initial_medium, perrun.filter_params,
+                       filter_sampler, perrun.sample_idx,
                        regularize, samples_per_pixel, max_component_value)
-    key = PlanKey(typeof(refs), film.framebuffer, state.per_material_queue,
-                  chit_owns_surface, has_media, has_lights, max_depth)
-    plans = state.plans
-    if plans === nothing || plans.key != key
-        # The old plans go back without a wait. Their recordings may well still
-        # be in flight; `Mantle.free!` retires the regions rather than releasing
-        # them, so the pool hands those bytes on only once the device says so.
-        # This used to be `KA.synchronize(backend)` first.
-        plans === nothing || free!(plans)
-        # The sample index BEFORE the build, because the build BAKES: a capture
-        # takes the arguments as they are, and one taken with the previous
-        # sample's index renders that sample again.
-        refs.sample_idx[] = sample_idx
-        state.plans = build_plans(backend, state, film.framebuffer, refs, max_depth;
-                                  chit_owns_surface, has_media, has_lights)
-        return state.plans.refs
-    end
-    r = plans.refs
-    r.accel[] = accel
-    r.media_interfaces[] = media_interfaces
-    r.media[] = media
-    r.materials[] = materials
-    r.lights[] = lights
-    r.camera[] = camera
-    r.camera_needs_time[] = camera_needs_time
-    r.camera_needs_lens[] = camera_needs_lens
-    r.initial_medium[] = initial_medium
-    r.filter_params[] = filter_params
-    r.filter_sampler[] = filter_sampler
-    r.regularize[] = regularize
-    r.samples_per_pixel[] = samples_per_pixel
-    r.max_component_value[] = max_component_value
-    r.sample_idx[] = sample_idx
-    return r
+    state.plans = build_plans(backend, state, film.framebuffer, refs, perrun, max_depth;
+                              chit_owns_surface, has_media, has_lights)
+    return nothing
 end
 
-"""Give every plan's pool regions back. Explicit, like every other release
-here — see the `sync!`/`free!` contract."""
-free!(plans::VPPlans) = (foreach(Mantle.free!, allplans(plans)); nothing)
+"""Give every plan's pool regions back, and with them the per-run refs only the
+plans read. Explicit, like every other release here — see the `sync!`/`free!`
+contract."""
+function free!(plans::VPPlans)
+    foreach(Mantle.free!, allplans(plans))
+    # The per-run refs go with them: the plans are the only readers of them,
+    # and their regions are retired rather than released, so a recording still
+    # in flight keeps the bytes until the device says otherwise.
+    pr = plans.perrun
+    Mantle.free!(pr.sample_idx)
+    Mantle.free!(pr.camera)
+    Mantle.free!(pr.initial_medium)
+    Mantle.free!(pr.filter_params)
+    nothing
+end

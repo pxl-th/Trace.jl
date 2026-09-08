@@ -72,11 +72,86 @@ function Scene(mesh_material_pairs::Vector{<:Tuple}; lights = (), backend = KA.C
 end
 
 # ============================================================================
+# Change notification
+#
+# A recorded plan is packed with the scene's addresses and pass structure once,
+# and nothing is compared per render to find out whether that is still right.
+# Instead the change announces itself: the mutators below and `sync!` call
+# `notify_scene_changed`, which drops the recorded plans of every integrator
+# listening to this scene. The next `render!` rebuilds.
+# ============================================================================
+
+"""
+    invalidate_plans!(integrator)
+
+Drop the plans `integrator` recorded against a scene that just changed.
+Defined per integrator (VolPath's is in `volpath/graph.jl`); the scene side
+only knows the verb.
+"""
+function invalidate_plans! end
+
+# Weak on both ends: a scene keeps no integrator alive, an integrator no scene.
+# Keyed by `objectid` rather than a WeakKeyDict, whose keys must be mutable and
+# a Scene is not; the entry's own WeakRef is checked against the caller, so a
+# collected scene's id being reused reads as "someone else's entry" and is
+# replaced rather than followed.
+#
+# The WeakRef cannot wrap the scene itself: Scene is immutable, and a WeakRef
+# to an immutable value may be cleared while the value is still alive (there
+# is no object identity for the GC to track). That both spuriously replaced
+# entries here (dropping already-registered listeners) and made
+# `notify_scene_changed` bail out on a live scene. `_scene_token` returns a
+# mutable field with real identity that lives exactly as long as the scene.
+const SCENE_LISTENERS = IdDict{UInt,Tuple{WeakRef,Vector{WeakRef}}}()
+const SCENE_LISTENERS_LOCK = ReentrantLock()
+
+# The `bounds` RefValue is mutable, never reassigned, and dies with the scene.
+_scene_token(scene::Scene) = scene.bounds
+# Mutable scene implementations have real identity and can be wrapped directly.
+_scene_token(scene::AbstractScene) = scene
+
+"""Register `integrator` for plan invalidation when `scene` changes."""
+function listen_scene!(scene::AbstractScene, integrator)
+    lock(SCENE_LISTENERS_LOCK) do
+        id = objectid(scene)
+        tok = _scene_token(scene)
+        e = get(SCENE_LISTENERS, id, nothing)
+        if e === nothing || e[1].value !== tok
+            e = (WeakRef(tok), WeakRef[])
+            SCENE_LISTENERS[id] = e
+        end
+        v = e[2]
+        any(w -> w.value === integrator, v) || push!(v, WeakRef(integrator))
+    end
+    return nothing
+end
+
+"""
+    notify_scene_changed(scene)
+
+Drop every listening integrator's plans. Called where a scene stops being what
+it was: the `push!`/`update_material!` mutators, and `sync!` when it rebuilt.
+"""
+function notify_scene_changed(scene::AbstractScene)
+    lock(SCENE_LISTENERS_LOCK) do
+        e = get(SCENE_LISTENERS, objectid(scene), nothing)
+        (e === nothing || e[1].value !== _scene_token(scene)) && return nothing
+        v = e[2]
+        filter!(w -> w.value !== nothing, v)
+        foreach(w -> invalidate_plans!(w.value), v)
+        nothing
+    end
+    return nothing
+end
+
+# ============================================================================
 # Scene push! methods
 # ============================================================================
 
 function Base.push!(scene::Scene, light::Light)
-    push!(scene.lights, light)
+    key = push!(scene.lights, light)
+    notify_scene_changed(scene)
+    return key
 end
 
 function Base.push!(scene::Scene, material::Material)
@@ -84,7 +159,9 @@ function Base.push!(scene::Scene, material::Material)
 end
 
 function Base.push!(scene::Scene, medium::Medium)
-    push!(scene.media, medium)
+    key = push!(scene.media, medium)
+    notify_scene_changed(scene)
+    return key
 end
 
 Base.push!(scene::Scene, ::Nothing) = SetKey()
@@ -106,6 +183,7 @@ function Base.push!(scene::Scene, medium::MediumInterface)
         @allowscalar push!(scene.media_interfaces, mi)
         idx = length(scene.media_interfaces)
     end
+    notify_scene_changed(scene)
     return UInt32(idx)
 end
 
@@ -133,11 +211,15 @@ Invariants:
 function update_material!(scene::Scene, idx::UInt32, new_medium::Medium)
     mi = @allowscalar scene.media_interfaces[idx]
     Raycore.update!(scene.media, mi.inside, new_medium)
+    # In-place for the common case, but a texture slot can be reallocated on a
+    # size mismatch — and a plan names the arrays it was packed with. Drop them.
+    notify_scene_changed(scene)
 end
 
 function update_material!(scene::Scene, idx::UInt32, new_material::Material)
     mi = @allowscalar scene.media_interfaces[idx]
     Raycore.update!(scene.materials, mi.material, new_material)
+    notify_scene_changed(scene)
 end
 
 # `MediumInterface` is itself a `<:Material`, so plots that use it (e.g. a
@@ -161,6 +243,7 @@ function update_material!(scene::Scene, idx::UInt32,
     if new_mi.outside !== nothing && Raycore.is_valid(mi.outside)
         Raycore.update!(scene.media, mi.outside, new_mi.outside)
     end
+    notify_scene_changed(scene)
     return nothing
 end
 
@@ -172,6 +255,7 @@ end
 
 function Base.push!(scene::Scene, mesh::AbstractGeometry, materialidx::UInt32; arealight_indices=nothing)
     handle = push!(scene.accel, mesh, materialidx; arealight_indices=arealight_indices)
+    notify_scene_changed(scene)
     return SceneHandle(scene, materialidx, handle)
 end
 
@@ -209,9 +293,15 @@ Invariants for callers (see the accel's `sync!` docstrings for detail):
   release of transitively-owned resources with a `sync!` call.
 """
 function sync!(scene::Scene{<:TLAS})
+    # Whether this sync! is about to change anything — the flag Raycore.sync!
+    # consumes. Only a sync! that did work invalidates plans; the no-op kind is
+    # meant to be called liberally. `transforms_dirty` is deliberately NOT here:
+    # a refit writes the same buffers in place, which a recorded plan survives.
+    changed = scene.accel.dirty
     sync!(scene.accel)   # Raycore.sync! runs KA.synchronize at the end.
     bound = Raycore.world_bound(scene.accel)
     scene.bounds[] = (bound, bounding_sphere(bound))
+    changed && notify_scene_changed(scene)
     return scene
 end
 

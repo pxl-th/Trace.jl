@@ -49,11 +49,12 @@ import Mantle: RayTracingPipeline, trace_rays_indirect!
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
     max_depth::Int32, do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera,
+    sobol_rng, sample_idx_ref,
+    camera_ref,
     samples_per_pixel::Int32,
     rr_depth::Int32,
 )
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
     lid = lava_rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
     ray = work.ray
@@ -99,11 +100,13 @@ end
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
     max_depth::Int32, do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera,
+    sobol_rng, sample_idx_ref,
+    camera_ref,
     samples_per_pixel::Int32,
     rr_depth::Int32,
 )
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
+    camera = @inbounds camera_ref[Int32(1)]
     lid = lava_rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
 
@@ -224,11 +227,12 @@ end
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
     max_depth::Int32, do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera,
+    sobol_rng, sample_idx_ref,
+    camera_ref,
     samples_per_pixel::Int32,
     rr_depth::Int32,
 )
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
     lid = lava_rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
     if has_medium(work.medium_idx)
@@ -272,11 +276,13 @@ struct VPClosesthitTyped{T} end
     bvh_nodes, infinite_light_indices, light_to_bit_trail,
     num_infinite_lights::Int32, num_bvh_lights::Int32, num_lights::Int32,
     max_depth::Int32, do_regularize::Bool,
-    sobol_rng, sample_idx::Int32,
-    camera,
+    sobol_rng, sample_idx_ref,
+    camera_ref,
     samples_per_pixel::Int32,
     rr_depth::Int32,
 ) where {T}
+    sample_idx = @inbounds sample_idx_ref[Int32(1)]
+    camera = @inbounds camera_ref[Int32(1)]
     lid = lava_rt_launch_id_x()
     @inbounds work = work_queue.items[Int(lid) + 1]
 
@@ -569,20 +575,22 @@ function trace_pass!(g, accel_t::Mantle.AdaptedAccel, state::VolPathState, refs,
     # change and both are the point.
     #
     #   * The arguments live in the plan's argument memory at a fixed offset, so
-    #     `rebind!` can rewrite them and a hardware-RT plan can be BAKED. Under
-    #     `custom!` the address baked into the captured command buffer pointed
-    #     into a scratch slab the pool later rewound.
-    #   * The `Ref`s go in as `Ref`s. `rawargs` runs `argvalue` over them at every
-    #     record and rebind, which is how a new sample index or a rebuilt accel
-    #     reaches a plan compiled once — the old body did the same by hand.
+    #     a hardware-RT plan can be RECORDED. Under `custom!` the address baked
+    #     into the captured command buffer pointed into a scratch slab the pool
+    #     later rewound.
+    #   * `refs.sample_idx` goes in as a `Mantle.GPURef`, so the raygen holds its
+    #     ADDRESS and a new sample index reaches a plan recorded once — the old
+    #     body packed the number by hand, per run.
     #
     # `vp_rt_pipeline` is resolved here rather than per record because the
     # per-material closest-hit set decides the shader binding table: a different
     # material set is a different pipeline, and that is a recompile either way.
     Mantle.compute!(g, "trace") do p
         trace_uses!(p, state, cur, nxt)
+        Mantle.use(p, refs.sample_idx; read = true)
+        Mantle.use(p, refs.camera; read = true)
         Mantle.trace!(p,
-            vp_rt_pipeline(refs.materials[]),
+            vp_rt_pipeline(refs.materials),
             refs.accel,
             (cur, nxt,
              state.escaped_queue,

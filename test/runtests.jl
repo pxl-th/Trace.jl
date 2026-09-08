@@ -67,7 +67,9 @@ const TEST_FILES = [
     "test_sphere_uv.jl",
     "test_volpath_graph.jl",
     "test_volpath_per_iter_lifecycle.jl",
-    "test_trace_pass_rebind.jl",
+    "test_trace_pass_modelled.jl",
+    "test_plan_invalidation.jl",
+    "test_sample_is_one_run.jl",
 ]
 
 # ── pbrt reference suite ────────────────────────────────────────────────────
