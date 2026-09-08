@@ -614,6 +614,18 @@ function trace_pass!(g, accel_t::Mantle.AdaptedAccel, state::VolPathState, refs,
              state.sobol_rng, refs.sample_idx,
              refs.camera, refs.samples_per_pixel,
              state.rr_depth),
-            Mantle.DeviceRange(cur.size))
+            # The CEILING, like every other queue dispatch in `graph.jl`. Without
+            # it `bakedrange` builds a `DeferredRange`, whose `ndrangeof` calls
+            # `awaitwrites` — a full device synchronise, on the host, before this
+            # dispatch every single time. On a KernelAbstractions backend that
+            # was measured at 320 syncs and 0.585 s of a 0.602 s frame; the
+            # traversal itself was never the cost.
+            #
+            # Over-dispatching is defined to be a no-op for the surplus threads:
+            # every kernel dispatched over a `DeviceRange` bounds-check itself,
+            # repo-wide, which is what makes the ceiling safe. This was the one
+            # queue dispatch in the integrator that still read its count on the
+            # host.
+            Mantle.DeviceRange(cur.size; max = Int(cur.capacity)))
     end
 end
