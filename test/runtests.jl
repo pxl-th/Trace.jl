@@ -14,8 +14,15 @@ using Lava, Mantle
 # API. Its TESTS do: `Mantle.LavaBackend`, `Mantle.vk_flush!` and friends, which
 # since the 2026-08-27 split live in `MantleVulkanExt` rather than in Mantle. A
 # `Main`-level binding serves every file, since they are all `include`d here.
-# DELETED in phase 1.5: see Mantle/docs/mantle-owns-it.md
-# DELETED in phase 1.5: see Mantle/docs/mantle-owns-it.md
+#
+# Phase 1.5 deleted this binding and did NOT migrate the nineteen files that
+# name it, so the whole GPU half of this suite died on `UndefVarError: MVE` —
+# 23 errors that read as "Hikari is broken". It is back, and it is DEBT: the
+# names still reached for are `vk_context`, `LavaBackend`, `vk_flush!`,
+# `live_buffer_count`, `drain_deferred_frees!`, `device_lost`, `gpu_live_bytes`,
+# and each needs either a portable spelling or a deliberate decision that a
+# backend-internals test belongs in the backend's own suite.
+const MVE = Base.get_extension(Mantle, :MantleVulkanExt)
 # NOT `using JET` here. Only `type_stability.jl` and `gpu_compat.jl` need it, and
 # it is a test-target dependency, so an environment without it made this line
 # throw before the first testset and took all 24 files down with it. The two

@@ -184,7 +184,7 @@ _channel_maxes(img) = (
         @test m.r > 0.1f0
         @test m.g > 0.1f0
         @test m.b > 0.1f0
-        @test !MVE.device_lost(backend.dispatch_bq.ctx)
+        @test !MVE.device_lost(MVE.ctxof(backend.dispatch_bq))
     end
 
     # ── 5. HW-path render: each instance shows its own color ────────────────
@@ -232,7 +232,7 @@ _channel_maxes(img) = (
         @test m.r > 0.1f0
         @test m.g > 0.1f0
         @test m.b > 0.1f0
-        @test !MVE.device_lost(backend.dispatch_bq.ctx)
+        @test !MVE.device_lost(MVE.ctxof(backend.dispatch_bq))
     end
 
     # ── 6. Rapid push/delete cycles — no BLAS growth ────────────────────────

@@ -92,7 +92,7 @@ end
         @testset "state takes its memory from the pool and gives all of it back" begin
             GC.gc(true)
             MVE.vk_flush!(MVE.vk_context())
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
             pool = Mantle.pool(Hikari.mantle_device(backend))
 
             scene = _make_test_scene()
@@ -130,7 +130,7 @@ end
             end
             MVE.vk_flush!(MVE.vk_context())
             GC.gc(true)
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
             @test Mantle.reserved(pool) == reserved
             @test MVE.live_buffer_count() == buffers
         end
@@ -189,7 +189,7 @@ end
             # nothing left to hand back twice.
             Hikari.free!(state)
             MVE.vk_flush!(MVE.vk_context())
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
         end
     end
 
@@ -251,7 +251,7 @@ end
         @testset "freed queues come back from the pool, not the device" begin
             GC.gc(true)
             MVE.vk_flush!(MVE.vk_context())
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
             pool = Mantle.pool(Hikari.mantle_device(backend))
 
             mem = Hikari.DeviceMemory(backend)
@@ -387,7 +387,7 @@ end
         @testset "buffer count stable across renders" begin
             GC.gc(true)
             MVE.vk_flush!(MVE.vk_context())
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
 
             scene = _make_test_scene()
             vp = Hikari.VolPath(samples=1, max_depth=2)
@@ -398,7 +398,7 @@ end
             vp(scene, film, camera)
             MVE.vk_flush!(MVE.vk_context())
             GC.gc(true)
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
             baseline = MVE.live_buffer_count()
             pool = Mantle.pool(Hikari.mantle_device(MVE.LavaBackend()))
             reserved = Mantle.reserved(pool)
@@ -411,7 +411,7 @@ end
                 MVE.vk_flush!(MVE.vk_context())
             end
             GC.gc(true)
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
             after = MVE.live_buffer_count()
 
             @test after == baseline
@@ -423,7 +423,7 @@ end
 
             close(vp)
             MVE.vk_flush!(MVE.vk_context())
-            MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+            Mantle.drain!(MVE.vk_context().default_bq)
         end
     end
 
@@ -431,7 +431,7 @@ end
     @testset "resize! does not leak buffers" begin
         GC.gc(true)
         MVE.vk_flush!(MVE.vk_context())
-        MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+        Mantle.drain!(MVE.vk_context().default_bq)
         baseline = MVE.live_buffer_count()
 
         # Pre-pool-block test bookkeeping: a tiny LavaArray comes out of an
@@ -449,7 +449,7 @@ end
 
         resize!(a, 100)
         MVE.vk_flush!(MVE.vk_context())
-        MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+        Mantle.drain!(MVE.vk_context().default_bq)
         after_resize = MVE.live_buffer_count()
         @test after_resize <= baseline + 1
 
@@ -458,14 +458,14 @@ end
             resize!(a, sz)
         end
         MVE.vk_flush!(MVE.vk_context())
-        MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+        Mantle.drain!(MVE.vk_context().default_bq)
         after_multi = MVE.live_buffer_count()
         @test after_multi <= baseline + 1
 
         # Free the array itself
         finalize(a)
         MVE.vk_flush!(MVE.vk_context())
-        MVE.drain_deferred_frees!(MVE.vk_context().default_bq)
+        Mantle.drain!(MVE.vk_context().default_bq)
         after_free = MVE.live_buffer_count()
         @test after_free <= baseline + 1
     end

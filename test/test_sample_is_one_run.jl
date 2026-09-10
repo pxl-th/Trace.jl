@@ -117,11 +117,13 @@ end
     Mantle.waitfor!(plans.sample)
 
     bq = Mantle.batchqueue(Hikari.mantle_device(backend))
-    before = bq.ctx.diag.flush_counter[]
+    # `ctxof(bq)`, not `bq.ctx`: a `SubmitChannel` is core's and holds no
+    # context — the driver bundle under it does.
+    before = MVE.ctxof(bq).diag.flush_counter[]
     Hikari.render!(vp, scene, film, cam; finalize_framebuffer = false)
     # One sample, one submission: the sample plan's recording, handed over the
     # moment `run!` is called.
-    @test bq.ctx.diag.flush_counter[] - before == 1
+    @test MVE.ctxof(bq).diag.flush_counter[] - before == 1
 
     # And the sample adds no per-sample HOST work at all: `render!` of a still
     # scene allocates zero bytes. Three things each used to cost some, and each
