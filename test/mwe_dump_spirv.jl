@@ -19,7 +19,7 @@ let dump_counter = Ref(0)
     end
 end
 
-backend = MVE.LavaBackend()
+backend = Mantle.defaultbackend()
 println("Backend ready")
 flush(stdout)
 

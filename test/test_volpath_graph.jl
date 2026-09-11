@@ -55,7 +55,7 @@ energy(film) = let fb = Array(film.framebuffer)
 end
 
 @testset "volpath graph" begin
-    backend = MVE.LavaBackend()
+    backend = Mantle.defaultbackend()
     scene = volpath_graph_scene(backend; with_media = true)
 
     @testset "progressive samples equal a batched render" begin

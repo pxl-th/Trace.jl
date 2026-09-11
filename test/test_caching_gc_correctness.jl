@@ -80,9 +80,9 @@ end
 
     # ── 2. VolPathState allocation and free ──
     @testset "VolPathState allocation/free" begin
-        backend = MVE.LavaBackend()
+        backend = Mantle.defaultbackend()
 
-        # This used to count `MVE.live_buffer_count()` before and after, with a
+        # This used to count `Mantle.live_buffer_count()` before and after, with a
         # tolerance of ten either side because `finalize` defers to the GC and
         # the GC runs when it likes. Nothing here finalizes any more: the state
         # holds one `DeviceMemory`, every allocation is a region of it, and
@@ -91,8 +91,8 @@ end
         # many `VkBuffer`s the pool happened to need.
         @testset "state takes its memory from the pool and gives all of it back" begin
             GC.gc(true)
-            MVE.vk_flush!(MVE.vk_context())
-            Mantle.drain!(MVE.vk_context().default_bq)
+            Mantle.flush!(Mantle.Device())
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
             pool = Mantle.pool(Hikari.mantle_device(backend))
 
             scene = _make_test_scene()
@@ -100,12 +100,12 @@ end
                 backend, 16, 16, scene.lights;
                 max_depth=4, samples_per_pixel=1
             )
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             @test Hikari.nallocations(state.memory) > 10   # queues, accumulators, BVH, Sobol
             reserved = Mantle.reserved(pool)
 
             Hikari.free!(state)
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             @test Hikari.nallocations(state.memory) == 0
             @test Hikari.nallocations(state.per_material_memory) == 0
 
@@ -119,20 +119,20 @@ end
             # was never given back. Everything the state owns — the queues, the
             # accumulators, the light BVH, the Sobol matrices and both spectral
             # tables — has to go through `DeviceMemory` for both to hold.
-            buffers = MVE.live_buffer_count()
+            buffers = Mantle.live_buffer_count()
             for _ in 1:3
                 st = Hikari.VolPathState(
                     backend, 16, 16, scene.lights;
                     max_depth=4, samples_per_pixel=1
                 )
-                MVE.vk_flush!(MVE.vk_context())
+                Mantle.flush!(Mantle.Device())
                 Hikari.free!(st)
             end
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             GC.gc(true)
-            Mantle.drain!(MVE.vk_context().default_bq)
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
             @test Mantle.reserved(pool) == reserved
-            @test MVE.live_buffer_count() == buffers
+            @test Mantle.live_buffer_count() == buffers
         end
 
         # The reason `DeviceMemory` carries a finalizer at all. `free!` is still
@@ -142,7 +142,7 @@ end
         # would simply have been lost. The finalizer retires; `reclaim!`
         # releases, from the owning thread, a submission boundary later.
         @testset "a film nobody freed is reclaimed, not lost" begin
-            backend = MVE.LavaBackend()
+            backend = Mantle.defaultbackend()
             dev = Hikari.mantle_device(backend)
             pool = Mantle.pool(dev)
 
@@ -155,7 +155,7 @@ end
             function settle!()
                 GC.gc(true)                  # finalizers run, regions retire
                 KA.fill!(KA.allocate(backend, Float32, 4), 1f0)
-                MVE.vk_flush!(MVE.vk_context())
+                Mantle.flush!(Mantle.Device())
                 KA.synchronize(backend)      # so the fences they were stamped with pass
                 while Mantle.reclaim!(pool, dev; wait = true) > 0 end
                 return nothing
@@ -183,19 +183,19 @@ end
                 backend, 8, 8, scene.lights;
                 max_depth=2, samples_per_pixel=1
             )
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             Hikari.free!(state)
             # Second free is a no-op: `free!` empties the owned list, so there is
             # nothing left to hand back twice.
             Hikari.free!(state)
-            MVE.vk_flush!(MVE.vk_context())
-            Mantle.drain!(MVE.vk_context().default_bq)
+            Mantle.flush!(Mantle.Device())
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
         end
     end
 
     # ── 3. WorkQueue on Lava backend ──
     @testset "WorkQueue on LavaBackend" begin
-        backend = MVE.LavaBackend()
+        backend = Mantle.defaultbackend()
 
         @testset "push and read on GPU" begin
             mem = Hikari.DeviceMemory(backend)
@@ -207,13 +207,13 @@ end
             end
 
             push_items!(backend)(queue; ndrange=8)
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
 
             @test length(queue) == 8
             items = sort(Array(queue.items)[1:8])
             @test items == Int32[10, 20, 30, 40, 50, 60, 70, 80]
 
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             Hikari.free!(mem)
         end
 
@@ -227,17 +227,17 @@ end
             end
 
             push_val!(backend)(queue, Int32(42); ndrange=10)
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             @test length(queue) == 10
 
             empty!(queue)
             @test length(queue) == 0
 
             push_val!(backend)(queue, Int32(99); ndrange=5)
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             @test length(queue) == 5
 
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             Hikari.free!(mem)
         end
 
@@ -250,14 +250,14 @@ end
         # a second block.
         @testset "freed queues come back from the pool, not the device" begin
             GC.gc(true)
-            MVE.vk_flush!(MVE.vk_context())
-            Mantle.drain!(MVE.vk_context().default_bq)
+            Mantle.flush!(Mantle.Device())
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
             pool = Mantle.pool(Hikari.mantle_device(backend))
 
             mem = Hikari.DeviceMemory(backend)
             qs = [Hikari.WorkQueue{Int32}(mem, 1 << 16) for _ in 1:4]
             @test Hikari.nallocations(mem) == 8          # items + counter each
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             after_first = Mantle.reserved(pool)
 
             Hikari.free!(mem)
@@ -266,7 +266,7 @@ end
 
             mem2 = Hikari.DeviceMemory(backend)
             qs2 = [Hikari.WorkQueue{Int32}(mem2, 1 << 16) for _ in 1:4]
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             @test Mantle.reserved(pool) == after_first   # reused, not reallocated
             Hikari.free!(mem2)
         end
@@ -386,8 +386,8 @@ end
     @testset "memory stability" begin
         @testset "buffer count stable across renders" begin
             GC.gc(true)
-            MVE.vk_flush!(MVE.vk_context())
-            Mantle.drain!(MVE.vk_context().default_bq)
+            Mantle.flush!(Mantle.Device())
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
 
             scene = _make_test_scene()
             vp = Hikari.VolPath(samples=1, max_depth=2)
@@ -396,11 +396,11 @@ end
             # Warm-up render
             Hikari.clear!(film)
             vp(scene, film, camera)
-            MVE.vk_flush!(MVE.vk_context())
+            Mantle.flush!(Mantle.Device())
             GC.gc(true)
-            Mantle.drain!(MVE.vk_context().default_bq)
-            baseline = MVE.live_buffer_count()
-            pool = Mantle.pool(Hikari.mantle_device(MVE.LavaBackend()))
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
+            baseline = Mantle.live_buffer_count()
+            pool = Mantle.pool(Hikari.mantle_device(Mantle.defaultbackend()))
             reserved = Mantle.reserved(pool)
             owned = Hikari.nallocations(vp.state.memory)
 
@@ -408,11 +408,11 @@ end
             for _ in 1:5
                 Hikari.clear!(film)
                 vp(scene, film, camera)
-                MVE.vk_flush!(MVE.vk_context())
+                Mantle.flush!(Mantle.Device())
             end
             GC.gc(true)
-            Mantle.drain!(MVE.vk_context().default_bq)
-            after = MVE.live_buffer_count()
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
+            after = Mantle.live_buffer_count()
 
             @test after == baseline
             # The same claim one level up, where the state's memory actually
@@ -422,17 +422,17 @@ end
             @test Mantle.reserved(pool) == reserved
 
             close(vp)
-            MVE.vk_flush!(MVE.vk_context())
-            Mantle.drain!(MVE.vk_context().default_bq)
+            Mantle.flush!(Mantle.Device())
+            Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
         end
     end
 
     # ── 9. LavaArray resize! does not leak ──
     @testset "resize! does not leak buffers" begin
         GC.gc(true)
-        MVE.vk_flush!(MVE.vk_context())
-        Mantle.drain!(MVE.vk_context().default_bq)
-        baseline = MVE.live_buffer_count()
+        Mantle.flush!(Mantle.Device())
+        Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
+        baseline = Mantle.live_buffer_count()
 
         # Pre-pool-block test bookkeeping: a tiny LavaArray comes out of an
         # existing 64-MiB pool block (no new `VkManagedBuffer`) — only allocs
@@ -442,31 +442,31 @@ end
         # invariant is "no leak": the count must NEVER grow past `baseline +
         # 1` no matter how many resize!s we do.
 
-        a = MVE.LavaArray{Int32}(undef, 10)
-        MVE.vk_flush!(MVE.vk_context())
-        after_alloc = MVE.live_buffer_count()
+        a = Mantle.LavaArray{Int32}(undef, 10)
+        Mantle.flush!(Mantle.Device())
+        after_alloc = Mantle.live_buffer_count()
         @test after_alloc <= baseline + 1
 
         resize!(a, 100)
-        MVE.vk_flush!(MVE.vk_context())
-        Mantle.drain!(MVE.vk_context().default_bq)
-        after_resize = MVE.live_buffer_count()
+        Mantle.flush!(Mantle.Device())
+        Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
+        after_resize = Mantle.live_buffer_count()
         @test after_resize <= baseline + 1
 
         # Multiple resizes should not accumulate
         for sz in [200, 50, 500, 10]
             resize!(a, sz)
         end
-        MVE.vk_flush!(MVE.vk_context())
-        Mantle.drain!(MVE.vk_context().default_bq)
-        after_multi = MVE.live_buffer_count()
+        Mantle.flush!(Mantle.Device())
+        Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
+        after_multi = Mantle.live_buffer_count()
         @test after_multi <= baseline + 1
 
         # Free the array itself
         finalize(a)
-        MVE.vk_flush!(MVE.vk_context())
-        Mantle.drain!(MVE.vk_context().default_bq)
-        after_free = MVE.live_buffer_count()
+        Mantle.flush!(Mantle.Device())
+        Mantle.drain!(Mantle.batchqueue(Mantle.Device()))
+        after_free = Mantle.live_buffer_count()
         @test after_free <= baseline + 1
     end
 

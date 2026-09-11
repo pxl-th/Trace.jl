@@ -153,7 +153,7 @@ _channel_maxes(img) = (
 
     # ── 4. SW-path render: each instance shows its own color ────────────────
     @testset "SW render: per-instance materials produce distinct colors" begin
-        backend = MVE.LavaBackend()
+        backend = Mantle.defaultbackend()
         # Scene's TLAS lives on the same backend the render dispatches on —
         # cross-backend `Adapt.adapt(::LavaBackend, tlas::TLAS{CPU})` is not
         # supported (static_tlas is owned per-TLAS-backend; the `to` argument
@@ -184,7 +184,7 @@ _channel_maxes(img) = (
         @test m.r > 0.1f0
         @test m.g > 0.1f0
         @test m.b > 0.1f0
-        @test !MVE.device_lost(MVE.ctxof(backend.dispatch_bq))
+        @test !Mantle.device_lost(Mantle.ctxof(backend.dispatch_bq))
     end
 
     # ── 5. HW-path render: each instance shows its own color ────────────────
@@ -195,7 +195,7 @@ _channel_maxes(img) = (
     # freed the buffer out from under the newer one). Fixed by allocating a
     # fresh combined buf per rebuild — see rebuild_hw_tlas_from_batch!.
     @testset "HW render: per-instance materials produce distinct colors" begin
-        backend = MVE.LavaBackend()
+        backend = Mantle.defaultbackend()
         scene = Hikari.Scene(; backend=backend, hw_accel=true)
         push!(scene, _floor_mesh(),
               Hikari.Diffuse(Kd=Hikari.RGBSpectrum(0.3f0, 0.3f0, 0.3f0)))
@@ -232,7 +232,7 @@ _channel_maxes(img) = (
         @test m.r > 0.1f0
         @test m.g > 0.1f0
         @test m.b > 0.1f0
-        @test !MVE.device_lost(MVE.ctxof(backend.dispatch_bq))
+        @test !Mantle.device_lost(Mantle.ctxof(backend.dispatch_bq))
     end
 
     # ── 6. Rapid push/delete cycles — no BLAS growth ────────────────────────

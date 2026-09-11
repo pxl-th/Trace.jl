@@ -41,7 +41,7 @@ devicesamples(plans) = (Mantle.waitfor!(plans.sample);
                         Array(Mantle.storage(plans.perrun.sample_idx))[1])
 
 @testset "a still scene stores nothing per sample" begin
-    backend = MVE.LavaBackend()
+    backend = Mantle.defaultbackend()
     scene = onerun_scene(backend)
     film = Hikari.Film(backend, Hikari.Film(Point2f(16, 16)))
     vp = Hikari.VolPath(samples = 1, max_depth = 2)
@@ -72,7 +72,7 @@ devicesamples(plans) = (Mantle.waitfor!(plans.sample);
 end
 
 @testset "a moved camera stores the camera and nothing else" begin
-    backend = MVE.LavaBackend()
+    backend = Mantle.defaultbackend()
     scene = onerun_scene(backend)
     film = Hikari.Film(backend, Hikari.Film(Point2f(16, 16)))
     vp = Hikari.VolPath(samples = 1, max_depth = 2)
@@ -105,7 +105,7 @@ end
 # A still scene's sample is one `run!` of a recorded plan: one submission, made
 # at once, and nothing allocated on the host.
 @testset "a sample is one submission and allocates nothing" begin
-    backend = MVE.LavaBackend()
+    backend = Mantle.defaultbackend()
     scene = onerun_scene(backend)
     film = Hikari.Film(backend, Hikari.Film(Point2f(16, 16)))
     vp = Hikari.VolPath(samples = 1, max_depth = 2)
@@ -119,11 +119,11 @@ end
     bq = Mantle.batchqueue(Hikari.mantle_device(backend))
     # `ctxof(bq)`, not `bq.ctx`: a `SubmitChannel` is core's and holds no
     # context — the driver bundle under it does.
-    before = MVE.ctxof(bq).diag.flush_counter[]
+    before = Mantle.ctxof(bq).diag.flush_counter[]
     Hikari.render!(vp, scene, film, cam; finalize_framebuffer = false)
     # One sample, one submission: the sample plan's recording, handed over the
     # moment `run!` is called.
-    @test MVE.ctxof(bq).diag.flush_counter[] - before == 1
+    @test Mantle.ctxof(bq).diag.flush_counter[] - before == 1
 
     # And the sample adds no per-sample HOST work at all: `render!` of a still
     # scene allocates zero bytes. Three things each used to cost some, and each

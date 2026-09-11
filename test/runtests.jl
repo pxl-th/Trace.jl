@@ -22,7 +22,6 @@ using Lava, Mantle
 # `live_buffer_count`, `drain_deferred_frees!`, `device_lost`, `gpu_live_bytes`,
 # and each needs either a portable spelling or a deliberate decision that a
 # backend-internals test belongs in the backend's own suite.
-const MVE = Base.get_extension(Mantle, :MantleVulkanExt)
 # NOT `using JET` here. Only `type_stability.jl` and `gpu_compat.jl` need it, and
 # it is a test-target dependency, so an environment without it made this line
 # throw before the first testset and took all 24 files down with it. The two

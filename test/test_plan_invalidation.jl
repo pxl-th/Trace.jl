@@ -33,7 +33,7 @@ _inv_camera(film, x) = Hikari.PerspectiveCamera(
 _fbmean(film) = mean(Float32(c.r) for c in Array(film.framebuffer))
 
 @testset "plans are invalidated by events, not found by comparison" begin
-    backend = MVE.LavaBackend()
+    backend = Mantle.defaultbackend()
     scene = _inv_scene(backend)
     res = 16
     film = Hikari.Film(backend, Hikari.Film(GeometryBasics.Point2f(res, res)))
